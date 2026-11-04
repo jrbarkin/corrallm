@@ -366,6 +366,7 @@ export function QueuesView({
                   grid={grid}
                   name={name}
                   status={sessions[lane.agent.id]?.status ?? 'idle'}
+                  features={sessions[lane.agent.id]?.features ?? null}
                   run={run}
                   onAgentContextMenu={onAgentContextMenu}
                   needsYou={needsYou(lane.agent.id)}
@@ -443,6 +444,7 @@ function LaneCells({
   grid,
   name,
   status,
+  features,
   run,
   onAgentContextMenu,
   onOpenSettings,
@@ -469,6 +471,8 @@ function LaneCells({
   name: (id: string) => string;
   /** Its session's status. */
   status: Session['status'];
+  /** What its ready generation can do, when there is one. */
+  features: Session['features'];
   run: RunSnapshot;
   onAgentContextMenu?: ((event: ReactMouseEvent, agentId: string) => void) | undefined;
   /** The run waits on the user: to decide at its hold, to answer its agent, or to switch one. */
@@ -586,6 +590,7 @@ function LaneCells({
           <AgentSettingsSummary
             node={node}
             options={(adapter) => settingsOptions(adapter, id)}
+            features={features ?? null}
             onOpen={() => {
               onOpenSettings(id);
             }}

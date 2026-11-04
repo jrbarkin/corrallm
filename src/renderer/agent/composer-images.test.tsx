@@ -30,11 +30,14 @@ const claiming = (size: number, name: string) => {
 };
 
 /** FileReaders that finish when told, so several can be in flight at once. */
-const readers: { reader: { result: string | null; onload: (() => void) | null }; file: File }[] =
-  [];
+const readers: {
+  reader: { result: string | null; onload: (() => void) | null; onerror: (() => void) | null };
+  file: File;
+}[] = [];
 class HeldReader {
   result: string | null = null;
   onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
   readAsDataURL(of: File) {
     readers.push({ reader: this, file: of });
   }
@@ -200,7 +203,7 @@ describe('images still being read', () => {
     const big = (name: string) => claiming(MAX_IMAGE_TOTAL / 5 - 1, name);
     paste(big('a.png'), big('b.png'), big('c.png'));
     paste(big('d.png'), big('e.png'), big('f.png'));
-    // Four files of just under a fifth fit in the total, five do not.
+    // Five files of just under a fifth fit in the total; a sixth, a little over, does not.
     expect(readers).toHaveLength(5);
     paste(claiming(MAX_IMAGE_TOTAL / 5 + 1, 'g.png'));
     expect(readers).toHaveLength(5);
@@ -221,12 +224,86 @@ describe('images still being read', () => {
     expect(box.value).toBe('keep me');
   });
 
-  it('attaches nothing after it is gone', async () => {
+  it('finishing a read after it is gone does nothing and throws nothing', async () => {
     const { paste, view } = await mount();
     paste(file(8));
     view.unmount();
-    await finishReading();
+    await expect(finishReading()).resolves.toBeUndefined();
     expect(screen.queryAllByRole('img')).toHaveLength(0);
+  });
+
+  it('attaches nothing that finishes after the draft was cleared', async () => {
+    const { paste, box } = await mount();
+    paste(file(8));
+    fireEvent.keyDown(box, { key: 'Escape' });
+    await finishReading();
+    expect(previews()).toBe(0);
+    // The reservation went with it: another image can be pasted and read.
+    paste(file(8, 'image/png', 'next.png'));
+    await finishReading(1);
+    expect(previews()).toBe(1);
+  });
+
+  it('refuses to send while an image is still being read, keeping the text and previews', async () => {
+    const { paste, type, box, send } = await mount({ ...TINY, max: 2 });
+    paste(file(4));
+    await finishReading();
+    paste(file(4, 'image/png', 'slow.png'));
+    type('look');
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toBe('slow.png is still being read.');
+    expect(box.value).toBe('look');
+    expect(previews()).toBe(1);
+    await finishReading(1);
+    expect(previews()).toBe(2);
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a read that fails, saying so, so a later paste is not refused for it', async () => {
+    const { paste } = await mount();
+    paste(file(8, 'image/png', 'bad.png'));
+    act(() => {
+      readers[0]?.reader.onerror?.();
+    });
+    expect(screen.getByRole('alert').textContent).toBe('bad.png couldn’t be read.');
+    paste(file(8, 'image/png', 'good.png'));
+    expect(readers).toHaveLength(2);
+    await finishReading(1);
+    expect(previews()).toBe(1);
+  });
+
+  it('says every file of a batch it refuses, not only the last', async () => {
+    const { paste } = await mount();
+    paste(
+      file(4, 'image/png', 'a.png'),
+      file(4, 'image/png', 'b.png'),
+      file(4, 'image/png', 'c.png'),
+    );
+    const said = screen.getByRole('alert').textContent;
+    expect(said).toContain('b.png');
+    expect(said).toContain('c.png');
+    await finishReading();
+    expect(previews()).toBe(1);
+  });
+
+  it('blames a kept over-limit preview, not a valid file pasted after a connection change', async () => {
+    const { paste, rules } = await mount();
+    paste(file(8));
+    await finishReading();
+    rules({ types: ['image/png'], maxBytes: 4, max: 2 });
+    paste(file(2, 'image/png', 'fine.png'));
+    const said = screen.getByRole('alert').textContent;
+    expect(said).toContain('takes images of at most 4 bytes each');
+    expect(said.startsWith('fine.png:')).toBe(false);
+    expect(readers).toHaveLength(1);
   });
 
   it('rechecks on submit: a preview the connection no longer takes stays, and nothing is sent', async () => {

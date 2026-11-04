@@ -57,6 +57,22 @@ interface Attachment extends MessageImage {
   url: string;
 }
 
+/**
+ * Why `added` can't join `kept` under `rules`, in words: the file's own refusal, named; or, where
+ * the images kept already break the rules (the connection changed), theirs, not blamed on the file.
+ */
+function blame(
+  kept: readonly ImageFacts[],
+  added: ImageFacts,
+  name: string,
+  rules: ImageRules,
+): string | undefined {
+  const own = imageFactsRefusal(kept, rules.declared, rules.subject);
+  if (own !== undefined) return `${own} Remove what doesn’t fit to add ${name}.`;
+  const all = imageFactsRefusal([...kept, added], rules.declared, rules.subject);
+  return all === undefined ? undefined : `${name}: ${all}`;
+}
+
 /** An attachment as the image limits see it. */
 const factsOf = ({ mediaType, data }: Attachment): ImageFacts => ({
   mediaType,
@@ -138,14 +154,14 @@ export function Composer({
   );
   const [problem, setProblem] = useState<string>();
   /** The images held, shown or still being read: what a paste is counted against at once. */
-  const held = useRef<{ shown: Attachment[]; reading: Map<object, ImageFacts> }>({
-    shown: images,
-    reading: new Map(),
-  });
+  const held = useRef<{ shown: Attachment[]; reading: Map<object, ImageFacts & { name: string }> }>(
+    {
+      shown: images,
+      reading: new Map(),
+    },
+  );
   /** The connection's limits as they are now, for a file whose read ends later. */
   const rules = useRef(imageRules);
-  /** Whether the composer is still there to take an image once it is read. */
-  const here = useRef(true);
   /** The mode that never asks it asks the user to confirm, picked from the mode menu. */
   const [confirming, setConfirming] = useState<Mode>();
   /** The completion picked in the menu, by its place. */
@@ -164,10 +180,9 @@ export function Composer({
     rules.current = imageRules;
   });
   useEffect(() => {
-    here.current = true;
     const pending = held.current.reading;
     return () => {
-      here.current = false;
+      // Gone: no read that ends later is this draft's.
       pending.clear();
     };
   }, []);
@@ -274,6 +289,11 @@ export function Composer({
 
   const submit = (text = draft) => {
     if (text.trim() === '' && images.length === 0) return;
+    const [unread] = held.current.reading.values();
+    if (unread !== undefined) {
+      setProblem(`${unread.name} is still being read.`);
+      return;
+    }
     const attachments = images.map(({ mediaType, data }) => ({ mediaType, data }));
     // The connection it has now, not the one the images were pasted under.
     const reason = controls.refuses
@@ -309,48 +329,58 @@ export function Composer({
   /**
    * Adds pasted or dropped images to the draft, as many as the connection takes: each file is
    * counted against the images shown and those still being read before any is read, so rapid
-   * pastes cannot overrun its count or the total; a file it refuses is said so, in the words of
-   * the limit that applies, and nothing else changes.
+   * pastes cannot overrun its count or the total. Every file it refuses is said so, in the words
+   * of the limit that applies, and nothing else changes.
    */
   const attach = (files: readonly File[]) => {
+    const refused: string[] = [];
     for (const file of files) {
       if (!IMAGE_TYPES.some((type) => type === file.type)) continue;
       const name = file.name || 'The image';
-      const facts: ImageFacts = { mediaType: file.type, bytes: file.size };
+      const added: ImageFacts = { mediaType: file.type, bytes: file.size };
       const { shown, reading } = held.current;
-      const refusal = imageFactsRefusal(
-        [...shown.map(factsOf), ...reading.values(), facts],
-        imageRules.declared,
-        imageRules.subject,
-      );
-      if (refusal !== undefined) {
-        setProblem(`${name}: ${refusal}`);
+      const why = blame([...shown.map(factsOf), ...reading.values()], added, name, imageRules);
+      if (why !== undefined) {
+        refused.push(why);
         continue;
       }
       const key = {};
-      reading.set(key, facts);
+      reading.set(key, { ...added, name });
       const reader = new FileReader();
       reader.onload = () => {
         // Gone, sent or cleared meanwhile: it is not this draft's any more.
-        if (!here.current || held.current.reading.get(key) === undefined) return;
+        if (held.current.reading.get(key) === undefined) return;
         held.current.reading.delete(key);
         const url = typeof reader.result === 'string' ? reader.result : '';
         const data = url.slice(url.indexOf(',') + 1);
-        if (data === '') return;
+        if (data === '') {
+          setProblem(`${name} couldn’t be read.`);
+          return;
+        }
         const image: Attachment = { mediaType: file.type as ImageType, data, url };
         // The connection it has now, with the images shown now and what it really holds.
-        const again = imageRefusal(
-          [...held.current.shown, image],
-          rules.current.declared,
-          rules.current.subject,
-        );
+        const again = blame(held.current.shown.map(factsOf), factsOf(image), name, rules.current);
         if (again !== undefined) {
-          setProblem(`${name}: ${again}`);
+          setProblem(again);
           return;
         }
         show([...held.current.shown, image]);
       };
+      const failed = () => {
+        // A read that fails gives its place back.
+        if (!held.current.reading.delete(key)) return;
+        setProblem(`${name} couldn’t be read.`);
+      };
+      reader.onerror = failed;
+      reader.onabort = failed;
       reader.readAsDataURL(file);
+    }
+    if (refused.length > 0) {
+      setProblem(
+        refused.length <= 3
+          ? refused.join(' ')
+          : `${refused.slice(0, 3).join(' ')} (and ${String(refused.length - 3)} more)`,
+      );
     }
   };
   const imagesIn = (list: DataTransfer) =>
@@ -588,7 +618,10 @@ export function Composer({
               const index = session.mode === null ? -1 : cycle.indexOf(session.mode);
               const next = cycle[(index + 1) % cycle.length];
               if (next !== undefined) controls.setMode(next);
-            } else if (event.key === 'Escape' && (working || draft !== '' || images.length > 0)) {
+            } else if (
+              event.key === 'Escape' &&
+              (working || draft !== '' || images.length > 0 || held.current.reading.size > 0)
+            ) {
               // Otherwise Esc goes on to close the view.
               event.stopPropagation();
               if (working) controls.stop();

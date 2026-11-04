@@ -632,6 +632,7 @@ export function AgentView({
               <AgentSettingsSummary
                 node={node}
                 options={controls.settingsOptions}
+                features={features}
                 onOpen={onOpenSettings}
               />
               <AgentChip

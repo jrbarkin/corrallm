@@ -678,9 +678,10 @@ describe('settings by what the connection can do', () => {
       const role = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' });
       expect(role.disabled).toBe(true);
       expect(role.value).toBe('Review carefully');
-      const words = panel.getByText(/doesn’t use a role/);
+      const words = panel.getByText(/doesn’t apply a role/);
       expect(role.getAttribute('aria-describedby')).toBe(words.id);
       expect(words.textContent).toContain('kept in this canvas');
+      expect(words.textContent).not.toContain('never sent');
       expect(panel.queryByText(/Applied when its session starts/)).toBeNull();
       focus(role);
       fireEvent.blur(role);
@@ -747,6 +748,24 @@ describe('settings by what the connection can do', () => {
       expect(
         panel.getByRole('button', { name: 'Start new conversation with this role' }),
       ).toBeTruthy();
+    });
+
+    it('shows the summary by the same rule as the sheet: the running generation’s role first', async () => {
+      await useCatalog(declaring('append', true));
+      const node = zedAgent({ role: 'Review carefully' });
+      const { rerender } = render(
+        <AgentSettingsSummary node={node} options={options} onOpen={() => undefined} />,
+      );
+      expect(screen.getByRole('button').textContent).toContain('Review carefully');
+      rerender(
+        <AgentSettingsSummary
+          node={node}
+          options={options}
+          features={features('none', true)}
+          onOpen={() => undefined}
+        />,
+      );
+      expect(screen.getByRole('button').textContent).toContain('Role not used');
     });
 
     it('does not show the summary as applying a role the adapter does nothing with', async () => {
