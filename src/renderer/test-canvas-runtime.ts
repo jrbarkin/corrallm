@@ -13,7 +13,12 @@ import type { ConnectionId } from '../shared/adapter';
 import { connectionIn } from '../shared/adapter';
 import { imageRefusal } from '../shared/images';
 import { routeOf, routeRefusal } from '../shared/routing';
-import { declaredFeatures, effectiveFeatures, usableFeatures } from '../shared/features';
+import {
+  declaredFeatures,
+  effectiveFeatures,
+  NO_FEATURES,
+  usableFeatures,
+} from '../shared/features';
 import type { SessionFeatures } from '../shared/features';
 import { OPS } from '../shared/api/registry';
 import { AgentId, MessageId } from '../shared/api/ids';
@@ -65,7 +70,9 @@ export function canvasRuntime(
    */
   const featuresOf = (connection: string, report: unknown): SessionFeatures | null => {
     const found = connectionIn(catalog(), connection);
-    const effective = found && effectiveFeatures(report, declaredFeatures(found.adapter));
+    // As the manager: a report that can't be read leaves the generation with NO_FEATURES.
+    const effective =
+      found && (effectiveFeatures(report, declaredFeatures(found.adapter)) ?? NO_FEATURES);
     return found && effective
       ? usableFeatures(effective, found.connection, {
           setEffort: true,
@@ -103,6 +110,10 @@ export function canvasRuntime(
       `${label === '' ? agent : label}’s connection`,
     );
   };
+  const refuseWith = (code: 'refused' | 'invalid' | 'not-found', sentence: string) => ({
+    ok: false as const,
+    error: { code, sentence },
+  });
   const input = () => ({ canvas, nodes, run, sessions, catalog: lookups });
   function publish() {
     const projected = { ...run, agents: { ...run.agents } };
@@ -565,6 +576,21 @@ export function canvasRuntime(
       core.reply(op, async (raw) => {
         const args = OPS[op].input.parse(raw);
         const agent = args.agent;
+        if ('effort' in args) {
+          // As the core: a connection that sets none from here refuses, and so does a model
+          // that doesn't offer the effort.
+          const name = nodes.find((n) => n.id === agent)?.data.label ?? agent;
+          if (connectionIn(catalog(), connectionOf(agent))?.connection.live.effort !== true)
+            return refuseWith('refused', `${name}’s effort is set in its terminal while it runs.`);
+          const session = of(agent);
+          const efforts = session.models?.find((one) => one.value === session.model)?.efforts;
+          if (
+            args.effort !== null &&
+            efforts !== undefined &&
+            !efforts.some((one) => one.value === args.effort)
+          )
+            return refuseWith('invalid', `${name}’s model offers no ${args.effort} effort.`);
+        }
         if ('mode' in args) await replies.setMode(agent, args.mode as SessionMode);
         if ('model' in args) await replies.setModel(agent, args.model);
         if ('effort' in args) await replies.setEffort(agent, args.effort);
@@ -589,6 +615,12 @@ export function canvasRuntime(
     });
     core.reply('session.stopTask', async (raw) => {
       const { agent, task } = OPS['session.stopTask'].input.parse(raw);
+      // As the core: only a connection that stops one, and a task the session runs now.
+      const name = nodes.find((n) => n.id === agent)?.data.label ?? agent;
+      if (connectionIn(catalog(), connectionOf(agent))?.connection.live.stopTask !== true)
+        return refuseWith('refused', `${name}’s background tasks are stopped in its terminal.`);
+      if (!(of(agent).tasks ?? []).some((one) => one.id === task))
+        return refuseWith('not-found', `${name}’s session runs no task ${task} now.`);
       await replies.stopTask(agent, task);
       return result();
     });
@@ -651,7 +683,10 @@ export function canvasRuntime(
         const what = op === 'session.restart' ? 'restart it' : 'start a new conversation';
         if (session.status !== 'idle')
           return refuse(`${name} has a turn going on: ${what} once it is idle.`);
-        if (session.queued.length > 0)
+        const waiting = [...messages.values()].some(
+          (message) => message.to === `agent:${agent}` && message.state === 'pending',
+        );
+        if (waiting)
           return refuse(`${name} has messages waiting to go: ${what} once they have gone.`);
         if (op === 'session.newConversation') {
           await replies.fresh(agent, chosenAdapter(agent));

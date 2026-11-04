@@ -69,13 +69,13 @@ describe('a declared live control', () => {
     expect(strip(view)).not.toBeNull();
   });
 
-  it('is absent when its report was refused, though the session shows models and tasks', async () => {
+  it('is offered as the manager projects a refused report: no role or resume, the declared live controls', async () => {
     const { view, emit } = await open('zed.acp', withLive({ effort: true, stopTask: true }));
-    // A report that can't be read leaves the generation without features.
+    // A report that can't be read leaves the generation with NO_FEATURES (src/shared/features.ts),
+    // which still projects the connection's `live` from the descriptor and the session's methods.
     emit({ ...STARTED_MODELS, role: 'bogus' } as unknown as SessionEvent, TASKS);
-    expect(effort(view)).toBeNull();
-    expect(strip(view)).toBeNull();
-    expect(view.queryByRole('button', { name: /^Stop Survey/ })).toBeNull();
+    expect(effort(view)).not.toBeNull();
+    expect(strip(view)).not.toBeNull();
   });
 
   it('is absent where the connection doesn’t declare it, however the session looks', async () => {
@@ -134,5 +134,43 @@ describe('a declared live control', () => {
     );
     await settle();
     expectOneOp(sent, 'session.stopTask', { canvas: canvas.document.id, agent: 'a', task: 't1' });
+  });
+});
+
+describe('the fake core’s live operations, as the core refuses them', () => {
+  it('refuses stopping a task the session doesn’t run', async () => {
+    const { emit, canvas, replies } = await open(
+      'zed.acp',
+      withLive({ effort: true, stopTask: true }),
+    );
+    emit(STARTED_MODELS, TASKS);
+    await expect(
+      canvas.core.api.sessionStopTask({ canvas: canvas.document.id, agent: 'a', task: 'nope' }),
+    ).rejects.toThrow(/runs no task nope/);
+    expect(replies.stopTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses stopping a task on a connection that doesn’t stop one', async () => {
+    const { emit, canvas, replies } = await open(
+      'zed.acp',
+      withLive({ effort: true, stopTask: false }),
+    );
+    emit(STARTED_MODELS, TASKS);
+    await expect(
+      canvas.core.api.sessionStopTask({ canvas: canvas.document.id, agent: 'a', task: 't1' }),
+    ).rejects.toThrow(/stopped in its terminal/);
+    expect(replies.stopTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses an effort the model doesn’t offer', async () => {
+    const { emit, canvas, replies } = await open(
+      'zed.acp',
+      withLive({ effort: true, stopTask: true }),
+    );
+    emit(STARTED_MODELS);
+    await expect(
+      canvas.core.api.sessionSetEffort({ canvas: canvas.document.id, agent: 'a', effort: 'max' }),
+    ).rejects.toThrow(/offers no max effort/);
+    expect(replies.setEffort).not.toHaveBeenCalled();
   });
 });

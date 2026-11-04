@@ -78,6 +78,37 @@ describe('Start new conversation for a connection that can’t resume', () => {
     expect(panel.getByRole('button', { name: 'Start new conversation' })).toBeTruthy();
   });
 
+  it('shows the core’s own refusal when a message is still waiting to go', async () => {
+    const { panel, composer, emit, canvas, since } = await sheet(false);
+    // A message queued while it worked stays waiting once its turn ends.
+    emit({ type: 'status', status: 'working' });
+    await events.change(composer, { target: { value: 'later' } });
+    await events.keyDown(composer, { key: 'Enter' });
+    await settle();
+    emit({
+      type: 'end',
+      messages: [],
+      seconds: 1,
+      result: { status: 'completed', reason: 'completed' },
+    });
+    const sent = since();
+    await events.click(panel.getByRole('button', { name: 'Start new conversation' }));
+    await settle();
+    expectOneOp(sent, 'session.newConversation', { canvas: canvas.document.id, agent: 'a' });
+    expect(
+      await screen.findByText(
+        'a has messages waiting to go: start a new conversation once they have gone.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('treats a refused started report as a connection that can’t resume and uses no role', async () => {
+    const { panel } = await sheet(true, { role: 'bogus', running: { model: 'old' } });
+    expect(panel.queryByRole('button', { name: /^Restart/ })).toBeNull();
+    expect(panel.getByRole('button', { name: 'Start new conversation' })).toBeTruthy();
+    expect(panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' }).disabled).toBe(true);
+  });
+
   it('is Restart, as one session.restart, for a connection that does resume', async () => {
     const { panel, canvas, since } = await sheet(true);
     expect(panel.queryByRole('button', { name: 'Start new conversation' })).toBeNull();
