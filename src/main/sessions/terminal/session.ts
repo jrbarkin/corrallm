@@ -134,6 +134,8 @@ const ASK_WINDOW = 5000;
 const MAX_ASKS = 8;
 /** How much of the end of a message the prompt must show before Enter is pressed (`#shown`). */
 const TAIL = 40;
+/** How long a wait's detail is read after for a frame its CLI is drawing to be drawn. */
+const FRAME_LIMIT = 1000;
 
 type State = ProgramStatus['state'];
 /** The CLI at work on a turn, or waiting on the user in one. */
@@ -1171,12 +1173,14 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   }
 
   /**
-   * Reads, once its screen has settled, what it shows of a wait only its report describes (its
-   * TerminalCli's `waitDetail`), once: its dialog may not be drawn as the report comes.
+   * Reads, once its screen has settled and no frame is being drawn on it (`Screen.drawn`), what it
+   * shows of a wait only its report describes (its TerminalCli's `waitDetail`), once: its dialog
+   * may not be drawn as the report comes.
    */
   #readDetail(record: string, id: string): void {
     this.#later(() => {
-      void this.#screen.settled().then(() => {
+      // Its dialog whole: not while a frame of it is still being drawn.
+      void this.#screen.drawn(FRAME_LIMIT).then(() => {
         const block = this.#blocks.get(record);
         if (block?.id !== id || this.#gone()) return;
         const rows = this.#cli.waitDetail?.(this.#screen);
