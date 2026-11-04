@@ -206,7 +206,7 @@ export function AgentSettingsPanel({
             adapter={adapter}
             connection={connection}
             onChange={onAgent}
-            onContinueInTerminal={() => {
+            onContinue={() => {
               if (adapter !== undefined && connection !== undefined)
                 onAgent(adapter, continuesIn(connection) ?? connection);
             }}

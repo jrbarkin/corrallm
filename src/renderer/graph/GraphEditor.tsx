@@ -1473,7 +1473,7 @@ function Editor({
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
             }}
-            onContinueInTerminal={(command, images) => {
+            onContinue={(command, images) => {
               const connection = continuesIn(connectionOf(openedNode.data));
               if (connection !== undefined)
                 act(

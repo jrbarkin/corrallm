@@ -128,6 +128,24 @@ function refuseSdk(fake: ReturnType<typeof fakeSessions>) {
   });
 }
 
+/**
+ * `open`, with its session started, as main reports it ready: only then can a panel its
+ * connection declares open (its session's `features`).
+ */
+async function ready(...args: Parameters<typeof open>) {
+  const opened = await open(...args);
+  opened.emit({
+    type: 'started',
+    role: 'append',
+    resume: true,
+    list: true,
+    model: 'opus',
+    mode: 'manual',
+    models: MODELS,
+  });
+  return opened;
+}
+
 const MODELS = [
   { value: 'opus', label: 'Opus', description: 'The most capable' },
   { value: 'haiku', label: 'Haiku', description: 'The fastest' },
@@ -1963,7 +1981,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
     // Not sent to the Agent SDK session: Terminal is offered instead.
     expect(replies.send).not.toHaveBeenCalled();
     const offer = within(view.getByRole('group', { name: 'Continue in Terminal?' }));
-    expect(offer.getByText(/^\/permissions opens a screen of Claude Code’s own/)).toBeTruthy();
+    expect(offer.getByText(/^\/permissions runs only in Terminal/)).toBeTruthy();
 
     const before = operations().length;
     await events.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
@@ -2000,7 +2018,9 @@ describe('an Agent SDK agent continued in Terminal', () => {
     // Not sent to the Agent SDK session, where it would be a prompt: Terminal is offered.
     expect(replies.send).not.toHaveBeenCalled();
     const offer = within(view.getByRole('group', { name: 'Continue in Terminal?' }));
-    expect(offer.getByText(/^!npm test runs in Claude Code’s bash mode/)).toBeTruthy();
+    expect(
+      offer.getByText(/^!npm test is a shell command: Terminal runs text starting with "!"/),
+    ).toBeTruthy();
 
     await events.click(offer.getByRole('button', { name: 'Continue in Terminal' }));
     await settle();
@@ -2051,7 +2071,7 @@ describe('an Agent SDK agent’s /resume', () => {
 
   it('lists the project folder’s other conversations, and opens the one picked in this agent', async () => {
     const now = Date.now();
-    const { replies, send, view, transcript, emit, sent, composer } = await open(
+    const { replies, send, view, transcript, emit, sent, composer } = await ready(
       { connection: 'claude-code.sdk' },
       (fake) => {
         fake.replies.sessions.mockResolvedValue([
@@ -2096,7 +2116,7 @@ describe('an Agent SDK agent’s /resume', () => {
   });
 
   it('says when there is no other conversation, and why one could not be listed', async () => {
-    const { replies, send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
+    const { replies, send, view } = await ready({ connection: 'claude-code.sdk' }, (fake) => {
       fake.replies.sessions.mockResolvedValueOnce([
         { id: 'own', title: 'This conversation', modified: 1, current: true },
       ]);
@@ -2116,7 +2136,7 @@ describe('an Agent SDK agent’s /resume', () => {
 
 describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
   it('lists them, and reconnects, disables and enables them', async () => {
-    const { replies, send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
+    const { replies, send, view } = await ready({ connection: 'claude-code.sdk' }, (fake) => {
       fake.replies.mcp.mockResolvedValue([
         {
           name: 'github',
@@ -2159,7 +2179,7 @@ describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
   });
 
   it('signs in to a server in Terminal, where Claude Code’s own /mcp does it', async () => {
-    const { replies, send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
+    const { replies, send, view } = await ready({ connection: 'claude-code.sdk' }, (fake) => {
       fake.replies.mcp.mockResolvedValue([{ name: 'linear', status: 'needs-auth' }]);
     });
     await send('/mcp');
@@ -2175,7 +2195,7 @@ describe('an Agent SDK agent’s MCP servers (/mcp)', () => {
   });
 
   it('says why they could not be listed', async () => {
-    const { send, view } = await open({ connection: 'claude-code.sdk' }, (fake) => {
+    const { send, view } = await ready({ connection: 'claude-code.sdk' }, (fake) => {
       fake.replies.mcp.mockRejectedValue(
         new Error("Error invoking remote method 'session:mcp': Error: Not running."),
       );
@@ -2295,7 +2315,7 @@ describe('an MCP server asking the user (an elicitation)', () => {
 describe('an Agent SDK agent rewound', () => {
   /** Agent a, through the Agent SDK, after two turns: "Fix the login bug", then "Now the cart". */
   async function talked(prepare?: (fake: ReturnType<typeof fakeSessions>) => void) {
-    const opened = await open({ connection: 'claude-code.sdk' }, prepare);
+    const opened = await ready({ connection: 'claude-code.sdk' }, prepare);
     const { send, emit, sent } = opened;
     const ids: string[] = [];
     for (const text of ['Fix the login bug', 'Now the cart']) {
@@ -2317,7 +2337,7 @@ describe('an Agent SDK agent rewound', () => {
   }
 
   it('rewinds code and conversation to before a message, its text back in the box', async () => {
-    const { replies, view, transcript, composer, ids } = await talked((fake) => {
+    const { replies, view, transcript, composer, ids, canvas } = await talked((fake) => {
       fake.replies.previewRewind.mockResolvedValue({
         possible: true,
         files: ['src/cart.ts'],
@@ -2349,8 +2369,15 @@ describe('an Agent SDK agent rewound', () => {
       'Cancel',
     ]);
 
+    const before = canvas.core.operations.length;
     await events.click(panel.getByRole('button', { name: 'Restore code and conversation' }));
     await settle();
+    expectOneOp({ operations: canvas.core.operations.slice(before) }, 'session.rewind', {
+      canvas: canvas.document.id,
+      agent: 'a',
+      message: ids[1],
+      restore: 'both',
+    });
     expect(replies.rewind).toHaveBeenCalledWith('a', ids[1], 'both');
     expect(view.queryByRole('group', { name: 'Rewind' })).toBeNull();
     expect(transcript.queryByText('Fix the login bug')).toBeNull();
