@@ -161,8 +161,10 @@ describe('the strict catalog schema', () => {
     adapters: [
       {
         ...TWO_MADE_UP.adapters[1],
+        // Its terminal stays: the continuation's target and the connection its consent names.
         connections: [
           { ...CONTINUING, continueIn: { ...CONTINUING.continueIn, commands: [command] } },
+          TERMINAL,
         ],
       },
     ],
