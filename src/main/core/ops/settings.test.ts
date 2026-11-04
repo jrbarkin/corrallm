@@ -52,3 +52,35 @@ describe('taking back a consent, by the catalog the core is given (B22a C3)', ()
     ]);
   });
 });
+
+describe('settings that can’t be read (B22a C6)', () => {
+  /** A read that fails as a file system does, naming the profile's file. */
+  const failing = () =>
+    Promise.reject(
+      new Error("EACCES: permission denied, open '/home/someone/.corrallm/settings.json'"),
+    );
+
+  it.each([
+    ['you', 'get'],
+    ['outside-read', 'get'],
+    ['you', 'apiPort'],
+  ] as const)(
+    'refuses %s’s read as unavailable in fixed words when its %s fails, never the error’s',
+    async (party, which) => {
+      const ok = () => Promise.resolve({ defaultAdapter: null, consents: {} });
+      const services = {
+        catalog: TWO_MADE_UP,
+        settings: { get: which === 'get' ? failing : ok, apiPort: which === 'get' ? ok : failing },
+        links: { sites: () => Promise.resolve([]), builtIn: () => [] },
+        notifications: { status: () => undefined },
+        api: () => ({ state: 'stopped', port: null }),
+      } as unknown as OpServices;
+      const ctx = { party, published: vi.fn() } as unknown as OpContext;
+      const read = settingsOps(services)['settings.get']({}, ctx);
+      await expect(read).rejects.toMatchObject({
+        code: 'unavailable',
+        message: 'corrallm couldn’t read your settings.',
+      });
+    },
+  );
+});
