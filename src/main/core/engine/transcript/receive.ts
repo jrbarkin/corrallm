@@ -198,7 +198,7 @@ export class ConnectedDriver implements SessionDriver {
         if (pasted !== undefined) {
           this.#turns.delete(turn.id);
           this.#notice('warning', pasted);
-          this.#io.refused(turn.id, { text: pasted });
+          this.#io.refused(turn.id, { text: pasted, images: true });
           return null;
         }
         sent.sent = true;

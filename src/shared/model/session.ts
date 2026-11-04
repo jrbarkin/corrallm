@@ -150,6 +150,11 @@ export interface SettledPromptEntry {
 export interface Refusal {
   text: string;
   switchTo?: ConnectionId;
+  /**
+   * The turn's images are what its connection can't take (B16 C3), not the session: its message
+   * waits, whole, until its agent runs where they can go, or it is taken back.
+   */
+  images?: true;
 }
 
 export interface Session {

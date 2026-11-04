@@ -52,8 +52,6 @@ describe('routeOf', () => {
     expect(routeOf(' /rewind later', context())).toEqual({ kind: 'panel', panel: 'rewind' });
     // Not declared: not a panel here.
     expect(routeOf('/mcp', context())).toEqual({ kind: 'send' });
-    // The view's usable panels, where it passes them, are what it answers.
-    expect(routeOf('/resume', { ...context(), panels: {} })).toEqual({ kind: 'send' });
   });
 
   it('continues only the commands its descriptor names, in the connection it names', () => {
@@ -92,6 +90,9 @@ describe('routeOf', () => {
       command: 'npm test',
     });
     expect(routeOf('!npm test', context())).toEqual({ kind: 'send' });
+    // Its prefix alone is no command: it is sent as text, as the composer sends it.
+    expect(routeOf('$', context())).toEqual({ kind: 'send' });
+    expect(routeOf('  $  \n ', context())).toEqual({ kind: 'send' });
     // A destination with no prefix continues no shell text.
     expect(routeOf('$ npm test', { ...context(), target: FREE })).toEqual({ kind: 'send' });
     // Nor does a connection whose continuation takes none.

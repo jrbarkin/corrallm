@@ -1230,6 +1230,96 @@ describe('images a connection takes (B16 C3)', () => {
     });
     expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
   });
+
+  it('holds a queued message its connection can’t send once refused, trying it no more until the agent runs another way', async () => {
+    const { core, sdk, terminal } = await start();
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'message', { to: 'a', body: 'Keep working' });
+    const open = core.engines.canvas(CANVAS);
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('a').status).toBe('working');
+    });
+    const { id } = (await ok(core, 'message', { to: 'a', body: 'Then this', images: [IMAGE] })) as {
+      id: string;
+    };
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    let refusals = 0;
+    let starts = 0;
+    open?.engine.sessions.subscribe((action) => {
+      if (action?.type === 'refuse') refusals += 1;
+      if (action?.type === 'start') starts += 1;
+    });
+    holding.resolve(undefined);
+    holding = undefined;
+    // Refused at the send, it holds its agent's messages, saying what would let it go.
+    await vi.waitFor(() => {
+      expect(open?.delivery.stuck()).toEqual([
+        {
+          agent: 'a',
+          text: 'Claude Code · Terminal takes no images.',
+          clears: expect.stringContaining('takes its images') as unknown,
+          images: true,
+        },
+      ]);
+    });
+    // You see it in Needs as what it is: a message that can't go, not a session that won't start.
+    const { items } = (await ok(core, 'needs', {})) as { items: { id: string; title: string }[] };
+    expect(items.find((item) => item.id.startsWith('start/'))?.title).toMatch(
+      /can’t be sent a message: Claude Code · Terminal takes no images\.$/,
+    );
+    const attempt = open?.messages.get(id)?.delivery?.attempt;
+    // Another message, and the pass it schedules, try it no more: it was refused once.
+    const { id: next } = (await ok(core, 'message', { to: 'a', body: 'And this' })) as {
+      id: string;
+    };
+    await vi.waitFor(() => {
+      expect(open?.messages.get(next)?.state).toBe('pending');
+    });
+    expect({ refusals, starts, attempt: open?.messages.get(id)?.delivery?.attempt }).toEqual({
+      refusals: 1,
+      starts: 1,
+      attempt,
+    });
+    expect(open?.messages.get(id)?.state).toBe('pending');
+    expect(terminal.sessions.flatMap(({ sent }) => sent)).toEqual([]);
+    // Where its images can go, both go, in order, the first whole.
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.sdk' });
+    await vi.waitFor(() => {
+      expect(sdk.sessions.flatMap(({ sent }) => sent.map(({ text }) => text)).slice(-2)).toEqual([
+        'Then this',
+        'And this',
+      ]);
+    });
+    expect(sdk.sessions.flatMap(({ sent }) => sent).at(-2)?.images).toEqual([IMAGE]);
+  });
+
+  it('lets what waits behind a refused image message go once that message is taken back', async () => {
+    const { core, terminal } = await start();
+    holding = Promise.withResolvers<undefined>();
+    await ok(core, 'message', { to: 'a', body: 'Keep working' });
+    const open = core.engines.canvas(CANVAS);
+    await vi.waitFor(() => {
+      expect(open?.engine.sessions.of('a').status).toBe('working');
+    });
+    const { id } = (await ok(core, 'message', { to: 'a', body: 'Then this', images: [IMAGE] })) as {
+      id: string;
+    };
+    await ok(core, 'agent.setConnection', { agent: 'a', connection: 'claude-code.terminal' });
+    holding.resolve(undefined);
+    holding = undefined;
+    await vi.waitFor(() => {
+      expect(open?.delivery.stuck().map(({ agent }) => agent)).toEqual(['a']);
+    });
+    await ok(core, 'message', { to: 'a', body: 'And this' });
+    await ok(core, 'withdraw', { id });
+    // Nothing it can't send waits first: what does goes, to the connection it runs now.
+    await vi.waitFor(() => {
+      expect(terminal.sessions.flatMap(({ sent }) => sent.map(({ text }) => text))).toEqual([
+        'And this',
+      ]);
+    });
+    expect(open?.delivery.stuck()).toEqual([]);
+  });
 });
 
 describe('what a rewind can go back to (B16 C4)', () => {

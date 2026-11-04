@@ -1049,8 +1049,10 @@ describe('a connected session that would not start', () => {
     await settle();
     expect(fake.backend.send).not.toHaveBeenCalled();
     expect(done).not.toHaveBeenCalled();
+    // Refused for its images, not for the session: delivery holds it until the agent runs another way.
     expect(refused).toHaveBeenCalledExactlyOnceWith({
       text: 'Claude Code · Terminal takes no images.',
+      images: true,
     });
     expect(store.of('a').queued).toEqual([
       expect.objectContaining({ text: 'Look at this', images }),

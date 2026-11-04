@@ -7,10 +7,13 @@ import type { SlashCommand } from './session';
  * alone, that the composer's completion and interception and the core's admission of `message`
  * all share. In order:
  *
- * 1. A command its view answers in a panel (`panels`: /resume, /mcp, /rewind), which is never sent.
+ * 1. A command its view answers in a panel its connection declares (`panels`: /resume, /mcp,
+ *    /rewind), which is never sent: where its session can't use that panel now (`features`), the
+ *    view says so, and the core refuses it the same, so both decide by the same declaration.
  * 2. A command only its `continueIn` connection runs, or (where that connection takes them) text
- *    starting with that connection's own shell prefix: continued there, never sent here. A
- *    command the session offers itself wins, except a bare-only continuation command typed bare.
+ *    starting with that connection's own shell prefix and a command after it: continued there,
+ *    never sent here. A command the session offers itself wins, except a bare-only continuation
+ *    command typed bare.
  * 3. A command the session offers (`commands`): sent, as it is.
  * 4. Anything else: sent, as it is. A path starting with `/` is just text.
  *
@@ -50,20 +53,16 @@ export interface RouteContext {
   target?: Pick<ConnectionDescriptor, 'shellPrefix'> | undefined;
   /** The commands its session offers now (`commands`): none known, none offered. */
   offered?: readonly SlashCommand[] | undefined;
-  /**
-   * The panels its view may answer: by default its connection's declared ones. A view passes its
-   * ready generation's usable panels (`SessionFeatures.panels`).
-   */
-  panels?: ConnectionDescriptor['panels'] | undefined;
 }
 
 /** Where `text` goes for an agent whose connection and session `context` describes. */
 export function routeOf(text: string, context: RouteContext): Route {
   const { connection, target, offered } = context;
   const typed = parseCommand(text);
-  const panels = context.panels ?? connection.panels;
   const panel = PANELS.find((one) => one === typed?.name);
-  if (panel !== undefined && Object.hasOwn(panels, panel)) return { kind: 'panel', panel };
+  if (panel !== undefined && Object.hasOwn(connection.panels, panel)) {
+    return { kind: 'panel', panel };
+  }
   const own = typed !== undefined && (offered?.some(({ name }) => name === typed.name) ?? false);
   const continueIn = connection.continueIn;
   if (continueIn !== undefined) {
@@ -76,7 +75,8 @@ export function routeOf(text: string, context: RouteContext): Route {
     const prefix = target?.shellPrefix;
     if (continueIn.shell && startsWithShell(text, prefix)) {
       const shell = text.trimStart().slice(prefix.length).trim();
-      return { kind: 'shell', connection: continueIn.connection, command: shell };
+      // Its prefix alone is no command: it is text.
+      if (shell !== '') return { kind: 'shell', connection: continueIn.connection, command: shell };
     }
   }
   return own ? { kind: 'command', name: typed.name } : { kind: 'send' };

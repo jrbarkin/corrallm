@@ -55,6 +55,8 @@ export interface RunRefusal {
   text: string;
   switchTo?: ConnectionId;
   kind?: 'unknown-action';
+  /** Its turn's images are what the connection can't take (B16 C3): never kept in a run. */
+  images?: true;
 }
 
 /** Where an agent's queue is, in a run. */
