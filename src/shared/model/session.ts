@@ -1,4 +1,5 @@
 import type { AdapterId, ConnectionId } from '../adapter';
+import type { SessionFeatures } from '../features';
 import type {
   AgentStartSettings,
   BackgroundTask,
@@ -193,6 +194,11 @@ export interface Session {
   usage?: SessionUsage;
   /** The slash commands a connected session offers, as the composer completes them. */
   commands?: readonly SlashCommand[];
+  /**
+   * What its ready generation can do now (B16 C1), as its summary projects it: null while none is
+   * ready. A view reads it to decide whether a panel its connection declares can open.
+   */
+  features?: SessionFeatures | null;
   /** The work a connected session runs in the background now, which the user can stop. */
   tasks?: readonly BackgroundTask[];
   /** What a connected session predicts the user sends next, until a turn starts. */

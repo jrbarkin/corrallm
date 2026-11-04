@@ -10,6 +10,9 @@ import type { Run } from '../shared/model/run';
 import type { MessageImage, SessionMode, SessionOptions } from '../shared/session';
 import { isSessionMode } from '../shared/session';
 import type { ConnectionId } from '../shared/adapter';
+import { connectionIn } from '../shared/adapter';
+import { declaredFeatures, effectiveFeatures, usableFeatures } from '../shared/features';
+import type { SessionFeatures } from '../shared/features';
 import { OPS } from '../shared/api/registry';
 import { AgentId, MessageId } from '../shared/api/ids';
 import { runView, sessionView } from '../shared/model/views';
@@ -52,6 +55,26 @@ export function canvasRuntime(
   const connectionOf = (id: string) => {
     const node = nodes.find((n) => n.id === id);
     return lookups.connectionOf(node?.type === 'agent' ? node.data : {});
+  };
+  /**
+   * What a `started` report makes usable, as the manager would project it with every method the
+   * fake core stands in for: the effective report within the adapter's maxima, and the usable part
+   * of the connection's `panels` and `live`. None for a connection or report it can't read.
+   */
+  const featuresOf = (connection: string, report: unknown): SessionFeatures | null => {
+    const found = connectionIn(catalog(), connection);
+    const effective = found && effectiveFeatures(report, declaredFeatures(found.adapter));
+    return found && effective
+      ? usableFeatures(effective, found.connection, {
+          setEffort: true,
+          stopTask: true,
+          mcpServers: true,
+          changeMcpServer: true,
+          rewindFiles: true,
+          listConversations: true,
+          forkConversation: true,
+        })
+      : null;
   };
   const input = () => ({ canvas, nodes, run, sessions, catalog: lookups });
   function publish() {
@@ -209,7 +232,12 @@ export function canvasRuntime(
     const current = of(agent);
     switch (event.type) {
       case 'started':
-        setSession(agent, { ...current, ...event, status: 'idle' });
+        setSession(agent, {
+          ...current,
+          ...event,
+          status: 'idle',
+          features: featuresOf(connection, event),
+        });
         break;
       case 'status':
         setSession(agent, { ...current, status: event.status });
