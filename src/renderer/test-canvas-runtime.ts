@@ -93,6 +93,16 @@ export function canvasRuntime(
     const named = target === undefined ? '' : `${target.adapter.name} · ${target.connection.label}`;
     return routeRefusal(route, agent, named);
   };
+  /** Why `images` can't go to `agent`, by its connection (the core's words), if so. */
+  const imageRefusalFor = (agent: string, images: readonly MessageImage[]): string | undefined => {
+    const found = connectionIn(catalog(), connectionOf(agent));
+    const label = nodes.find((n) => n.id === agent)?.data.label ?? '';
+    return imageRefusal(
+      images,
+      found?.connection.images ?? null,
+      `${label === '' ? agent : label}’s connection`,
+    );
+  };
   const input = () => ({ canvas, nodes, run, sessions, catalog: lookups });
   function publish() {
     const projected = { ...run, agents: { ...run.agents } };
@@ -536,6 +546,10 @@ export function canvasRuntime(
       const refusal = routeRefusalFor(args.to, args.body);
       if (refusal !== undefined)
         return { ok: false as const, error: { code: 'refused', sentence: refusal } };
+      // As the core: images only of the kinds, number and size its connection takes.
+      const pasted = imageRefusalFor(args.to, args.images ?? []);
+      if (pasted !== undefined)
+        return { ok: false as const, error: { code: 'refused', sentence: pasted } };
       return send(args.to, args.body, args.images);
     });
     core.reply('session.viewCommand', async (raw) => {
@@ -676,6 +690,16 @@ export function canvasRuntime(
     });
     core.reply('reply', async (raw) => {
       const { to, answer } = OPS.reply.input.parse(raw);
+      // As the core: a problem hold's words go to the agent whose task failed, and their images
+      // only if its connection takes them.
+      if (to.startsWith('hold/') && 'text' in answer) {
+        const held = decodeURIComponent(to.split('/')[1] ?? '');
+        const goes = run.agents[held]?.problem?.agent ?? held;
+        const refusal = imageRefusalFor(goes, answer.images ?? []);
+        if (refusal !== undefined)
+          return { ok: false as const, error: { code: 'refused', sentence: refusal } };
+        return result({ outcome: 'answered' });
+      }
       for (const [agent, session] of Object.entries(sessions)) {
         const entry = session.entries.find((entry) => entry.kind === 'prompt' && entry.need === to);
         if (entry?.kind !== 'prompt' || entry.outcome !== undefined) continue;

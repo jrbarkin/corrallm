@@ -27,9 +27,9 @@ export interface ComposerControls {
   /** Sends a message, with the images pasted into it. */
   send: (text: string, images?: MessageImage[]) => void;
   /**
-   * Why a message can't go as written, if the view knows before it is sent (for one it would offer
-   * to continue elsewhere: its images the destination refuses). Then it is not sent, and the draft
-   * and its images stay, with the reason shown.
+   * Why a message can't go as written, if the view knows before it is sent (its images the agent it
+   * goes to, or the connection it would continue in, refuses). Then it is not sent, and the draft
+   * and its images stay, with the reason shown. Where given it decides, over the composer's own rules.
    */
   refuses?: (text: string, images: MessageImage[]) => string | undefined;
   stop: () => void;
@@ -276,9 +276,9 @@ export function Composer({
     if (text.trim() === '' && images.length === 0) return;
     const attachments = images.map(({ mediaType, data }) => ({ mediaType, data }));
     // The connection it has now, not the one the images were pasted under.
-    const reason =
-      imageRefusal(attachments, imageRules.declared, imageRules.subject) ??
-      controls.refuses?.(text, attachments);
+    const reason = controls.refuses
+      ? controls.refuses(text, attachments)
+      : imageRefusal(attachments, imageRules.declared, imageRules.subject);
     if (reason !== undefined) {
       setProblem(reason);
       return;

@@ -485,17 +485,40 @@ export function AgentView({
    * offered there instead; while the run asks (`ask.reply`), the answer, unless it is a command
    * the session runs.
    */
-  /** Why text it would offer to continue elsewhere can't go with its images, if so. */
-  const refuses = (text: string, images: MessageImage[]) => {
-    const route = routeText(text, connection, session.commands);
-    return (route.kind === 'continue' || route.kind === 'shell') && target
-      ? imageRefusal(images, target.images, target.label)
-      : undefined;
-  };
-  /** What its composer's images are held to: this connection's, one the catalog lacks takes none. */
-  const imageRules = {
+  /** The limits of this agent's own connection: one the catalog lacks takes none. */
+  const ownRules = {
     declared: declared?.images ?? null,
     subject: found ? `${found.adapter.name} · ${found.connection.label}` : 'This connection',
+  };
+  /**
+   * While the run asks for words about a failed task, they go to the agent whose task it was
+   * (src/main/core/run-replies.ts), so its connection's limits hold their images.
+   */
+  const holdTo =
+    ask?.reply && ask.problem && ask.problem.agent !== node.id ? ask.problem.agent : undefined;
+  const holdNode = holdTo === undefined ? undefined : nodes.find((one) => one.id === holdTo);
+  const holdRules =
+    holdNode?.type === 'agent'
+      ? {
+          declared: connectionIn(catalog(), connectionOf(holdNode.data))?.connection.images ?? null,
+          subject: `${holdNode.data.label || 'Unnamed agent'}’s connection`,
+        }
+      : undefined;
+  /** What its composer's images are held to at a paste: where the text would go, if it answers a hold. */
+  const imageRules = holdRules ?? ownRules;
+  /** Whether text is a command its session runs (never a hold's answer), as `send` decides it. */
+  const runsAsCommand = (text: string) =>
+    routeText(text, connection, session.commands).kind === 'command' ||
+    (connection !== undefined &&
+      session.commands === undefined &&
+      isCommand(text.trimStart(), undefined));
+  /** Why this text can't go with its images, by whoever it goes to: none when it can. */
+  const refuses = (text: string, images: MessageImage[]) => {
+    const route = routeText(text, connection, session.commands);
+    if ((route.kind === 'continue' || route.kind === 'shell') && target)
+      return imageRefusal(images, target.images, target.label);
+    const rules = holdRules && !runsAsCommand(text) ? holdRules : ownRules;
+    return imageRefusal(images, rules.declared, rules.subject);
   };
   const send = (text: string, images?: MessageImage[]) => {
     const route = routeText(text, connection, session.commands);
@@ -538,11 +561,7 @@ export function AgentView({
       return;
     }
     // A command the session offers runs as a command; unknown commands: any /name does.
-    const command =
-      route.kind === 'command' ||
-      (connection !== undefined &&
-        session.commands === undefined &&
-        isCommand(text.trimStart(), undefined));
+    const command = runsAsCommand(text);
     if (ask?.reply && !command) {
       own.onDecide(ask.item.id, {
         reply: text,
