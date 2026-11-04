@@ -939,9 +939,10 @@ export class Engines {
   thaw(): void {
     if (!this.#frozen) return;
     this.#frozen = false;
+    // Delivery first (B19 C2): a gap the run opens as it goes on is offered to it, never passed.
     for (const running of this.#canvases.values()) {
-      running.engine.run.thaw();
       running.delivery.thaw();
+      running.engine.run.thaw();
     }
   }
 

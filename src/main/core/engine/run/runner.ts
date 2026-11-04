@@ -924,6 +924,14 @@ export class RunStore {
   }
 
   /**
+   * B19 C2: whether delivery holds agent `agent`'s slot under `token` still: the run yields to it,
+   * wherever its queue has moved since (its next task waits for the turn it was taken for).
+   */
+  holds(agent: string, token: object): boolean {
+    return this.#reserved.get(agent) === token;
+  }
+
+  /**
    * B19 C2: delivery is done with agent `agent`'s slot: the turn it took ended, or never went, and
    * the queue goes on from where it is, offering the gap it waits at again; or (`passed`) it had
    * nothing to deliver in the gap it took after all, and the queue goes on past it, never offering

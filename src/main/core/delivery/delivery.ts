@@ -800,6 +800,20 @@ export class Delivery {
     this.#deps.engine.run.release(agent, slot.token, slot.message === undefined);
   }
 
+  /**
+   * B19 C2: whether message `message` still holds its agent's slot, which the run yields to: once
+   * it took it, the queue moving on meanwhile never takes the turn it was journaled for.
+   */
+  #holdsSlot(message: Message): boolean {
+    const agent = agentOf(message.to);
+    const slot = agent === undefined ? undefined : this.#slots.get(agent);
+    return (
+      agent !== undefined &&
+      slot?.message === message.id &&
+      this.#deps.engine.run.holds(agent, slot.token)
+    );
+  }
+
   /** B19 C2: lets go the slot message `id` was delivered in, if it was. */
   #freeSlotOf(id: string): void {
     const agent = agentOf(this.#deps.store.get(id)?.to ?? 'you');
@@ -2049,10 +2063,11 @@ export class Delivery {
                     : isQueueHandoff(message)
                       ? (this.#holdOf(current, false, false) ??
                         this.#runWorkHold(message) ??
-                        this.#atPoint(current, message))
+                        (this.#holdsSlot(message) ? undefined : this.#atPoint(current, message)))
                       : (this.#holdOf(current) ??
-                        (this.#theirs(message) ? this.#atPoint(current, message) : undefined))) !==
-                  undefined)
+                        (this.#theirs(message) && !this.#holdsSlot(message)
+                          ? this.#atPoint(current, message)
+                          : undefined))) !== undefined)
             ) {
               this.#uncarry(message.id);
               this.#uncount(message.id);

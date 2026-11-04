@@ -829,6 +829,63 @@ describe('delivery points (B19 C2)', () => {
     ]);
   });
 
+  it('keeps a gap that opens under the shutdown barrier for what waited, once a quit is cancelled', async () => {
+    const { core, engine, sent, end } = await team([ONE, TWO]);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    await say(core, 'lead', 'Hello');
+    core.engines.freeze();
+    end('lead', 'One done.');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sent).toHaveLength(1);
+    // The quit is cancelled: the gap opens now, and what waited before it goes first.
+    core.engines.thaw();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    end('lead', 'Hi.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    expect(order(sent)).toEqual([
+      ['lead', 'One'],
+      ['lead', 'Hello'],
+      ['lead', 'Two'],
+    ]);
+  });
+
+  it('keeps the slot a party’s message took as the run starts: the queue’s first item waits for its turn', async () => {
+    const { core, engine, sent, end } = await team([ONE, TWO]);
+    const ready = engine.sessions.ready.bind(engine.sessions);
+    const held = Promise.withResolvers<undefined>();
+    const readying = vi
+      .spyOn(engine.sessions, 'ready')
+      .mockImplementation((agent) =>
+        agent === 'lead' ? held.promise.then(() => ready(agent)) : ready(agent),
+      );
+    await say(core, 'lead', 'Hello');
+    await vi.waitFor(() => {
+      expect(readying).toHaveBeenCalled();
+    });
+    // Its delivering record is on disk; its session isn't ready yet. Run starts meanwhile.
+    engine.run.start();
+    expect(engine.run.snapshot().agents.lead).toMatchObject({ current: 'one', status: 'waiting' });
+    held.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    end('lead', 'Hi.');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(order(sent)).toEqual([
+      ['lead', 'Hello'],
+      ['lead', 'One'],
+    ]);
+  });
+
   it('delivers a hand-off at its recipient’s authored wait, which its reply then satisfies', async () => {
     const { engine, sent, end } = await team(
       [{ id: 'hand', message: 'Review this', target: 'worker' }],
