@@ -523,7 +523,8 @@ export class RunStore {
             text: this.#heldText(
               'This task was in progress when the session ended.',
               task,
-              last?.resumes,
+              // Only the attempt that was going says what its session could do.
+              task === undefined ? undefined : last?.resumes,
             ),
             agent: item && isMessage(item) ? (item.target ?? id) : id,
             ...(condition ? { conditionKey: condition } : {}),

@@ -107,6 +107,21 @@ describe('an attempt’s resume fact (B16 C4)', () => {
     }
   });
 
+  it('takes the fact only from the attempt that was going, never one that had ended', () => {
+    const { store } = running(() => false);
+    store.start();
+    const saved = JSON.parse(store.checkpoint()) as {
+      run: { agents: { a: { attempts: { ask: Record<string, unknown>[] } } } };
+    };
+    const [attempt] = saved.run.agents.a.attempts.ask;
+    if (attempt === undefined) throw new Error('No attempt');
+    // Its last attempt had ended (as between a failure and its next try): no turn of it was going.
+    Object.assign(attempt, { status: 'failed', endedAt: 1300, reason: 'error' });
+    const after = restarted(JSON.stringify(saved), 'claude-code.sdk');
+    expect(after.store.snapshot().agents.a?.problem?.text).not.toContain(CANNOT);
+    expect(after.sent).toEqual([]);
+  });
+
   it('refuses a checkpoint whose fact isn’t a boolean', () => {
     const { store } = running(() => false);
     store.start();
