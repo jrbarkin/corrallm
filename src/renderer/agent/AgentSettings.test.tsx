@@ -4,7 +4,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AdapterId } from '../../shared/adapter';
+import type { AdapterDescriptor, AdapterId, Catalog } from '../../shared/adapter';
+import type { SessionFeatures } from '../../shared/features';
 import { MAX_LABEL } from '../../shared/api/limits';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
@@ -528,4 +529,232 @@ it('shows an unfamiliar agent’s catalog identity on its settings summary and s
   );
   const { panel } = open();
   expect(panel.getByRole('button', { name: 'Agent: Zed Agent · ACP' })).toBeTruthy();
+});
+
+/*
+ * What the sheet offers by what the connection can do (B16 C4): read from the catalog's maxima
+ * before a generation runs and from that generation's own features once it does, on unfamiliar
+ * adapters so no vendor branch can hide.
+ */
+describe('settings by what the connection can do', () => {
+  const [zed] = MADE_UP.adapters as [AdapterDescriptor];
+  /** An unfamiliar adapter declaring `role` and `resume`. */
+  const declaring = (role: AdapterDescriptor['role'], resume: boolean): Catalog => ({
+    ...MADE_UP,
+    adapters: [{ ...zed, role, resume, list: resume }],
+  });
+  const features = (role: SessionFeatures['role'], resume: boolean): SessionFeatures => ({
+    role,
+    resume,
+    list: resume,
+    live: { effort: false, stopTask: false },
+    panels: {},
+  });
+  const zedAgent = (data: Partial<AgentNode['data']> = {}) =>
+    agent({ adapter: 'zed', connection: 'zed.acp', ...data });
+  /** A session that runs, started with other settings than the agent has now. */
+  const running = (extra: Partial<Session> = {}): Session => ({
+    ...NEW_SESSION,
+    running: { model: 'old' },
+    ...extra,
+  });
+  const settled = async () => {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  };
+
+  describe('a connection that cannot resume', () => {
+    it('offers Start new conversation in place of Restart, as one fresh start', async () => {
+      await useCatalog(declaring('append', false));
+      const onRestart = vi.fn();
+      const onFresh = vi.fn();
+      render(
+        <Editor initial={zedAgent()} session={running()} onRestart={onRestart} onFresh={onFresh} />,
+      );
+      const { panel } = open();
+      await settled();
+      expect(panel.queryByRole('button', { name: /^Restart/ })).toBeNull();
+      expect(panel.queryByText(/keeping its conversation/)).toBeNull();
+      expect(panel.getByRole('status').textContent).toContain('new conversation');
+      fireEvent.click(panel.getByRole('button', { name: 'Start new conversation' }));
+      expect(onFresh).toHaveBeenCalledOnce();
+      expect(onRestart).not.toHaveBeenCalled();
+    });
+
+    it('waits for the turn to finish, saying so', async () => {
+      await useCatalog(declaring('append', false));
+      const onFresh = vi.fn();
+      render(
+        <Editor initial={zedAgent()} session={running({ status: 'working' })} onFresh={onFresh} />,
+      );
+      const { panel } = open();
+      await settled();
+      const fresh = panel.getByRole<HTMLButtonElement>('button', {
+        name: 'Start new conversation',
+      });
+      expect(fresh.disabled).toBe(true);
+      expect(panel.getByText('Available when the current turn finishes.')).toBeTruthy();
+      fireEvent.click(fresh);
+      expect(onFresh).not.toHaveBeenCalled();
+    });
+
+    it('is read from the generation that runs, which can do less than its adapter declares', async () => {
+      await useCatalog(declaring('append', true));
+      const onFresh = vi.fn();
+      render(
+        <Editor
+          initial={zedAgent()}
+          session={running({ features: features('append', false) })}
+          onFresh={onFresh}
+        />,
+      );
+      const { panel } = open();
+      await settled();
+      expect(panel.queryByRole('button', { name: /^Restart/ })).toBeNull();
+      fireEvent.click(panel.getByRole('button', { name: 'Start new conversation' }));
+      expect(onFresh).toHaveBeenCalledOnce();
+    });
+
+    it('keeps Restart, promising the conversation, for one that resumes (and before it reports)', async () => {
+      await useCatalog(declaring('append', true));
+      const onRestart = vi.fn();
+      render(
+        <Editor
+          initial={zedAgent()}
+          session={running({ features: features('append', true) })}
+          onRestart={onRestart}
+        />,
+      );
+      const { panel } = open();
+      await settled();
+      expect(panel.getByRole('status').textContent).toContain('keeping its conversation');
+      fireEvent.click(panel.getByRole('button', { name: 'Restart with these' }));
+      expect(onRestart).toHaveBeenCalledOnce();
+      expect(panel.queryByRole('button', { name: 'Start new conversation' })).toBeNull();
+    });
+
+    it('offers Restart when its generation is not ready, as the core allows it then', async () => {
+      await useCatalog(declaring('append', true));
+      render(<Editor initial={zedAgent()} session={running({ features: null })} />);
+      const { panel } = open();
+      await settled();
+      expect(panel.getByRole('button', { name: 'Restart with these' })).toBeTruthy();
+    });
+
+    it('words the settings menu’s own restart the same way', async () => {
+      await useCatalog(declaring('append', false));
+      const onRestart = vi.fn();
+      const onFresh = vi.fn();
+      render(
+        <SettingsMenu
+          inline
+          adapter="zed"
+          connection="zed.acp"
+          settings={{ model: 'new' }}
+          options={options}
+          running={{ model: 'old' }}
+          working={false}
+          resumes={false}
+          onRestart={onRestart}
+          onFresh={onFresh}
+        />,
+      );
+      await settled();
+      expect(screen.queryByRole('button', { name: 'Restart with these' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Start new conversation' }));
+      expect(onFresh).toHaveBeenCalledOnce();
+      expect(onRestart).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a connection that does nothing with a role', () => {
+    it('disables Role with an explanation, keeping the authored text and sending none', async () => {
+      await useCatalog(declaring('none', true));
+      const onRole = vi.fn();
+      render(<Editor initial={zedAgent({ role: 'Review carefully' })} onRole={onRole} />);
+      const { panel } = open();
+      await settled();
+      const role = panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' });
+      expect(role.disabled).toBe(true);
+      expect(role.value).toBe('Review carefully');
+      const words = panel.getByText(/doesn’t use a role/);
+      expect(role.getAttribute('aria-describedby')).toBe(words.id);
+      expect(words.textContent).toContain('kept in this canvas');
+      expect(panel.queryByText(/Applied when its session starts/)).toBeNull();
+      focus(role);
+      fireEvent.blur(role);
+      expect(onRole).not.toHaveBeenCalled();
+      expect(role.value).toBe('Review carefully');
+    });
+
+    it('never says an unapplied role is pending a restart', async () => {
+      await useCatalog(declaring('none', true));
+      render(
+        <Editor
+          initial={zedAgent({ role: 'Review carefully' })}
+          session={{ ...NEW_SESSION, running: {} }}
+        />,
+      );
+      const { panel } = open();
+      await settled();
+      expect(panel.queryByRole('status')).toBeNull();
+      expect(panel.queryByRole('button', { name: /Restart|Start new conversation/ })).toBeNull();
+    });
+
+    it('reads the running generation’s role when there is one, not the catalog’s maximum', async () => {
+      await useCatalog(declaring('append', true));
+      render(
+        <Editor
+          initial={zedAgent({ role: 'Review carefully' })}
+          session={running({ features: features('none', true) })}
+        />,
+      );
+      const { panel } = open();
+      await settled();
+      expect(panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' }).disabled).toBe(true);
+    });
+
+    it('leaves Role editable for append and append-new, each with its own pending-change action', async () => {
+      await useCatalog(declaring('append', true));
+      const first = render(
+        <Editor
+          initial={zedAgent({ role: 'Old' })}
+          session={{ ...NEW_SESSION, running: { role: 'New' } }}
+        />,
+      );
+      let { panel } = open();
+      await settled();
+      expect(panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' }).disabled).toBe(
+        false,
+      );
+      expect(panel.getByRole('button', { name: 'Restart with these' })).toBeTruthy();
+      fireEvent.click(panel.getByRole('button', { name: 'Close agent settings' }));
+      first.unmount();
+      await useCatalog(declaring('append-new', true));
+      render(
+        <Editor
+          initial={zedAgent({ role: 'Old' })}
+          session={{ ...NEW_SESSION, running: { role: 'New' } }}
+        />,
+      );
+      ({ panel } = open());
+      await settled();
+      expect(panel.getByRole<HTMLTextAreaElement>('textbox', { name: 'Role' }).disabled).toBe(
+        false,
+      );
+      expect(panel.queryByRole('button', { name: 'Restart with these' })).toBeNull();
+      expect(
+        panel.getByRole('button', { name: 'Start new conversation with this role' }),
+      ).toBeTruthy();
+    });
+
+    it('does not show the summary as applying a role the adapter does nothing with', async () => {
+      await useCatalog(declaring('none', true));
+      render(<Editor initial={zedAgent({ role: 'Review carefully' })} />);
+      const summary = screen.getByRole('button', { name: 'Agent settings: Reviewer' });
+      expect(summary.textContent).toContain('Role not used');
+      expect(summary.textContent).not.toContain('Review carefully');
+    });
+  });
 });

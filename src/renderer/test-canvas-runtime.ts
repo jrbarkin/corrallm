@@ -617,6 +617,28 @@ export function canvasRuntime(
     for (const op of ['session.restart', 'session.newConversation'] as const)
       core.reply(op, async (raw) => {
         const { agent } = OPS[op].input.parse(raw);
+        // As the core: a restart keeps the conversation, so a connection that can't continue it
+        // is refused (and pointed to a new one); either waits for an idle session with nothing queued.
+        const found = connectionIn(catalog(), connectionOf(agent));
+        const session = of(agent);
+        const label = nodes.find((n) => n.id === agent)?.data.label ?? '';
+        const name = label === '' ? agent : label;
+        const refuse = (sentence: string) => ({
+          ok: false as const,
+          error: { code: 'refused', sentence },
+        });
+        if (
+          op === 'session.restart' &&
+          !(found?.adapter.resume === true && session.features?.resume !== false)
+        )
+          return refuse(
+            `${name}’s connection can’t continue its conversation, so it can’t restart on it: start a new conversation instead.`,
+          );
+        const what = op === 'session.restart' ? 'restart it' : 'start a new conversation';
+        if (session.status !== 'idle')
+          return refuse(`${name} has a turn going on: ${what} once it is idle.`);
+        if (session.queued.length > 0)
+          return refuse(`${name} has messages waiting to go: ${what} once they have gone.`);
         if (op === 'session.newConversation') {
           await replies.fresh(agent, chosenAdapter(agent));
           setSession(agent, { ...NEW_SESSION, entries: [], queued: [] });
