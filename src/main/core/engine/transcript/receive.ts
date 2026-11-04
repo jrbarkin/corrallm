@@ -1,6 +1,7 @@
 import type { SessionAvailability } from '../../../../shared/session';
 import type { AdapterId, ConnectionId } from '../../../../shared/adapter';
 import { isSessionMode } from '../../../../shared/session';
+import { imageRefusal } from '../../../../shared/images';
 import type {
   AgentStartSettings,
   FilesRewind,
@@ -185,6 +186,19 @@ export class ConnectedDriver implements SessionDriver {
           this.#end([turn.id], {
             result: { status: 'failed', reason: 'declined', message: refusal },
           });
+          return null;
+        }
+        // B16 C3: only images this connection takes, checked as it goes (it may have been queued,
+        // or switched, since it was admitted): one it can't take stays whole and unsent, queued.
+        const pasted = imageRefusal(
+          turn.images ?? [],
+          this.#catalog.images(this.connection),
+          this.#catalog.connectionName(this.connection) ?? 'This connection',
+        );
+        if (pasted !== undefined) {
+          this.#turns.delete(turn.id);
+          this.#notice('warning', pasted);
+          this.#io.refused(turn.id, { text: pasted, images: true });
           return null;
         }
         sent.sent = true;

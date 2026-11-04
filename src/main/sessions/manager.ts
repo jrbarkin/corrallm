@@ -2,6 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { adapterIn, connectionIn } from '../../shared/adapter';
+import {
+  allowsMcpChange,
+  allowsRewind,
+  declaredFeatures,
+  effectiveFeatures,
+  narrowed,
+  NO_FEATURES,
+  usableFeatures,
+} from '../../shared/features';
+import type { EffectiveFeatures, SessionFeatures } from '../../shared/features';
+import { imageRefusal } from '../../shared/images';
 import { MAX_PAGE_BYTES } from '../../shared/api/limits';
 import { MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../shared/session';
 import type { AdapterId, Catalog, ConnectionId } from '../../shared/adapter';
@@ -69,6 +80,16 @@ const NO_REWIND =
 const NOTHING_TO_REWIND = 'This conversation has nothing to rewind yet.';
 const NO_EFFORT = 'This agent’s effort is set in its terminal.';
 const NO_TASKS = 'This agent’s background tasks are stopped in its terminal.';
+const NO_RESUME = 'This agent’s connection can’t continue a conversation it ran before.';
+/** What a session whose `started` couldn't be read says, once (B16 C1): never what it reported. */
+const MALFORMED = (connection: string) =>
+  `${connection} didn’t say what it supports, so corrallm offers none of its conversation features in this session.`;
+/** What a session given a conversation it can't continue says, once (B16 C4, R8's fixed notice). */
+const STARTED_NEW = (connection: string) =>
+  `${connection} cannot continue its earlier conversation, so it started a new one.`;
+/** What a session that can't apply its agent's role says, once (B16 C4): never the role's text. */
+const NO_ROLE = (connection: string) =>
+  `${connection} can’t apply this agent’s role, so it runs without it. The role stays saved with the agent.`;
 const NO_OPTIONS = 'corrallm can’t read that agent’s settings.';
 const STARTING = 'This agent’s session is still starting: answer once it runs.';
 const UNHEARD = 'corrallm declined this request: nothing in corrallm hears what this session asks.';
@@ -189,6 +210,11 @@ export interface SessionManagerDeps {
   >;
   /** Sends an event to the windows showing the canvas whose agent's session it is. */
   emit: (canvas: CanvasId, agentId: string, connection: ConnectionId, event: SessionEvent) => void;
+  /**
+   * What an agent's session can do changed (B16 C1: `features`): its generation became ready, a
+   * later report narrowed it, or it ended.
+   */
+  featuresChanged?: (canvas: CanvasId, agentId: string) => void;
   /** Raw CLI activity, even with no attached terminal view. */
   activity?: (canvas: CanvasId, agentId: string) => void;
   /** Intentional closes need not emit a session event, but end any turn's watchdog. */
@@ -275,6 +301,16 @@ interface Agent {
   live?: LiveSession<SessionMode>;
   /** The mode it reported in its first `started`, captured once (B13 C4's effective start mode). */
   started?: { mode: SessionMode | null };
+  /** What its `started` reports said it does (B16 C1), narrowed by each: none until one came. */
+  reported?: EffectiveFeatures;
+  /** Whether its session was installed: its start resolved, in the binding it launched in. */
+  installed?: boolean;
+  /** Its usable features, once both its report and its session are there (B16 C1). */
+  features?: SessionFeatures;
+  /** The conversation it last remembered, once it did. */
+  conversation?: string;
+  /** What it said once: a report it couldn't read, a conversation or a role it couldn't take. */
+  told?: Set<'malformed' | 'resume' | 'role'>;
 }
 
 /**
@@ -414,6 +450,13 @@ export class SessionManager {
     if (!agent) throw new Error(NOT_RUNNING);
     const began = this.#now();
     const interrupts = agent.interrupts;
+    // B16 C3: only images the connection it runs takes, whatever sent it (nothing goes otherwise).
+    const refusal = imageRefusal(
+      message.images ?? [],
+      connectionIn(this.#deps.catalog, agent.connection)?.connection.images ?? null,
+      this.#named(agent.connection),
+    );
+    if (refusal !== undefined) throw new Error(refusal);
     const session = await agent.session;
     // A restore of the tree it works in (its own code rewind too) finishes first.
     await this.#deps.gate?.pass(canvas, agentId, true);
@@ -528,6 +571,16 @@ export class SessionManager {
   }
 
   /**
+   * What the agent's session can do (B16 C1): its generation's effective role, resume and list, and
+   * the usable part of its connection's panels and live controls, once its report and its installed
+   * session are both there; null while none is ready (none runs, it starts, or it isn't heard).
+   */
+  features(canvas: CanvasId, agentId: string): SessionFeatures | null {
+    const agent = this.#agents.get(canvas)?.get(agentId);
+    return agent?.unheard === true ? null : (agent?.features ?? null);
+  }
+
+  /**
    * Whether a session of the agent's that was closed hasn't finished closing: its bounded close
    * stopped waiting, so its CLI may still be running, and writing (B11 Design §7: an uncertain
    * writer, which a code mutation of its tree refuses).
@@ -629,8 +682,8 @@ export class SessionManager {
    * connection takes it from corrallm.
    */
   async setEffort(canvas: CanvasId, agentId: string, effort: string | null): Promise<void> {
-    const session = await this.#session(canvas, agentId);
-    if (!session.setEffort) throw new Error(NO_EFFORT);
+    const { agent, session } = await this.#live(canvas, agentId);
+    if (agent.features?.live.effort !== true || !session.setEffort) throw new Error(NO_EFFORT);
     await session.setEffort(effort);
   }
 
@@ -658,8 +711,10 @@ export class SessionManager {
 
   /** What restoring the agent's files to how they were before a message would change. */
   async previewRewind(canvas: CanvasId, agentId: string, messageId: string): Promise<FilesRewind> {
-    const session = await this.#session(canvas, agentId);
-    if (!session.rewindFiles) throw new Error(NO_REWIND);
+    const { agent, session } = await this.#live(canvas, agentId);
+    const features = agent.features ?? null;
+    const files = allowsRewind(features, 'code') || allowsRewind(features, 'both');
+    if (!files || !session.rewindFiles) throw new Error(NO_REWIND);
     return session.rewindFiles(messageId, true);
   }
 
@@ -677,15 +732,12 @@ export class SessionManager {
     messageId: string,
     restore: RewindRestore,
   ): Promise<RewindResult> {
-    const agent = this.#agents.get(canvas)?.get(agentId);
-    const session = await this.#session(canvas, agentId);
-    if (!session.rewindFiles) throw new Error(NO_REWIND);
+    const { agent, session } = await this.#live(canvas, agentId);
+    // Only what this generation can restore (B16 C4): a forged kind is refused before anything.
+    if (!allowsRewind(agent.features ?? null, restore)) throw new Error(NO_REWIND);
     const conversation = restore !== 'code';
     // Its conversation is the one its CLI ran in the binding it runs in: only while that is active.
-    const folder =
-      conversation && agent !== undefined
-        ? (await this.#directoryOf(canvas, agentId, agent)).cwd
-        : undefined;
+    const folder = conversation ? (await this.#directoryOf(canvas, agentId, agent)).cwd : undefined;
     const adapter = await this.#deps.adapterOf(canvas, agentId);
     const id = (await this.#conversation(canvas, adapter, agentId))?.id;
     const kept = this.#deps.conversations?.[adapter];
@@ -697,6 +749,7 @@ export class SessionManager {
     }
     let files: FilesRewind | undefined;
     if (restore !== 'conversation') {
+      if (!session.rewindFiles) throw new Error(NO_REWIND);
       files = await session.rewindFiles(messageId, false);
       if (!files.possible) throw new Error(files.error ?? 'Its files can’t be restored to then.');
     }
@@ -718,8 +771,8 @@ export class SessionManager {
 
   /** The MCP servers of the agent's session, and how each is (/mcp). */
   async mcpServers(canvas: CanvasId, agentId: string): Promise<McpServer[]> {
-    const session = await this.#session(canvas, agentId);
-    if (!session.mcpServers) throw new Error(NO_MCP);
+    const { agent, session } = await this.#live(canvas, agentId);
+    if (agent.features?.panels.mcp === undefined || !session.mcpServers) throw new Error(NO_MCP);
     return session.mcpServers();
   }
 
@@ -730,8 +783,14 @@ export class SessionManager {
     name: string,
     change: McpChange,
   ): Promise<McpServer[]> {
-    const session = await this.#session(canvas, agentId);
-    if (!session.changeMcpServer || !session.mcpServers) throw new Error(NO_MCP);
+    const { agent, session } = await this.#live(canvas, agentId);
+    if (
+      !allowsMcpChange(agent.features ?? null, change) ||
+      !session.changeMcpServer ||
+      !session.mcpServers
+    ) {
+      throw new Error(NO_MCP);
+    }
     await session.changeMcpServer(name, change);
     return session.mcpServers();
   }
@@ -826,6 +885,13 @@ export class SessionManager {
   ): Promise<void> {
     const adapter = await this.#deps.adapterOf(canvas, agentId);
     requireConversationId(adapter, sessionId);
+    // Only where it can continue one (B16 C4): its adapter, and its running generation, if any.
+    if (
+      !this.#declared(adapter).resume ||
+      this.#agents.get(canvas)?.get(agentId)?.features?.resume === false
+    ) {
+      throw new Error(NO_RESUME);
+    }
     const listed = this.#listed.get(canvas)?.get(agentId)?.get(caller);
     const directory = await this.#deps.directories.workingDirectory(canvas, agentId as AgentId);
     if (
@@ -855,8 +921,8 @@ export class SessionManager {
 
   /** Stops a task the agent's session runs in the background (the session checks it does). */
   async stopTask(canvas: CanvasId, agentId: string, taskId: string): Promise<void> {
-    const session = await this.#session(canvas, agentId);
-    if (!session.stopTask) throw new Error(NO_TASKS);
+    const { agent, session } = await this.#live(canvas, agentId);
+    if (agent.features?.live.stopTask !== true || !session.stopTask) throw new Error(NO_TASKS);
     await session.stopTask(taskId);
   }
 
@@ -1048,7 +1114,13 @@ export class SessionManager {
     const connector = this.#deps.connectors[connection];
     if (connector === undefined) throw new Error(`corrallm can't run ${connection} sessions.`);
     const adapter = this.#adapterOf(connection);
-    const remembered = await this.#conversation(canvas, adapter, agentId);
+    // What its adapter declares it can do (B16 C1): a connection that can't continue a conversation
+    // is never handed (or claims) its remembered one, and one that applies no role never gets it.
+    const declared = this.#declared(adapter);
+    const remembered = declared.resume
+      ? await this.#conversation(canvas, adapter, agentId)
+      : undefined;
+    const given = declared.role === 'none' ? undefined : role;
     const owner: ClaimOwner = { canvas, agent: agentId, generation: agent.generation };
     let resume = remembered?.id ?? null;
     let holder: ClaimOwner | undefined;
@@ -1104,8 +1176,22 @@ export class SessionManager {
       startMode: agent.started?.mode,
       answers,
     });
+    const named = this.#named(connection);
+    /** Says `what` once for this generation, while it is heard. */
+    const tell = (what: 'malformed' | 'resume' | 'role', text: string) => {
+      agent.told ??= new Set();
+      if (agent.told.has(what) || !live()) return;
+      agent.told.add(what);
+      this.#deps.emit(canvas, agentId, connection, {
+        type: 'notice',
+        id: randomUUID(),
+        level: 'warning',
+        text,
+      });
+    };
     try {
-      const fingerprint = roleFingerprint(role);
+      // The role it launches with, as its conversation remembers it: none it can't apply.
+      const fingerprint = roleFingerprint(given);
       const roleChanged = remembered?.role !== fingerprint;
       const env = await this.#deps.environment();
       // Terminals need a pre-launch baseline: their first hook may arrive only with a prompt,
@@ -1140,14 +1226,25 @@ export class SessionManager {
             return;
           }
           if (!live()) return;
-          if (event.type === 'started') agent.started ??= { mode: event.mode };
+          if (event.type === 'started') {
+            const { role: reportedRole, resume: resumes, list, ...started } = event;
+            this.#reported(canvas, agentId, agent, connection, started, {
+              report: { role: reportedRole, resume: resumes, list },
+              declared,
+              resumed: resume === null ? undefined : { adapter, id: resume, owner },
+              role: given !== undefined,
+              tell,
+              named,
+            });
+            return;
+          }
           if (event.type === 'user' || event.type === 'status') agent.working = true;
-          if (event.type === 'started' || event.type === 'end' || event.type === 'cleared')
-            agent.working = false;
+          if (event.type === 'end' || event.type === 'cleared') agent.working = false;
           if (event.type === 'tasks') agent.tasks = event.tasks.length;
           if (event.type === 'cleared') agent.tasks = 0;
           if (event.type === 'closed') {
             this.#agents.get(canvas)?.delete(agentId);
+            this.#dropped(canvas, agentId, agent);
             // It stopped by itself: what it ran is no longer its, nor what it asked, nor its
             // credential.
             this.#claims.release(owner);
@@ -1163,6 +1260,7 @@ export class SessionManager {
             this.#conflict(canvas, agentId, agent, claimed.holder);
             return;
           }
+          agent.conversation = sessionId;
           const starts = this.#started.get(canvas) ?? new Map<string, Set<string>>();
           this.#started.set(canvas, starts);
           const key = startedKey(adapter, agentId, directory);
@@ -1189,6 +1287,8 @@ export class SessionManager {
           text: `This agent’s conversation is open in ${this.#holderIn(canvas, holder)}, so it started a new one: two agents never share one conversation.`,
         });
       }
+      // A role its adapter applies none of stays the agent's, unapplied, and is never sent.
+      if (role !== undefined && given === undefined) tell('role', NO_ROLE(named));
       // This generation's route to corrallm's server, from the core's one issuer: only while it
       // is still the agent's session (one whose close began meanwhile was revoked already).
       const api = live()
@@ -1237,7 +1337,7 @@ export class SessionManager {
           mode,
           ...(startupAsks === undefined ? {} : { startupAsks }),
           ...(effort === undefined ? {} : { effort }),
-          ...(role === undefined ? {} : { role }),
+          ...(given === undefined ? {} : { role: given }),
           resume,
           ...(resume === null ? {} : { roleChanged }),
         },
@@ -1259,6 +1359,8 @@ export class SessionManager {
         });
         throw new Error(now.state === 'held' ? now.sentence : STALE);
       }
+      agent.installed = true;
+      this.#ready(canvas, agentId, agent);
       return session;
     } catch (error) {
       this.#claims.release(owner);
@@ -1369,6 +1471,100 @@ export class SessionManager {
   #generation(): number {
     this.#generations += 1;
     return this.#generations;
+  }
+
+  /** What `adapter` declares it can do (B16 C1): its maxima, none for one the catalog lacks. */
+  #declared(adapter: AdapterId): EffectiveFeatures {
+    const found = adapterIn(this.#deps.catalog, adapter);
+    return found === undefined ? NO_FEATURES : declaredFeatures(found);
+  }
+
+  /** How a notice names a connection: its adapter's name and its label, else its id. */
+  #named(connection: ConnectionId): string {
+    const found = connectionIn(this.#deps.catalog, connection);
+    return found === undefined ? connection : `${found.adapter.name} · ${found.connection.label}`;
+  }
+
+  /**
+   * A heard generation's `started` (B16 C1): its features read against its adapter's maxima (a
+   * report that can't be read is refused, giving none, said once in fixed words), each later report
+   * only narrowing what it said before, and passed on as they come to. A conversation it was given
+   * and can't continue is let go, said once (C4), unless its session remembered it (it runs in it);
+   * a role it was given and can't apply is said once too. One that can't be read claims neither.
+   */
+  #reported(
+    canvas: CanvasId,
+    agentId: string,
+    agent: Agent,
+    connection: ConnectionId,
+    started: Omit<Extract<SessionEvent, { type: 'started' }>, keyof EffectiveFeatures>,
+    {
+      report,
+      declared,
+      resumed,
+      role,
+      tell,
+      named,
+    }: {
+      report: unknown;
+      declared: EffectiveFeatures;
+      resumed: { adapter: AdapterId; id: string; owner: ClaimOwner } | undefined;
+      role: boolean;
+      tell: (what: 'malformed' | 'resume' | 'role', text: string) => void;
+      named: string;
+    },
+  ): void {
+    agent.started ??= { mode: started.mode };
+    agent.working = false;
+    const effective = effectiveFeatures(report, declared);
+    const now = effective ?? NO_FEATURES;
+    agent.reported = agent.reported === undefined ? now : narrowed(agent.reported, now);
+    this.#deps.emit(canvas, agentId, connection, { ...started, ...agent.reported });
+    if (effective === undefined) tell('malformed', MALFORMED(named));
+    const { conversation: since } = agent;
+    // Remembering the conversation it was given, it runs in it, whatever it reports: that stays
+    // claimed, so no other agent is given it, and nothing says it started a new one.
+    if (resumed !== undefined && !agent.reported.resume && since !== resumed.id) {
+      // What it was given and didn't load is no longer claimed for it; what it remembered since is.
+      const { adapter, owner } = resumed;
+      this.#claims.release(owner, since === undefined ? undefined : { adapter, id: since });
+      // A report that can't be read says nothing of what the session did: its notice is all.
+      if (effective !== undefined) tell('resume', STARTED_NEW(named));
+    }
+    if (role && effective !== undefined && agent.reported.role === 'none')
+      tell('role', NO_ROLE(named));
+    this.#ready(canvas, agentId, agent);
+  }
+
+  /**
+   * The generation's usable features, once its report and its installed session are both there
+   * (B16 C1): what its connection declares, as far as its session's methods and its adapter's
+   * conversations go; told each time they change.
+   */
+  #ready(canvas: CanvasId, agentId: string, agent: Agent): void {
+    const { reported, live } = agent;
+    if (agent.installed !== true || reported === undefined || live === undefined) return;
+    if (this.#agents.get(canvas)?.get(agentId) !== agent || agent.unheard === true) return;
+    const found = connectionIn(this.#deps.catalog, agent.connection);
+    if (found === undefined) return;
+    const kept = this.#deps.conversations?.[found.adapter.id];
+    agent.features = usableFeatures(reported, found.connection, {
+      setEffort: live.setEffort !== undefined,
+      stopTask: live.stopTask !== undefined,
+      mcpServers: live.mcpServers !== undefined,
+      changeMcpServer: live.changeMcpServer !== undefined,
+      rewindFiles: live.rewindFiles !== undefined,
+      listConversations: kept !== undefined,
+      forkConversation: kept?.before !== undefined && kept.fork !== undefined,
+    });
+    this.#deps.featuresChanged?.(canvas, agentId);
+  }
+
+  /** The generation is gone: its features go with it, and that is told. */
+  #dropped(canvas: CanvasId, agentId: string, agent: Agent): void {
+    if (agent.features === undefined) return;
+    delete agent.features;
+    this.#deps.featuresChanged?.(canvas, agentId);
   }
 
   #now(): number {
@@ -1523,9 +1719,17 @@ export class SessionManager {
   }
 
   async #session(canvas: CanvasId, agentId: string): Promise<LiveSession<SessionMode>> {
+    return (await this.#live(canvas, agentId)).session;
+  }
+
+  /** The agent's session once it runs, with the generation it is (whose features it has). */
+  async #live(
+    canvas: CanvasId,
+    agentId: string,
+  ): Promise<{ agent: Agent; session: LiveSession<SessionMode> }> {
     const agent = this.#agents.get(canvas)?.get(agentId);
     if (!agent) throw new Error(NOT_RUNNING);
-    return agent.session;
+    return { agent, session: await agent.session };
   }
 
   /** Ends a session, telling the canvas's windows (`tell`) when they did not ask for it. */
@@ -1549,6 +1753,7 @@ export class SessionManager {
       agents.delete(agentId);
       this.#deps.ended?.(canvas, agentId);
     }
+    this.#dropped(canvas, agentId, agent);
     // Its prompts end as its close begins: the session answers each still pending with its
     // nonapproval as it closes, and none is answered meanwhile. Its credential ends with them.
     this.#gone(canvas, agentId, agent.generation);

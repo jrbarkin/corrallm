@@ -50,6 +50,8 @@ export interface EngineIO {
   tasks?: RunIO['tasks'];
   /** B21 C8: whether an agent's session listed corrallm's complete (RunIO.completes). */
   completes?: RunIO['completes'];
+  /** B16 C4: whether an agent's session can continue its conversation (RunIO.resumes). */
+  resumes?: RunIO['resumes'];
 }
 
 /** How often a held retry (Interrupt and resend) is checked again while something holds it. */
@@ -144,6 +146,7 @@ export class Engine {
       ...(io.handoff === undefined ? {} : { handoff: io.handoff }),
       ...(io.tasks === undefined ? {} : { tasks: io.tasks }),
       ...(io.completes === undefined ? {} : { completes: io.completes }),
+      ...(io.resumes === undefined ? {} : { resumes: io.resumes }),
     });
     this.run.subscribe(() => {
       this.#checkRetries();

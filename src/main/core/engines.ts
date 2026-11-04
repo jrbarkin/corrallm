@@ -17,6 +17,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import type { HandoffView } from '../../shared/model/handoff';
 import type { RunCheckpoint } from '../../shared/run';
 import { MAX_FILE_MATCHES } from '../../shared/session';
+import type { SessionFeatures } from '../../shared/features';
 import type { SessionEvent, TaskMessage, TurnResult, UserMessage } from '../../shared/session';
 import { usedUpUntil } from '../../shared/usage';
 import type { ProjectFiles } from '../files';
@@ -154,6 +155,10 @@ export interface EnginesDeps {
   completes?: (canvas: CanvasId, agent: string) => boolean;
   /** Whether the agent's current session generation has listed corrallm's tools. */
   listed?: (canvas: CanvasId, agent: string) => boolean;
+  /** What the agent's ready session generation can do (B16 C1: the manager's), else null. */
+  features?: (canvas: CanvasId, agent: string) => SessionFeatures | null;
+  /** B16 C4: whether the agent's session can continue its conversation, as known (RunIO.resumes). */
+  resumes?: (canvas: CanvasId, agent: string) => boolean | undefined;
 }
 
 /**
@@ -213,6 +218,8 @@ export interface OpenCanvas {
   handoff?: (agent: string) => HandoffView | null;
   /** The session authority's observed tool listing, never the adapter's declaration. */
   api?: (agent: string) => boolean;
+  /** What its ready session generation can do (B16 C1), none while none is ready. */
+  features?: (agent: string) => SessionFeatures | null;
 }
 
 /** How a canvas opens. */
@@ -1067,6 +1074,7 @@ export class Engines {
     running.sessionGeneration = (agent) => this.#deps.sessions.generationOf(canvas, agent);
     running.ownedPrompts = (agent) => this.#deps.prompts?.count(canvas, agent) ?? 0;
     running.api = (agent) => this.#deps.listed?.(canvas, agent) === true;
+    running.features = (agent) => this.#deps.features?.(canvas, agent) ?? null;
     running.waitingOn = (agent) => this.#deps.prompts?.waiting(canvas, agent);
     const { fallback, handoff } = this.#deps;
     if (fallback !== undefined) running.switching = (agent) => fallback.switching(canvas, agent);
@@ -1125,6 +1133,7 @@ export class Engines {
         (running.delivery as Delivery | undefined)?.interruptTask(task);
       }),
       completes: (agent) => this.#deps.completes?.(canvas, agent) === true,
+      resumes: (agent) => this.#deps.resumes?.(canvas, agent),
     });
     running.engine = engine;
     engine.update(document.nodes);

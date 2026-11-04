@@ -86,7 +86,15 @@ beforeEach(async () => {
     start: (spec, given) => {
       hosts.set(spec.agentId, given);
       if (spec.agentId === 'a') host = given;
-      given.emit({ type: 'started', model: null, mode: 'auto', models: [] });
+      given.emit({
+        type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
+        model: null,
+        mode: 'auto',
+        models: [],
+      });
       return Promise.resolve({
         send: (message) => {
           if (spec.agentId === 'a') {

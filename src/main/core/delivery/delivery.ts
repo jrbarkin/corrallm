@@ -162,10 +162,14 @@ interface Default {
   ran: boolean;
 }
 
-/** Why an agent's session won't start, and what would let it. */
+/**
+ * Why an agent's session won't start, and what would let it; or (`images`, B16 C3) why the message
+ * first in line can't go to the connection its session runs.
+ */
 interface Unstartable {
   text: string;
   clears: string;
+  images?: true;
 }
 
 /** What holds a message to an agent, if anything does. */
@@ -182,13 +186,16 @@ type Hold =
 
 /**
  * Why a session would not start, the connection it would not start on, when it refused, and
- * whether a message sent since is trying it again.
+ * whether a message sent since is trying it again. Or (`images`, B16 C3) the message whose images
+ * that connection refused at the send: no retry sends it there again, so it holds its agent's
+ * messages, in order, until the agent runs another way or that message is taken back.
  */
 interface Stuck {
   connection: string | undefined;
   text: string;
   at: number;
   retrying: boolean;
+  images?: string;
 }
 
 /**
@@ -223,6 +230,9 @@ interface TakingBack {
 const NO_CONNECTION = 'it has no connection corrallm can run.';
 /** What lets such an agent start. */
 const SWITCH = 'It starts once it is switched to another connection in the corrallm app.';
+/** What lets a message go whose images its agent's connection can't take (B16 C3). */
+const IMAGES_SWITCH =
+  'It goes once its agent is switched in the corrallm app to a connection that takes its images, or once it is taken back.';
 /** How long after its session refused to start the next message sent an agent tries it again. */
 const RETRY_AFTER = 60 * 1000;
 /** What lets a session that refused to start go (RETRY_AFTER, in words). */
@@ -1490,7 +1500,18 @@ export class Delivery {
       };
     const stuck = this.#stuck.get(node.id);
     if (!stuck) return undefined;
-    if (stuck.connection === connection && engine.sessions.of(node.id).running === undefined) {
+    if (stuck.images !== undefined) {
+      // Its session runs: the message whose images can't go there waits while it is still yours.
+      if (
+        stuck.connection === connection &&
+        this.#deps.store.get(stuck.images)?.state === 'pending'
+      ) {
+        return { text: stuck.text, clears: IMAGES_SWITCH, images: true };
+      }
+    } else if (
+      stuck.connection === connection &&
+      engine.sessions.of(node.id).running === undefined
+    ) {
       // Tried again, the first in line goes, and starts it.
       return stuck.retrying ? undefined : { text: stuck.text, clears: RETRIES };
     }
@@ -1648,6 +1669,8 @@ export class Delivery {
     const yours = message.from === 'you' && message.ask === undefined;
     // Kept until its turn ends: a session that won't start sends it back, still to be carried.
     const carried = this.#carried.get(message.id);
+    // Its images too (B16 C3): sent back unsent, it waits again with them, never without.
+    const images = this.#images.get(message.id);
     const takeBack = engine.sessions.send(
       node.id,
       engine.catalog.adapterOf(engine.catalog.connectionOf(node.data)),
@@ -1655,9 +1678,13 @@ export class Delivery {
       (interrupted, reply, result) => {
         this.#ended(message.id, interrupted, reply, result);
       },
-      this.#images.get(message.id),
+      images,
       (refusal) => {
-        this.#refused(node, message.id, refusal.text);
+        if (images !== undefined) this.#images.set(message.id, images);
+        // Refused for a turn's images, only the message carrying them holds its agent; the rest
+        // sent back with it wait behind it.
+        const held = refusal.images !== true ? 'start' : images !== undefined ? 'images' : 'none';
+        this.#refused(node, message.id, refusal.text, held);
       },
       yours ? 'user' : 'queue',
       undefined,
@@ -1730,17 +1757,25 @@ export class Delivery {
    * line, until the agent runs another way, or a message sent RETRY_AFTER or more from now tries the
    * session again and it starts.
    */
-  #refused(node: AgentNode, id: string, text: string): void {
+  #refused(
+    node: AgentNode,
+    id: string,
+    text: string,
+    held: 'start' | 'images' | 'none' = 'start',
+  ): void {
     if (this.#closed || this.#deps.store.get(id)?.state !== 'delivering') return;
     this.#uncarry(id);
     this.#uncount(id);
     this.#deps.store.update(id, { state: 'pending' });
-    this.#stuck.set(node.id, {
-      connection: this.#deps.engine.catalog.connectionOf(node.data),
-      text,
-      at: this.#deps.now(),
-      retrying: false,
-    });
+    if (held !== 'none') {
+      this.#stuck.set(node.id, {
+        connection: this.#deps.engine.catalog.connectionOf(node.data),
+        text,
+        at: this.#deps.now(),
+        retrying: false,
+        ...(held === 'images' ? { images: id } : {}),
+      });
+    }
     // It waits here, not in its session's queue.
     const takeBack = this.#sent.get(id);
     this.#sent.delete(id);

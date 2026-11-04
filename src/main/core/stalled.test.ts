@@ -203,6 +203,7 @@ describe('silent turns', () => {
         tmp: dir,
         env: () => ({}),
         timing: { ...TIMING, kill: 1 },
+        features: { role: 'none', resume: false, list: false },
       },
     );
     try {
@@ -298,6 +299,7 @@ describe('silent turns', () => {
         tmp: dir,
         env: () => ({}),
         timing: { ...TIMING, kill: 1 },
+        features: { role: 'none', resume: false, list: false },
       },
     );
     // What Claude Code 2.1.310 gives its status line, as its refreshInterval re-runs it: only its
@@ -683,6 +685,9 @@ describe('silent turns', () => {
     });
     watchdog.event(CANVAS, AGENT, 'codex.app-server', {
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       mode: null,
       model: null,
       models: [],

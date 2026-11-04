@@ -3,6 +3,7 @@ import type {
   AdapterId,
   AgentAction,
   Catalog,
+  ConnectionDescriptor,
   ConnectionId,
   ModeId,
   UsageBackendId,
@@ -117,6 +118,12 @@ export interface EngineCatalog {
   shellPrefix(connection: ConnectionId | undefined): string | undefined;
   /** Whether this connection expands @ file mentions in input without asking. */
   fileMentions(connection: ConnectionId | undefined): boolean;
+  /**
+   * The images a message to this connection may carry, as it declares them (B16 C3: read through
+   * `imageRefusal`, within the platform's ceilings): null for none, or a connection the catalog
+   * lacks.
+   */
+  images(connection: ConnectionId | undefined): ConnectionDescriptor['images'];
   /** Every text any connection runs as a shell command, without asking, when a message starts with it. */
   readonly shellPrefixes: readonly string[];
   /**
@@ -165,6 +172,7 @@ export function engineCatalog(catalog: Catalog): EngineCatalog {
     },
     shellPrefix: (id) => connection(id)?.connection.shellPrefix,
     fileMentions: (id) => connection(id)?.connection.fileMentions === true,
+    images: (id) => connection(id)?.connection.images ?? null,
     shellPrefixes: shellPrefixesIn(catalog),
     isStartMode: (id, mode) => {
       const found = connection(id);

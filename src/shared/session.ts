@@ -1,4 +1,5 @@
 import type { AdapterId, ConnectionId, ModeId } from './adapter';
+import type { RoleSupport } from './features';
 import type { SessionContext } from './model/fallback';
 
 /*
@@ -428,6 +429,15 @@ export type SessionEvent =
        * here until a native hook reports a mode.
        */
       asks?: boolean;
+      /**
+       * What this session does (B16 C1), never more than its adapter declares: what it does with
+       * an agent's role, whether it can continue a remembered conversation, and whether it can list
+       * its folder's conversations. Capabilities, not whether this launch had a role, resumed or
+       * listed anything. Its connector reports them; the manager passes on what they come to.
+       */
+      role: RoleSupport;
+      resume: boolean;
+      list: boolean;
     }
   /** The slash commands it offers now (sent once it runs, and again whenever they change). */
   | { type: 'commands'; commands: SlashCommand[] }

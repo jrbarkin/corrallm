@@ -135,7 +135,15 @@ beforeEach(async () => {
   const connector: Connector<SessionMode> = {
     start: (_spec, given) => {
       hosts.push(given);
-      given.emit({ type: 'started', model: null, mode: 'acceptEdits', models: [] });
+      given.emit({
+        type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
+        model: null,
+        mode: 'acceptEdits',
+        models: [],
+      });
       onStart(given);
       return Promise.resolve({
         send: (message) => {

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 import { z } from 'zod';
 
-import type { AdapterDescriptor } from '../../shared/adapter';
+import type { EffectiveFeatures } from '../../shared/features';
 import type { ModelChoice, SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, LiveSession, PromptAnswers, SessionHost, SessionSpec } from './connector';
 import { checkPromptAnswer } from '../../shared/model/prompts';
@@ -17,8 +17,11 @@ export interface FakeProfile {
   models: readonly ModelChoice[];
   effort: boolean;
   askingModes: readonly SessionMode[];
-  /** Prepared started metadata for C1; this fake does not enforce production capabilities. */
-  features?: Pick<AdapterDescriptor, 'role' | 'resume' | 'list'>;
+  /**
+   * What its `started` reports it does (B16 C1), as its adapter declares it: the manager reads it
+   * against that adapter's maxima, as it reads any connection's report.
+   */
+  features: EffectiveFeatures;
   tool?: { tool: string; summary: string };
   plan: () => AdapterPrompt;
 }
@@ -32,6 +35,8 @@ export interface FakeOptions {
   asks?: boolean;
   step?: () => Promise<void>;
   script?: FakeScript | undefined;
+  /** What its `started` reports instead of its profile's: a narrower session, for tests (B16 C1). */
+  features?: EffectiveFeatures;
 }
 
 const SCRIPT = z.strictObject({
@@ -122,13 +127,18 @@ export class FakeConnector implements Connector<SessionMode> {
     asks,
     step = () => new Promise<void>((resolve) => setTimeout(resolve, pause)),
     script = fakeScript(),
+    features,
     consent,
   }: FakeOptions & { profile: FakeProfile }) {
     this.#step = step;
     this.#script = script;
     this.#consent = consent;
     const { plan, ...data } = profile;
-    this.#profile = { ...structuredClone(data), plan };
+    this.#profile = {
+      ...structuredClone(data),
+      plan,
+      ...(features === undefined ? {} : { features }),
+    };
     this.#mode = mode === undefined ? profile.mode : mode;
     this.#asks = asks;
   }

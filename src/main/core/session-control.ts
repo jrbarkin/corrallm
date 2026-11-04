@@ -11,7 +11,8 @@ import type { NeedId } from '../../shared/api/ids';
 import type { CanvasId } from '../../shared/canvas';
 import * as agentEdits from '../../shared/model/agent-ops';
 import type { AgentNode } from '../../shared/model/canvas';
-import { threadTitle } from '../../shared/model/session';
+import { imageRefusal } from '../../shared/images';
+import { rewindPointsOf, threadTitle } from '../../shared/model/session';
 import { andList } from '../../shared/model/words';
 import { MAX_MCP_ERROR_LENGTH, MAX_MCP_NAME_LENGTH, MAX_MCP_SERVERS } from '../../shared/session';
 import type {
@@ -93,6 +94,7 @@ export interface SessionControlDeps {
     | 'settingsOptions'
     | 'mcpServers'
     | 'changeMcpServer'
+    | 'features'
   >;
   gate: Pick<WorkspaceGate, 'mutate'>;
   proposals: Pick<Proposals, 'raise'>;
@@ -151,6 +153,18 @@ export class SessionControl {
   ): Promise<{ id?: string }> {
     const open = this.#openCanvas(canvas);
     this.#agentOf(open, agent);
+    // B16 C3: images its destination can't take are refused before anything switches or closes,
+    // the input kept, whole, for you to correct.
+    const images = then?.images ?? [];
+    if (images.length > 0) {
+      const found = connectionIn(this.#deps.catalog, connection);
+      const refusal = imageRefusal(
+        images,
+        found?.connection.images ?? null,
+        found === undefined ? connection : `${found.adapter.name} · ${found.connection.label}`,
+      );
+      if (refusal !== undefined) throw new OpFailure('refused', refusal);
+    }
     // The switch lands first: what follows goes to the session it opens.
     await ctx.call('agent.setConnection', { canvas: open.document.id, agent, connection });
     let refusal: string | undefined;
@@ -316,6 +330,13 @@ export class SessionControl {
   ): Promise<object> {
     const target = this.#target(canvas, agent);
     const { open, adapter } = target;
+    // B16 C4: a restart keeps the conversation; where it can't, Start new conversation is the way.
+    if (!this.#resumes(target)) {
+      throw new OpFailure(
+        'refused',
+        `${target.name}’s connection can’t continue its conversation, so it can’t restart on it: start a new conversation instead.`,
+      );
+    }
     await this.#launchable(target, 'restart');
     // Idle as it closes: nothing awaited between this check and its effect.
     this.#idle(target, 'restart it');
@@ -355,10 +376,14 @@ export class SessionControl {
   ): Promise<{ items: (PastSession & { id: z.infer<typeof ConversationId> })[] }> {
     const { open, adapter } = this.#target(canvas, agent);
     const descriptor = adapterIn(this.#deps.catalog, adapter);
-    if (descriptor?.list !== true) {
+    // Its adapter's maximum, and its running generation's (B16 C1), if one is ready.
+    const features = this.#deps.sessions.features(open.document.id, agent);
+    if (descriptor?.list !== true || features?.list === false) {
       throw new OpFailure(
         'refused',
-        `${descriptor?.name ?? adapter} keeps no conversations corrallm can list.`,
+        descriptor?.list !== true
+          ? `${descriptor?.name ?? adapter} keeps no conversations corrallm can list.`
+          : `${nameOf(open.document.nodes, agent)}’s session can’t list its conversations.`,
       );
     }
     const listed = await this.#effect(() =>
@@ -394,6 +419,9 @@ export class SessionControl {
     const target = this.#target(canvas, agent);
     const { open, name } = target;
     const caller = callerKey(ctx.caller);
+    if (!this.#resumes(target)) {
+      throw new OpFailure('refused', `${name}’s connection can’t continue a conversation.`);
+    }
     if (!this.#deps.sessions.listedTo(open.document.id, agent, caller, conversation)) {
       throw new OpFailure(
         'not-found',
@@ -543,7 +571,11 @@ export class SessionControl {
     agent: string;
     message: string;
   }): Promise<FilesRewind> {
-    const { open } = this.#target(canvas, agent);
+    const target = this.#target(canvas, agent);
+    const { open } = target;
+    // A preview is of its files: only where its connection restores them (B16 C4).
+    const refusal = this.#rewindRefusal(target, message, ['code', 'both']);
+    if (refusal !== undefined) throw refusal;
     return this.#effect(() => this.#deps.sessions.previewRewind(open.document.id, agent, message));
   }
 
@@ -563,6 +595,9 @@ export class SessionControl {
   ): Promise<RewindResult> {
     const target = this.#target(canvas, agent);
     const { open, name } = target;
+    // B16 C4: only a restore its connection declares, to a point the core proves, before anything.
+    const refusal = this.#rewindRefusal(target, message, [restore]);
+    if (refusal !== undefined) throw refusal;
     // A conversation rewind ends its session, to resume the copy: only where it can start again.
     if (restore !== 'code') await this.#launchable(target, 'rewind its conversation');
     // Idle as it rewinds: nothing awaited between this check and a conversation's rewind (a code
@@ -608,6 +643,9 @@ export class SessionControl {
   ): Promise<RuleOutcome> {
     if (args.restore === 'conversation') return undefined;
     const target = this.#target(args.canvas, args.agent);
+    // Never a proposal of what the handler would refuse (B16 C4).
+    const refusal = this.#rewindRefusal(target, args.message, [args.restore]);
+    if (refusal !== undefined) return { refuse: refusal.message };
     let guard: RewindGuard;
     try {
       guard = await this.#guard(target, args.message);
@@ -650,6 +688,32 @@ export class SessionControl {
       guard,
     });
     return { propose: id };
+  }
+
+  /**
+   * Why a rewind of `target` to `message` restoring one of `restores` is refused before anything
+   * (B16 C4): none of them is a restore its connection declares; or `message` isn't a point its
+   * actual conversation has, as the core proves it (`rewindPointsOf`: one its CLI has, of its
+   * adapter's conversation, since its last clear). Its generation's own features, and the native
+   * conversation, are checked again by the manager before any fork or file write.
+   */
+  #rewindRefusal(
+    { open, node, adapter, connection, name }: Target,
+    message: string,
+    restores: readonly RewindRestore[],
+  ): OpFailure | undefined {
+    const declared = connectionIn(this.#deps.catalog, connection)?.connection.panels.rewind;
+    if (!restores.some((one) => declared?.restores.includes(one) === true)) {
+      return new OpFailure('refused', `${name}’s connection can’t rewind that here.`);
+    }
+    const points = rewindPointsOf(open.engine.sessions.of(node.id).entries, adapter);
+    if (!points.some(({ id }) => id === message)) {
+      return new OpFailure(
+        'not-found',
+        `${name} can’t rewind to that message: it isn’t one its conversation has since its last clear.`,
+      );
+    }
+    return undefined;
   }
 
   /** Its connection's /mcp panel, as the catalog declares it: refused where it has none. */
@@ -697,6 +761,17 @@ export class SessionControl {
       );
     const { adapter, connection } = endpoint;
     return { open, node, adapter, connection, name };
+  }
+
+  /**
+   * Whether the agent's endpoint can continue a conversation (B16 C4): its adapter declares it, and
+   * its ready generation, if one runs, didn't report less.
+   */
+  #resumes({ open, node, adapter }: Target): boolean {
+    return (
+      adapterIn(this.#deps.catalog, adapter)?.resume === true &&
+      this.#deps.sessions.features(open.document.id, node.id)?.resume !== false
+    );
   }
 
   /** Refuses, before anything, a session that isn't idle or has messages waiting to go. */

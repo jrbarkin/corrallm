@@ -67,7 +67,15 @@ describe('a connected session', () => {
       { value: 'opus', label: 'Opus' },
       { value: 'haiku', label: 'Haiku' },
     ];
-    emit('a', 'claude-code.sdk', { type: 'started', model: 'opus', mode: 'acceptEdits', models });
+    emit('a', 'claude-code.sdk', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'acceptEdits',
+      models,
+    });
     expect(store.of('a')).toMatchObject({ models, model: 'opus', mode: 'acceptEdits' });
     await settle();
   });
@@ -127,6 +135,9 @@ describe('a connected session', () => {
     await settle();
     emit('a', 'claude-code.terminal', {
       type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
       model: 'haiku',
       mode: 'manual',
       models: [],
@@ -165,12 +176,28 @@ describe('a connected session', () => {
     store.open('a');
     const text =
       'Claude Code’s settings turn off its hooks (disableAllHooks in ~/.claude/settings.json).';
-    emit('a', 'claude-code.terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.terminal', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'manual',
+      models: [],
+    });
     emit('a', 'claude-code.terminal', { type: 'unheard', text });
     expect(store.of('a').unheard).toBe(text);
     expect(store.of('a').entries.at(-1)).toMatchObject({ kind: 'notice', level: 'warning', text });
     // Started again, with the hooks back on: nothing more to say.
-    emit('a', 'claude-code.terminal', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.terminal', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'manual',
+      models: [],
+    });
     expect(store.of('a').unheard).toBeUndefined();
     await settle();
   });
@@ -713,7 +740,15 @@ describe('a connected session continued in Terminal', () => {
   it('sends a command typed for Terminal once the agent runs there, never to its SDK session', async () => {
     const { store, backend, emit } = connected();
     store.open('a');
-    emit('a', 'claude-code.sdk', { type: 'started', model: null, mode: 'manual', models: [] });
+    emit('a', 'claude-code.sdk', {
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: null,
+      mode: 'manual',
+      models: [],
+    });
     store.sendOnceIn('a', 'claude-code.terminal', 'Claude', '/permissions');
     await settle();
     expect(backend.send).not.toHaveBeenCalled();
@@ -975,8 +1010,7 @@ describe('a connected session that would not start', () => {
     store.open('a');
     await settle();
     const done = vi.fn();
-    const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
-    store.send('a', 'claude-code', 'Fix the login bug', done, images);
+    store.send('a', 'claude-code', 'Fix the login bug', done);
     const id = store.of('a').queued[0]?.id;
     await settle();
     expect(fake.backend.start).toHaveBeenCalledTimes(2);
@@ -988,7 +1022,6 @@ describe('a connected session that would not start', () => {
     expect(fake.backend.send).toHaveBeenCalledExactlyOnceWith('a', {
       id,
       text: 'Fix the login bug',
-      images,
     });
     expect(done).not.toHaveBeenCalled();
     retry.resolve(null);
@@ -998,6 +1031,35 @@ describe('a connected session that would not start', () => {
     expect(done).toHaveBeenCalledExactlyOnceWith(false, '', {
       status: 'completed',
       reason: 'completed',
+    });
+    store.reset();
+  });
+
+  it('keeps a submission whole and unsent, its images with it, on a connection that takes none (B16 C3)', async () => {
+    const fake = fakeBackend();
+    const store = new SessionStore(engine, {
+      ...fake.backend,
+      availability: () => Promise.resolve({ ready: true }),
+    });
+    store.sync([{ id: 'a', connection: 'claude-code.terminal' }]);
+    const done = vi.fn();
+    const refused = vi.fn();
+    const images = [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }];
+    store.send('a', 'claude-code', 'Look at this', done, images, refused);
+    await settle();
+    expect(fake.backend.send).not.toHaveBeenCalled();
+    expect(done).not.toHaveBeenCalled();
+    // Refused for its images, not for the session: delivery holds it until the agent runs another way.
+    expect(refused).toHaveBeenCalledExactlyOnceWith({
+      text: 'Claude Code · Terminal takes no images.',
+      images: true,
+    });
+    expect(store.of('a').queued).toEqual([
+      expect.objectContaining({ text: 'Look at this', images }),
+    ]);
+    expect(store.of('a').entries.at(-1)).toMatchObject({
+      kind: 'notice',
+      text: 'Claude Code · Terminal takes no images.',
     });
     store.reset();
   });

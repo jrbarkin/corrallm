@@ -390,6 +390,11 @@ export class RuntimeSource {
     this.switchingChanged(canvas, agent);
   }
 
+  /** What its session can do changed (B16 C1: a generation ready, narrowed or gone). */
+  featuresChanged(canvas: CanvasId, agent: string): void {
+    this.switchingChanged(canvas, agent);
+  }
+
   /**
    * What the core's prompt owner holds of an agent's changed (B13 C9: one raised, or ended): its
    * summary says its count again, whether or not its transcript changed with it.
