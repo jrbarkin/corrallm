@@ -157,11 +157,29 @@ export function isContinuation(
 }
 
 /**
- * Whether a message to an agent is delivered to it as a turn: a party's text (an answer to an ask
- * among them), an ask (B21 C6), or the record of how an ask ended, sent its asker. Every other
- * record is only kept, for its party to read.
+ * Whether a message is a queue hand-off (B19 C1): one queue's Message item for another agent, the
+ * queue's agent's message to it, as its purpose says (never as its task, parties or origin do).
  */
-export function isTurn(message: Pick<Message, 'kind' | 'settled'>): boolean {
+export function isQueueHandoff(message: Pick<Message, 'purpose'>): boolean {
+  return message.purpose?.type === 'handoff';
+}
+
+/**
+ * Whether a message is a queue hand-off's evidence (B19 C1): its recipient's reply, kept for the
+ * queue's item as a record, as its purpose says, whether or not the hand-off's row is still kept.
+ */
+export function isHandoffEvidence(message: Pick<Message, 'purpose'>): boolean {
+  return message.purpose?.type === 'evidence';
+}
+
+/**
+ * Whether a message to an agent is delivered to it as a turn: a party's text (an answer to an ask
+ * and a queue hand-off among them), an ask (B21 C6), or the record of how an ask ended, sent its
+ * asker. Every other record is only kept, for its party to read: a hand-off's evidence (B19 C1)
+ * too, though it is text.
+ */
+export function isTurn(message: Pick<Message, 'kind' | 'settled' | 'purpose'>): boolean {
+  if (isHandoffEvidence(message)) return false;
   return (
     message.kind === 'text' ||
     message.kind === 'prompt' ||

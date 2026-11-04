@@ -1,3 +1,4 @@
+import { MAX_MESSAGE_BYTES } from '../../../../shared/api/limits';
 import { endpointRefusal } from '../../../../shared/model/catalog';
 import type { MessageImage, TaskMessage, TurnResult } from '../../../../shared/session';
 import { WINDOW_NAMES, windowNow } from '../../../../shared/usage';
@@ -141,6 +142,42 @@ export interface RunMailbox {
 }
 
 /**
+ * B19 C1: a queue hand-off, as the run records it (RunHandOffs.record): one queue's Message item for
+ * another agent.
+ */
+export interface RunHandOff {
+  /** The agent whose queue's item it is: it is sent from that agent. */
+  owner: string;
+  /** The agent it is for. */
+  to: string;
+  /** The item's words, as written: never framed, cut or carrying anything. */
+  text: string;
+  /** The attempt it is: owner, item and attempt. */
+  task: TaskMessage;
+}
+
+/**
+ * B19 C1: where the run's queue hand-offs go, the core's delivery: each recorded pending (`record`,
+ * in memory, written with the run that links its attempt to it), delivered at its recipient's
+ * delivery point under every hold a party's message waits on there, and its turn's end told back
+ * (RunStore.handedOff) in the same tick as its evidence is kept. Unit harnesses may omit it: the
+ * run then sends a hand-off to its recipient's session itself, as before B19.
+ */
+export interface RunHandOffs {
+  /**
+   * Records hand-off `send`, pending: its message's id; none, nothing recorded, while its owner has
+   * as many messages waiting for its recipient as a party may (MAX_WAITING): the item waits unsent,
+   * and goes once one of them does (RunStore.admissionChanged).
+   */
+  record(send: RunHandOff): string | undefined;
+  /**
+   * Takes back attempt `task`'s hand-off for the run (Stop, Run again): withdrawn unsent while it
+   * waits, else its turn interrupted, its recipient told with its next message.
+   */
+  withdraw(task: TaskMessage): void;
+}
+
+/**
  * What admission says before automated work reaches an agent (B11a C3): it goes (or is held as it
  * would have been); corrallm switches the agent's backend first, and the work waits; or a fallback
  * rule that can't switch the agent asks, as `ask` does.
@@ -163,6 +200,8 @@ export interface RunIO {
   beforeSend?: () => Promise<void>;
   /** Where the run's sends of its tasks' attempts are recorded first: the core's alone. */
   mailbox?: RunMailbox;
+  /** B19 C1: where its queue hand-offs go, the core's delivery. None: it sends them itself. */
+  handOffs?: RunHandOffs;
   /** Holds queued session dispatch without blocking a fresh manual console intervention. */
   hold?: (agentId: string, held: boolean) => void;
   /**
@@ -262,6 +301,11 @@ export interface RunTasks {
    * delivery next looks (they belong to an attempt no longer running).
    */
   interrupt(task: TaskMessage): void;
+  /**
+   * B19 C1: whether attempt `task`'s queue hand-off waits, unsent, in the mailbox: as the run is
+   * held or restored, it waits for it again, never uncertain. None: never.
+   */
+  pending?(task: TaskMessage): boolean;
 }
 
 /**
@@ -444,6 +488,11 @@ export class RunStore {
    * The attempt's next turn's end (`continued`) judges it, or waits again.
    */
   readonly #deferred = new Map<string, { token: object; step: QueueStep; attempt: string }>();
+  /**
+   * B19 C1: each agent whose queue's hand-off delivery has (RunIO.handOffs), by its owner: the token
+   * it is busy with and the attempt. Its end (`handedOff`) finishes the item, once.
+   */
+  readonly #handing = new Map<string, { token: object; task: TaskMessage }>();
 
   constructor(catalog: EngineCatalog, io: RunIO) {
     this.#catalog = catalog;
@@ -493,6 +542,8 @@ export class RunStore {
     const agents: Record<string, AgentRun> = {};
     /** B21 C7: the attempts that wait on their asks, derived from the canvas's mailbox. */
     const waiting: [string, { step: QueueStep; attempt: string }][] = [];
+    /** B19 C1: the attempts whose hand-offs still wait, unsent, in the canvas's mailbox. */
+    const handing: [string, TaskMessage][] = [];
     for (const [id, at] of Object.entries(saved.run.agents)) {
       if (
         at.status === 'running' &&
@@ -511,6 +562,17 @@ export class RunStore {
         if (step !== undefined && task !== undefined) {
           agents[id] = at;
           waiting.push([id, { step, attempt: task.attempt }]);
+          continue;
+        }
+        // B19 C1: its hand-off still waits, unsent: it waits for it again, the same attempt.
+        if (
+          task !== undefined &&
+          item !== undefined &&
+          isHandOff(id, item) &&
+          this.#io.tasks?.pending?.(task) === true
+        ) {
+          agents[id] = at;
+          handing.push([id, task]);
           continue;
         }
         const condition = conditionKey(id, item, at.rounds);
@@ -571,6 +633,12 @@ export class RunStore {
       this.#busy.set(id, token);
       this.#deferred.set(id, { token, step, attempt });
     }
+    // And each attempt whose hand-off waits, until delivery tells how its turn ended.
+    for (const [id, task] of handing) {
+      const token = {};
+      this.#busy.set(id, token);
+      this.#handing.set(id, { token, task });
+    }
     this.#applyPauses();
     this.#set({ ...this.#run });
   }
@@ -616,8 +684,13 @@ export class RunStore {
       ([agent, { step, attempt }]) =>
         this.#io.tasks?.recover({ agent, item: step.id, attempt }).waiting === true,
     );
+    // B19 C1: a hand-off that waits, unsent, is held as it is too: its recipient never had it.
+    const pending = [...this.#handing].filter(
+      ([, { task }]) => this.#io.tasks?.pending?.(task) === true,
+    );
     for (const agent of this.#busy.keys()) {
       if (waiting.some(([one]) => one === agent)) continue;
+      if (pending.some(([one]) => one === agent)) continue;
       this.#interrupt(
         'uncertain',
         this.#heldText(
@@ -633,6 +706,10 @@ export class RunStore {
     for (const [agent, deferred] of waiting) {
       this.#busy.set(agent, deferred.token);
       this.#deferred.set(agent, deferred);
+    }
+    for (const [agent, handing] of pending) {
+      this.#busy.set(agent, handing.token);
+      this.#handing.set(agent, handing);
     }
     this.#halt('corrallm');
   }
@@ -771,7 +848,11 @@ export class RunStore {
       'This task was interrupted by Kill. Inspect its session before resolving or retrying.',
       new Set(affected.keys()),
     );
-    for (const owner of affected.keys()) this.#busy.delete(owner);
+    // B19 C1: a hand-off between them is delivery's to take back, with the kill's note.
+    for (const owner of affected.keys()) {
+      this.#busy.delete(owner);
+      this.#handing.delete(owner);
+    }
     for (const [key, observed] of this.#observed)
       if (affected.has(observed.owner)) this.#observed.delete(key);
     for (const [cancel, holder] of this.#timers) {
@@ -1053,6 +1134,12 @@ export class RunStore {
       this.#deferred.delete(agent);
       if (this.#busy.get(agent) === token) this.#busy.delete(agent);
     }
+    // B19 C1: nor does one whose hand-off waits (delivery withdraws what it sent as it goes).
+    for (const [agent, { token }] of this.#handing) {
+      if (nodes.some((node) => node.id === agent && node.type === 'agent')) continue;
+      this.#handing.delete(agent);
+      if (this.#busy.get(agent) === token) this.#busy.delete(agent);
+    }
     const changed = this.#applyPauses();
     this.#releasePending();
     if (this.#run.running) this.#settle(this.#unrefuse() || changed);
@@ -1125,6 +1212,33 @@ export class RunStore {
       return;
     this.#deferred.delete(task.agent);
     this.#taskEnded(task.agent, deferred.step, deferred.token, turn);
+  }
+
+  /**
+   * B19 C1: how a queue hand-off's turn ended (delivery's: its recipient's native end, in the same
+   * tick as its evidence is kept; or that it never went, taken back or cut off): the item's
+   * evidence, judged as a message item's turn is, its whole reply what the queue's Ifs and waits
+   * read. Never a turn of its owner's. Nothing for an attempt not handed off so now (stopped,
+   * killed, retried, another's).
+   */
+  handedOff(task: TaskMessage, turn: TurnEnd): void {
+    const handing = this.#handing.get(task.agent);
+    if (
+      handing?.task.attempt !== task.attempt ||
+      handing.task.item !== task.item ||
+      this.#busy.get(task.agent) !== handing.token
+    )
+      return;
+    this.#handing.delete(task.agent);
+    const node = this.#agents().find((n) => n.id === task.agent);
+    const item = node && findItem(node.data.queue ?? [], task.item)?.item;
+    if (item === undefined || !isMessage(item)) {
+      // Edited away meanwhile: the queue goes on from where it is now.
+      this.#busy.delete(task.agent);
+      this.#settle(true);
+      return;
+    }
+    this.#taskEnded(task.agent, item, handing.token, turn);
   }
 
   /**
@@ -1738,6 +1852,8 @@ export class RunStore {
     outcomes: Record<string, Outcome>,
     now: number,
   ): AgentRun | undefined {
+    // B19 C1: a queue hand-off delivery delivers waits there, on its recipient's holds alone.
+    if (this.#io.handOffs !== undefined && isHandOff(agent, task)) return undefined;
     const destination = isMessage(task) ? (task.target ?? agent) : agent;
     if (this.#run.agents[destination]?.paused)
       return { current: task.id, status: 'waiting', outcomes };
@@ -1768,11 +1884,13 @@ export class RunStore {
     if (admitted === 'switching') return { current: task.id, status: 'waiting', outcomes };
     if (admitted === 'ask' && 'rule' in rule)
       return { current: task.id, status: 'asking', outcomes, usage: rule.rule };
-    const owned = this.usageRule(agent, now);
+    // B19 C1: warn, ask and wait are read against the recipient too: a hand-off's owner's rule
+    // never holds work that another agent's backend spends.
+    const owned = this.usageRule(destination, now);
     if (!owned || owned.action === 'fallback') return undefined;
     const { hold, action } = owned;
     if (action === 'warn') {
-      this.warnUsage(agent, hold, now);
+      this.warnUsage(destination, hold, now);
       return undefined;
     }
     if (action === 'waitForReset' && hold.resetsAt !== null) {
@@ -2143,6 +2261,17 @@ export class RunStore {
       }
       task = { ...task, action: resolved.action };
     }
+    // B19 C1: a queue hand-off goes to delivery, pending, unless it's your correction of one.
+    const { handOffs } = this.#io;
+    if (
+      handOffs !== undefined &&
+      correction === undefined &&
+      isMessage(task) &&
+      isHandOff(agent, task) &&
+      task.message.trim() !== '' &&
+      this.#agents().some((n) => n.id === task.target)
+    )
+      return this.#handOff(agent, task, outcomes, previous, handOffs);
     const token = {};
     this.#busy.set(agent, token);
     // Its recipient: a message's target, if another agent's; else the agent itself.
@@ -2228,6 +2357,54 @@ export class RunStore {
       outcomes,
       attempts,
       ...(previous?.paused ? { paused: true } : {}),
+    };
+  }
+
+  /**
+   * B19 C1: hands a queue's Message item for another agent to delivery (RunIO.handOffs): recorded
+   * pending, from the queue's agent, as a fresh attempt linked to its message, in the write that
+   * journals the run. Its agent is busy with it until delivery tells how its recipient's turn
+   * ended (`handedOff`). One longer than a message holds is held for you, never cut; one whose
+   * recipient's line is full waits unsent, no attempt made.
+   */
+  #handOff(
+    agent: string,
+    task: QueueMessage,
+    outcomes: Record<string, Outcome>,
+    previous: AgentRun | undefined,
+    handOffs: RunHandOffs,
+  ): AgentRun {
+    const to = task.target ?? agent;
+    const kept = {
+      ...(previous?.attempts ? { attempts: previous.attempts } : {}),
+      ...(previous?.paused ? { paused: true } : {}),
+    };
+    if (new TextEncoder().encode(task.message).length > MAX_MESSAGE_BYTES)
+      return {
+        current: task.id,
+        status: 'asking',
+        outcomes,
+        ...kept,
+        problem: { kind: 'failed', reason: 'too-long', text: TOO_LONG, agent: to },
+      };
+    const attempts = this.#attempts(previous, task.id, undefined, to);
+    const message = taskMessage(agent, task.id, attempts);
+    const id = handOffs.record({ owner: agent, to, text: task.message, task: message });
+    if (id === undefined) return { current: task.id, status: 'waiting', outcomes, ...kept };
+    const token = {};
+    this.#busy.set(agent, token);
+    this.#handing.set(agent, { token, task: message });
+    return {
+      current: task.id,
+      status: 'running',
+      outcomes,
+      ...kept,
+      attempts: {
+        ...attempts,
+        [task.id]: (attempts[task.id] ?? []).map((one) =>
+          one.id === message.attempt ? { ...one, messageId: id } : one,
+        ),
+      },
     };
   }
 
@@ -2732,6 +2909,10 @@ export class RunStore {
     if (takeBack)
       for (const [agent, { step, attempt }] of deferred)
         this.#io.tasks?.interrupt({ agent, item: step.id, attempt });
+    // B19 C1: and each hand-off delivery has, unless the run is only held.
+    const handing = [...this.#handing.values()];
+    this.#handing.clear();
+    if (takeBack) for (const { task } of handing) this.#io.handOffs?.withdraw(task);
     this.#busy.clear();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -2824,6 +3005,14 @@ function lastRan(
     return outcome !== undefined && outcome !== 'skipped' && !isPause(item);
   });
 }
+
+/** B19 C1: whether `item`, in agent `owner`'s queue, is a queue hand-off: a Message for another. */
+function isHandOff(owner: string, item: QueueItem): item is QueueMessage {
+  return isMessage(item) && item.target !== undefined && item.target !== owner;
+}
+
+/** What a hand-off longer than a message holds is held for you with (B19 C1): never cut. */
+const TOO_LONG = `This message is longer than ${String(MAX_MESSAGE_BYTES / 1024)} KiB, the most a message holds, so it wasn’t handed over. Shorten it, then retry.`;
 
 /** Whether a queue item is a step (a tool's, or a slash command's). */
 function isStep(item: QueueItem): item is QueueStep {

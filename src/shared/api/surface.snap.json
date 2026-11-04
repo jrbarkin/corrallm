@@ -313,7 +313,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "5d89d53c9e1cbabd"
+      "output": "53fc28b0a7c3ae2d"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -505,7 +505,7 @@
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
-      "output": "ebcffdddb1f95662"
+      "output": "6ff43b8dfeb01fc8"
     },
     "message": {
       "input": "1bc3cefb59c8f144",
@@ -513,7 +513,7 @@
     },
     "wait": {
       "input": "d429567b08fb223f",
-      "output": "c7b55e47bd14bafa"
+      "output": "276ef50894b3f798"
     },
     "reply": {
       "input": "21ada39b9ec4d54c",

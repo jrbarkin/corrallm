@@ -31,9 +31,13 @@ export function setup(
   unheard: ReadonlySet<string> = new Set(),
   /**
    * What else the run is given: B11a's admission and its note on a usage limit, whether a handoff
-   * request waits, and a mailbox and the journal before each send, say.
+   * request waits, a mailbox and the journal before each send, and (B19) where queue hand-offs
+   * go and the delivery points the run offers, say.
    */
-  more: Pick<RunIO, 'admit' | 'limitNote' | 'handoff' | 'mailbox' | 'beforeSend'> = {},
+  more: Pick<
+    RunIO,
+    'admit' | 'limitNote' | 'handoff' | 'mailbox' | 'beforeSend' | 'handOffs' | 'tasks'
+  > = {},
 ) {
   let clock = 0;
   let timers: { run: () => void; at: number; native?: boolean }[] = [];

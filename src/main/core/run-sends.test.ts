@@ -25,10 +25,11 @@ import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /*
  * The run's own sends go through the durable mailbox (B11 Design §3): each of a task's attempts is
- * a message, from corrallm (or, for a hand-off, the queue's agent; for a correction you typed,
- * you), recorded with its attempt's link in the write that journals its run, on disk before its
- * agent's session gets it; settled as its turn ends, in the write that holds the run's result, or
- * withdrawn when it is taken back or never goes. Delivery never sends it: the run does.
+ * a message, from corrallm (or, for a correction you typed, you), recorded with its attempt's link
+ * in the write that journals its run, on disk before its agent's session gets it; settled as its
+ * turn ends, in the write that holds the run's result, or withdrawn when it is taken back or never
+ * goes. Delivery never sends it: the run does. A queue hand-off (B19 C1) is the run's work too,
+ * from the queue's agent, but delivery delivers it.
  */
 
 /** A canvas with one Codex agent whose queue sends it a message (its id is the file's). */
@@ -410,7 +411,7 @@ describe('the run’s own sends', () => {
     ]);
   });
 
-  it('records a hand-off from the queue’s agent, and retries it as its owner’s attempt on its turn’s cancelled end', async () => {
+  it('records a hand-off from the queue’s agent, delivered by delivery (B19 C1), and retries it as its owner’s attempt on its turn’s cancelled end', async () => {
     const file = path.join(profile, 'worker.corral');
     await writeFile(
       file,
@@ -447,28 +448,35 @@ describe('the run’s own sends', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
-    const id = sent[0]?.id ?? '';
+    const store = await core.engines.messagesOf(CANVAS);
+    /** The queue hand-off (B19 C1) delivered under native id `as`. */
+    const delivered = (as: string) => store.all().find((one) => one.delivery?.as === as);
+    const native = sent[0]?.id ?? '';
     const first = engine.run.snapshot().agents.lead?.attempts?.handoff?.[0];
-    expect(await messageOf(core, id)).toMatchObject({
+    const original = delivered(native);
+    expect(original).toMatchObject({
       from: 'agent:lead',
       to: 'agent:worker',
       task: { agent: 'lead', item: 'handoff', attempt: first?.id },
+      purpose: { v: 1, type: 'handoff' },
     });
     // The worker's turn is interrupted and resent: its owner's attempt is what is retried.
-    await core.engines.resendAfter(CANVAS, 'worker', [id]);
-    end([id], 'cancelled');
+    await core.engines.resendAfter(CANVAS, 'worker', [native]);
+    end([native], 'cancelled');
     await vi.waitFor(() => {
       expect(sent).toHaveLength(2);
     });
     const attempts = engine.run.snapshot().agents.lead?.attempts?.handoff;
+    const retried = delivered(sent[1]?.id ?? '');
     expect(attempts).toMatchObject([
-      { id: first?.id, status: 'cancelled', messageId: id },
-      { status: 'running', retryOf: first?.id, messageId: sent[1]?.id },
+      { id: first?.id, status: 'cancelled', messageId: original?.id },
+      { status: 'running', retryOf: first?.id, messageId: retried?.id },
     ]);
-    expect(await messageOf(core, sent[1]?.id ?? '')).toMatchObject({
+    expect(retried).toMatchObject({
       from: 'agent:lead',
       to: 'agent:worker',
       task: { agent: 'lead', item: 'handoff', attempt: attempts?.[1]?.id },
+      purpose: { v: 1, type: 'handoff' },
     });
     // Nothing is copied as a party's resend.
     const messages = (await core.engines.messagesOf(CANVAS)).all();

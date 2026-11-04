@@ -11,6 +11,7 @@ import { Purpose } from '../../../shared/model/purpose';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
+  isQueueHandoff,
   isSettled,
   isTurn,
   MESSAGE_KINDS,
@@ -796,10 +797,25 @@ function prunable({ message, withdrawal }: Kept): boolean {
  * task link, which only the runtime's mailbox gives a message (Engines), never a caller. The run
  * sends it and settles it; delivery never delivers, takes back or kills it as a party's. An answer
  * to an ask a task's attempt made carries its task too (B21 C7: a continuation), but is no send of
- * the run's: delivery delivers it, as the attempt's own turn.
+ * the run's: delivery delivers it, as the attempt's own turn. Nor is a message with a purpose (B19
+ * C1): a queue hand-off, which delivery delivers, or its evidence, a record.
  */
 export function sentByRun(message: Message): boolean {
-  return message.kind === 'text' && message.task !== undefined && message.ask === undefined;
+  return (
+    message.kind === 'text' &&
+    message.task !== undefined &&
+    message.ask === undefined &&
+    message.purpose === undefined
+  );
+}
+
+/**
+ * Whether a message is the run's own work (B19 C1): one of its sends of a task's attempt, or a
+ * queue hand-off, which delivery delivers but which its run owns. No party takes it back, no
+ * sender is told of it, no loop counts it, and Stop, Kill and a restart treat it as the run's.
+ */
+export function runOwned(message: Message): boolean {
+  return sentByRun(message) || isQueueHandoff(message);
 }
 
 /**

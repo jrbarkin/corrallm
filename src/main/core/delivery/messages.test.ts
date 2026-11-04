@@ -6,7 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import { STORE_BYTES, STORE_SETTLED_PER_PARTY } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
-import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
+import {
+  isHandoffEvidence,
+  isMessageToYou,
+  isQueueHandoff,
+  isSettled,
+  isTurn,
+  MESSAGE_KINDS,
+  MESSAGE_STATES,
+} from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { AskColumn, AskSettlement } from '../../../shared/model/asks';
 import { Purpose } from '../../../shared/model/purpose';
@@ -19,7 +27,7 @@ import { connect } from '../store/sqlite';
 import { Store, SYSTEM_DEPS, unopened } from '../store/store';
 import type { StoreDeps } from '../store/store';
 import { openTestStore, readOnDisk, refuseWrites, writeOnDisk } from '../store/test-store';
-import { isActive, MessageStore, MessageTable } from './messages';
+import { isActive, MessageStore, MessageTable, runOwned, sentByRun } from './messages';
 import type { Draft, Staged } from './messages';
 import { scanPrune } from './test-prune';
 import type { PruneRecord } from './test-prune';
@@ -1133,6 +1141,66 @@ describe('what delivery acts on', () => {
         expect(messages.active().length).toBeGreaterThan(0);
       }),
   );
+});
+
+describe('what a message’s purpose makes it (B19 C1)', () => {
+  const task = { agent: 'lead', item: 'hand', attempt: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f' };
+  const base = {
+    id: '6d0c2f4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f',
+    canvas: '0a6f6a5e-4bb3-4c3e-8a8c-3f7f2c1e9d10' as CanvasId,
+    kind: 'text' as const,
+    body: 'Review this',
+    at: 1,
+  };
+  /** A run's direct send of its owner's own step, as before B19: no purpose. */
+  const send: Message = { ...base, from: 'corrallm', to: 'agent:lead', task, state: 'delivering' };
+  const handoff: Message = {
+    ...base,
+    from: 'agent:lead',
+    to: 'agent:worker',
+    task,
+    state: 'pending',
+    purpose: { v: 1, type: 'handoff' },
+  };
+  const evidence: Message = {
+    ...base,
+    from: 'agent:worker',
+    to: 'agent:lead',
+    body: 'APPROVED',
+    replyTo: handoff.id,
+    task,
+    turn: { status: 'completed', reason: 'completed' },
+    state: 'delivered',
+    purpose: { v: 1, type: 'evidence' },
+  };
+  const party: Message = { ...base, from: 'agent:lead', to: 'agent:worker', state: 'pending' };
+
+  it('keeps a row with no purpose as it was: a text with a task is the run’s own send', () => {
+    expect(sentByRun(send)).toBe(true);
+    expect(runOwned(send)).toBe(true);
+    expect(sentByRun(party)).toBe(false);
+    expect(runOwned(party)).toBe(false);
+  });
+
+  it('makes a hand-off the run’s work, which delivery delivers as a turn: no direct send of the run’s', () => {
+    expect(sentByRun(handoff)).toBe(false);
+    expect(runOwned(handoff)).toBe(true);
+    expect(isQueueHandoff(handoff)).toBe(true);
+    expect(isTurn(handoff)).toBe(true);
+    expect(isActive(handoff)).toBe(true);
+    expect(isSettled(handoff)).toBe(false);
+  });
+
+  it('makes its evidence a record: never a turn, never pending, never the run’s send, whatever its parent row', () => {
+    expect(isHandoffEvidence(evidence)).toBe(true);
+    expect(isQueueHandoff(evidence)).toBe(false);
+    expect(isTurn(evidence)).toBe(false);
+    expect(sentByRun(evidence)).toBe(false);
+    expect(runOwned(evidence)).toBe(false);
+    expect(isActive(evidence)).toBe(false);
+    expect(isSettled(evidence)).toBe(true);
+    expect(isMessageToYou(evidence)).toBe(false);
+  });
 });
 
 describe('the message store, when its database fails', () => {

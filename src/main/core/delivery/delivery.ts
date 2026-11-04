@@ -1,4 +1,4 @@
-import { endpointRefusal } from '../../../shared/model/catalog';
+import { endpointRefusal, fileMentionRefusal, shellRefusal } from '../../../shared/model/catalog';
 import type { SessionAvailability } from '../../../shared/session';
 import { randomUUID } from 'node:crypto';
 
@@ -10,16 +10,19 @@ import type { UnaskingWhy } from '../../../shared/model/needs-selectors';
 import type { NeedsItem } from '../../../shared/model/needs';
 
 import type { Engine } from '../engine/engine';
-import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
+import type { Admission, AdmittedWork, PauseCause, RunHandOff } from '../engine/run/runner';
 import { streamed } from '../engine/transcript/reduce';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import {
   agentOf,
   agentParty,
   isContinuation,
+  isHandoffEvidence,
+  isQueueHandoff,
   isTurn,
   outsideOf,
 } from '../../../shared/model/messages';
+import { HANDOFF_EVIDENCE, QUEUE_HANDOFF } from '../../../shared/model/purpose';
 import type { Session } from '../../../shared/model/session';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
@@ -41,7 +44,7 @@ import { answerFrame, askFrame, Asks, continuationFrame } from './asks';
 import { DeliveryError } from './errors';
 import { orderedPair } from './loops';
 import type { LoopStore, Pair } from './loops';
-import { capBody, sentByRun } from './messages';
+import { capBody, runOwned, sentByRun } from './messages';
 
 export { DeliveryError } from './errors';
 import type { MessageStore } from './messages';
@@ -216,7 +219,13 @@ interface Withdrawal {
  * or its sender, or (B21 C7) the task it continues was stopped, which tells no one: the run holds
  * that task for you, as it holds its own sends a Stop took back.
  */
-type TakeBackWhy = 'withdrawn' | 'recipient killed' | 'sender killed' | 'task stopped';
+type TakeBackWhy =
+  | 'withdrawn'
+  | 'recipient killed'
+  | 'sender killed'
+  | 'task stopped'
+  /** B19 C1: the run took back its queue hand-off (Stop, Run again). */
+  | 'run stopped';
 
 interface TakingBack {
   by: PartyId;
@@ -359,6 +368,11 @@ export class Delivery {
    */
   #unrecordable: (() => void) | undefined;
   readonly #images = new Map<string, NonNullable<UserMessage['images']>>();
+  /**
+   * B19 C1: the owners and recipients (`owner\0to`) whose hand-off waited unsent for room in the
+   * recipient's line (MAX_WAITING): the run is told once there is.
+   */
+  readonly #full = new Set<string>();
   #scheduled = false;
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
@@ -521,6 +535,125 @@ export class Delivery {
       },
     );
     return message;
+  }
+
+  /**
+   * B19 C1: records a queue hand-off (the run's: RunHandOffs.record), pending, from the queue's agent
+   * to its recipient, its task the item's attempt: delivered once its record is on disk, at its
+   * recipient's delivery point, under every hold a party's message waits on there and, as its run's
+   * work, while the run doesn't go or its owner is paused. Its id; none, nothing recorded, while
+   * its owner has MAX_WAITING messages waiting for its recipient (the run is told once one goes).
+   * Its record that can't reach the disk leaves it unresolved, never sent, and its item told so.
+   */
+  handOff({ owner, to, text, task }: RunHandOff): string | undefined {
+    const { store } = this.#deps;
+    const from = agentParty(owner);
+    if (this.waitingFrom(to, from) >= MAX_WAITING) {
+      this.#full.add(`${owner}\u0000${to}`);
+      return undefined;
+    }
+    const message = store.add({
+      from,
+      to: agentParty(to),
+      kind: 'text',
+      origin: 'run',
+      body: text,
+      task,
+      state: 'pending',
+      purpose: QUEUE_HANDOFF,
+    });
+    this.#recording.add(message.id);
+    void store.durable().then(
+      () => {
+        this.#recording.delete(message.id);
+        this.schedule();
+      },
+      (error: unknown) => {
+        this.#recording.delete(message.id);
+        console.error('Could not record a queue hand-off:', error);
+        const kept = store.get(message.id);
+        if (kept?.state !== 'pending') return;
+        const why = error instanceof Error ? error.message : String(error);
+        const turn: TurnResult = {
+          status: 'failed',
+          reason: 'error',
+          message: threadTitle(
+            `The run could not be saved, so the message was not handed over: ${why}`,
+            REASON,
+          ),
+        };
+        store.update(message.id, { state: 'unresolved', turn });
+        this.#handOffEnded(kept, '', turn);
+      },
+    );
+    return message.id;
+  }
+
+  /**
+   * B19 C1: the run takes back attempt `task`'s queue hand-off (Stop, Run again): withdrawn by
+   * corrallm while it waits, nothing sent and no one told; else taken back, its turn interrupted,
+   * its recipient told with its next message should it have reached it.
+   */
+  withdrawHandOff(task: TaskMessage): void {
+    if (this.#closed) return;
+    for (const message of this.#deps.store.active()) {
+      if (!isQueueHandoff(message) || !sameTask(message.task, task)) continue;
+      if (message.state === 'pending')
+        this.#deps.store.update(message.id, {
+          state: 'withdrawn',
+          by: 'corrallm',
+          turn: TAKEN_BACK,
+        });
+      else if (this.#inFlight(message)) this.#takeBack(message, 'corrallm', 'run stopped');
+    }
+    this.schedule();
+  }
+
+  /**
+   * B19 C1: a queue hand-off's turn ended, or it never went (withdrawn, declined, unrecorded): its
+   * run hears how, judging its item, which it does once and for its own attempt alone.
+   */
+  #handOffEnded(message: Message, reply: string, result: TurnResult): void {
+    if (message.task === undefined || !isQueueHandoff(message)) return;
+    this.#deps.engine.run.handedOff(message.task, {
+      failed: result.status !== 'completed',
+      reply,
+      result,
+    });
+  }
+
+  /**
+   * B19 C1: what holds a queue hand-off as its run's work, beside what holds a party's message to
+   * its recipient: the run not going (a restart's pause), and its owner's pause (its own or a
+   * group's), which never interrupts a turn it already started.
+   */
+  #runWorkHold(message: Message): Hold | undefined {
+    const { run } = this.#deps.engine;
+    if (!run.snapshot().running) return { kind: 'busy' };
+    const owner = agentOf(message.from);
+    if (owner !== undefined && run.holding({ agent: owner }).length > 0) return { kind: 'busy' };
+    return undefined;
+  }
+
+  /**
+   * B19 C1: why a queue hand-off can't go to agent `node` as its connection runs now: its text, as
+   * written, starts with that connection's shell prefix, or holds a native file mention there.
+   */
+  #handOffRefusal(node: AgentNode, message: Message): string | undefined {
+    const { catalog } = this.#deps.engine;
+    const connection = catalog.connectionOf(node.data);
+    return (
+      shellRefusal(catalog, connection, message.body) ??
+      fileMentionRefusal(catalog, connection, message.body)
+    );
+  }
+
+  /** B19 C1: a hand-off its recipient's connection refuses is never sent: its item is told why. */
+  #decline(message: Message, refusal: string): void {
+    const turn: TurnResult = { status: 'failed', reason: 'declined', message: refusal };
+    this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm', turn });
+    this.#handOffEnded(message, '', turn);
+    this.schedule();
   }
 
   /** How many messages `from` has waiting for agent `agent` (asks count: MAX_WAITING). */
@@ -692,7 +825,8 @@ export class Delivery {
    * record no turn is made of).
    */
   #turnPair(message: Message, here: ReadonlySet<string>): Pair | undefined {
-    if (!isTurn(message) || sentByRun(message) || this.#request(message)) return undefined;
+    // B19 C1: a queue hand-off is the run's work, which no loop counts.
+    if (!isTurn(message) || runOwned(message) || this.#request(message)) return undefined;
     let { from, to } = message;
     if (message.kind === 'settled') {
       const ask = message.replyTo === undefined ? undefined : this.#deps.store.get(message.replyTo);
@@ -818,7 +952,8 @@ export class Delivery {
         'A question, its answer and its end can’t be taken back: a question stays open until it is answered, dismissed or expires.',
       );
     }
-    if (sentByRun(message)) {
+    // B19 C1: a queue hand-off, and its evidence, are the run's too.
+    if (runOwned(message) || isHandoffEvidence(message)) {
       throw new DeliveryError(
         'refused',
         'That message is the run’s own: stop the run, or pause or kill its agent, to take it back.',
@@ -1039,6 +1174,8 @@ export class Delivery {
     if (lostImages) messages = store.active();
     /** What waits for each agent, in the order it came, once its record is on disk. */
     const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
+    // B19 C1: a hand-off that waited for room in its recipient's line goes once there is.
+    if (this.#full.size > 0) this.#roomFor(waiting);
     // B21 C6: each waiting turn's pair, and each pair's notice, of what waited as this check
     // began; read once a pair is held (one may be as this check delivers), never while none is.
     const waited = messages;
@@ -1102,7 +1239,9 @@ export class Delivery {
                 ? holds.request
                 : isContinuation(message)
                   ? holds.continuation
-                  : holds.theirs;
+                  : isQueueHandoff(message)
+                    ? (holds.theirs ?? this.#runWorkHold(message))
+                    : holds.theirs;
         if (!hold) {
           next ??= message;
           continue;
@@ -1174,6 +1313,23 @@ export class Delivery {
     this.#arm(alarm);
   }
 
+  /** B19 C1: tells the run once a recipient whose line was full has room for an owner's hand-off. */
+  #roomFor(waiting: ReadonlyMap<string, readonly Message[]>): void {
+    let room = false;
+    for (const key of [...this.#full]) {
+      const [owner = '', to = ''] = key.split('\u0000');
+      const from = agentParty(owner);
+      const line = waiting.get(to) ?? [];
+      if (line.filter((message) => message.from === from).length >= MAX_WAITING) continue;
+      this.#full.delete(key);
+      room = true;
+    }
+    if (room)
+      queueMicrotask(() => {
+        if (!this.#closed) this.#deps.engine.run.admissionChanged();
+      });
+  }
+
   /**
    * Withdraws (for corrallm) each message waiting for an agent no longer on the canvas, telling its
    * sender, and each one waiting from such an agent (API Spec §7.2).
@@ -1192,6 +1348,7 @@ export class Delivery {
       const to = gone(message.to);
       if (to === undefined && gone(message.from) === undefined) continue;
       this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
+      this.#handOffEnded(message, '', TAKEN_BACK);
       if (to !== undefined && gone(message.from) === undefined) {
         this.#notice(
           message,
@@ -1209,10 +1366,34 @@ export class Delivery {
    */
   #withdrawStale(): void {
     for (const message of this.#deps.store.active()) {
-      if (message.state !== 'pending' || !this.#request(message)) continue;
+      if (message.state !== 'pending') continue;
+      if (isQueueHandoff(message)) {
+        this.#withdrawStaleHandOff(message);
+        continue;
+      }
+      if (!this.#request(message)) continue;
       if ((this.#deps.handoff?.request(message) ?? 'stale') !== 'stale') continue;
       this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
     }
+  }
+
+  /**
+   * B19 C1: a queue hand-off waiting for an attempt its run no longer runs is never sent: withdrawn
+   * by corrallm where the run ended that attempt (a Stop, a Kill, Run again), unresolved where the
+   * run holds no such attempt at all (its checkpoint and its rows disagree), never made again.
+   */
+  #withdrawStaleHandOff(message: Message): void {
+    const { task } = message;
+    if (task === undefined || this.#recording.has(message.id) || this.#running(task)) return;
+    const known = this.#deps.engine.run
+      .snapshot()
+      .agents[task.agent]?.attempts?.[task.item]?.some(({ id }) => id === task.attempt);
+    this.#deps.store.update(
+      message.id,
+      known === true
+        ? { state: 'withdrawn', by: 'corrallm', turn: TAKEN_BACK }
+        : { state: 'unresolved', turn: STALE_HANDOFF },
+    );
   }
 
   /**
@@ -1552,6 +1733,13 @@ export class Delivery {
    * never the messages.
    */
   #deliver(node: AgentNode, message: Message): void {
+    // B19 C1: a hand-off its recipient's connection would run as a shell command, or whose file
+    // mentions it would expand, is never sent.
+    const refusal = isQueueHandoff(message) ? this.#handOffRefusal(node, message) : undefined;
+    if (refusal !== undefined) {
+      this.#decline(message, refusal);
+      return;
+    }
     const as = randomUUID();
     const attempt = (message.delivery?.attempt ?? 0) + 1;
     const request = this.#request(message);
@@ -1601,7 +1789,15 @@ export class Delivery {
             const current = this.#deps
               .nodes()
               .find((one) => one.id === node.id && one.type === 'agent');
-            if (
+            const declined =
+              current?.type === 'agent' && isQueueHandoff(message)
+                ? this.#handOffRefusal(current, message)
+                : undefined;
+            if (declined !== undefined) {
+              this.#uncarry(message.id);
+              this.#uncount(message.id);
+              this.#decline(message, declined);
+            } else if (
               !this.#yours(message) &&
               (current?.type !== 'agent' ||
                 this.#deps.engine.sessions.of(node.id).running === undefined ||
@@ -1609,7 +1805,9 @@ export class Delivery {
                   ? this.#requestHold(current, message)
                   : isContinuation(message)
                     ? this.#continuationHold(current)
-                    : this.#holdOf(current)) !== undefined)
+                    : isQueueHandoff(message)
+                      ? (this.#holdOf(current) ?? this.#runWorkHold(message))
+                      : this.#holdOf(current)) !== undefined)
             ) {
               this.#uncarry(message.id);
               this.#uncount(message.id);
@@ -1717,6 +1915,27 @@ export class Delivery {
     }
     // B11a C7: a handoff request's whole reply, kept (if accepted) in the write recording it.
     if (this.#request(message)) this.#deps.handoff?.replied(message, reply, result);
+    // B19 C1: a queue hand-off's turn is its queue's item's: replied, its reply kept as that item's
+    // evidence (a record to the queue's agent, never a turn of its), and the run judging the item
+    // on the whole reply, all in this tick, so that one write holds them. No ordinary reply.
+    if (isQueueHandoff(message)) {
+      store.update(id, { state: 'replied', turn: result });
+      store.add({
+        from: message.to,
+        to: message.from,
+        kind: 'text',
+        origin: 'run',
+        body: capBody(reply, 'reply'),
+        replyTo: id,
+        ...(message.task === undefined ? {} : { task: message.task }),
+        turn: result,
+        state: 'delivered',
+        purpose: HANDOFF_EVIDENCE,
+      });
+      this.#handOffEnded(message, reply, result);
+      this.schedule();
+      return;
+    }
     // B21 C6: an ask's turn ended with no structured answer: its reply answers it, or it stays open.
     if (message.kind === 'prompt') {
       this.asks.turnEnded(message, reply, result);
@@ -1854,13 +2073,16 @@ export class Delivery {
     const how =
       why === 'withdrawn'
         ? `by its sender after it reached you${turn}`
-        : `after it reached you${turn}, when ${killedText(nodes, message, by, why)}`;
+        : why === 'run stopped'
+          ? `after it reached you${turn}, when the run its queue is in was stopped`
+          : `after it reached you${turn}, when ${killedText(nodes, message, by, why)}`;
     return `Message ${message.id} from ${sender} was withdrawn ${how}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
   }
 
   /** Withdraws a message for `by`, telling its sender when someone else did. */
   #withdrawn(message: Message, by: PartyId, note?: string): void {
     this.#deps.store.update(message.id, { state: 'withdrawn', by }, note);
+    this.#handOffEnded(message, '', TAKEN_BACK);
     if (by !== message.from) {
       this.#notice(
         message,
@@ -1883,7 +2105,7 @@ export class Delivery {
     )
       this.#deps.store.retell(message.id, undefined);
     this.#deps.store.update(message.id, { state: 'unresolved' });
-    if (sentByRun(message) || isContinuation(message)) return;
+    if (runOwned(message) || isContinuation(message)) return;
     this.#notice(
       message,
       message.kind === 'prompt'
@@ -1905,7 +2127,7 @@ export class Delivery {
       if (
         agent === undefined ||
         message.from === 'you' ||
-        sentByRun(message) ||
+        runOwned(message) ||
         !this.#inFlight(message) ||
         this.#told.has(`waiting:${message.id}`)
       ) {
@@ -1942,7 +2164,8 @@ export class Delivery {
 
   /** A notice to a message's sender, about it: a record, never delivered as a turn. */
   #notice(message: Message, text: string, turn?: TurnResult, key?: string): void {
-    if (message.from === 'corrallm') return;
+    // B19 C1: nor is a queue hand-off's owner told: its run holds its item.
+    if (message.from === 'corrallm' || isQueueHandoff(message)) return;
     this.#deps.store.add(
       {
         from: 'corrallm',
@@ -1982,6 +2205,9 @@ export class Delivery {
     if (message.kind === 'prompt') return askFrame(this.#deps.nodes(), message);
     if (message.ask?.type === 'answer') return answerFrame(this.#deps.nodes(), message);
     const { from, id, replyTo, turn, body } = message;
+    // B19 C1: a queue hand-off is a task from another agent's queue, never the user's input.
+    if (isQueueHandoff(message))
+      return `[corrallm] Task from agent ${quotedParty(this.#deps.nodes(), from)} (from its queue: an agent, not the user; message ${id}):\n${body}`;
     const agent = agentOf(from);
     const outside = outsideOf(from);
     const [who, what] =
@@ -2048,6 +2274,18 @@ export class Delivery {
   }
 }
 
+/** What a queue hand-off its run holds no attempt for ends with (B19 C1): never sent. */
+const STALE_HANDOFF: TurnResult = {
+  status: 'cancelled',
+  reason: 'interrupted',
+  message: 'Its queue’s run no longer holds the task it was for, so it was never sent.',
+};
+
+/** Whether `task` names the attempt `of`. */
+function sameTask(task: TaskMessage | undefined, of: TaskMessage): boolean {
+  return task?.attempt === of.attempt && task.agent === of.agent && task.item === of.item;
+}
+
 /** Whether a message is the record of how an ask ended, sent its asker (B21 C6). */
 function isAskEnd(message: Message): boolean {
   return message.settled !== undefined && 'ask' in message.settled;
@@ -2065,7 +2303,7 @@ function killedText(
   nodes: readonly CanvasNode[],
   message: Message,
   by: PartyId,
-  why: Exclude<TakeBackWhy, 'withdrawn' | 'task stopped'>,
+  why: Exclude<TakeBackWhy, 'withdrawn' | 'task stopped' | 'run stopped'>,
 ): string {
   const [whom, own, killed] =
     why === 'recipient killed'

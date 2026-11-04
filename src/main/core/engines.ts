@@ -34,7 +34,7 @@ import { HandoffStore } from './delivery/handoffs';
 import type { HandoffTable } from './delivery/handoffs';
 import { LoopStore } from './delivery/loops';
 import type { LoopTable } from './delivery/loops';
-import { capBody, MessageStore, sentByRun } from './delivery/messages';
+import { capBody, MessageStore, runOwned } from './delivery/messages';
 import type { MessageTable, Staged } from './delivery/messages';
 import { WithdrawalNotes } from './delivery/withdrawals';
 import { ReadPositions } from './delivery/reads';
@@ -371,8 +371,9 @@ export class Engines {
     const messages = store.active().filter(
       (message) =>
         message.kind === 'text' &&
-        // The run's own sends tell no sender: the run holds their tasks.
-        !sentByRun(message) &&
+        // The run's own sends, and its queue hand-offs (B19 C1), tell no sender: the run holds
+        // their tasks.
+        !runOwned(message) &&
         message.to === agentParty(agent) &&
         message.delivery !== undefined &&
         ids.includes(message.delivery.as) &&
@@ -421,9 +422,10 @@ export class Engines {
     );
     if (this.#running.has(canvas)) {
       const open = this.#canvases.get(canvas);
-      // B21 C7: a task's continuation in it is that task's attempt's turn too, retried as one.
+      // B21 C7: a task's continuation in it is that task's attempt's turn too, retried as one;
+      // and B19 C1: a queue hand-off is its owner's attempt's, retried as its owner's.
       const attempts = (open?.messages.active() ?? []).flatMap((message) =>
-        (sentByRun(message) || isContinuation(message)) &&
+        (runOwned(message) || isContinuation(message)) &&
         message.task !== undefined &&
         message.to === agentParty(agent) &&
         message.delivery !== undefined &&
@@ -710,9 +712,9 @@ export class Engines {
     const originals = store.all().filter(
       (m) =>
         m.kind === 'text' &&
-        // The run retries its own attempts (retryAttempt), and a task's continuation with its
-        // attempt (B21 C7): never copied as a party's.
-        !sentByRun(m) &&
+        // The run retries its own attempts (retryAttempt), its queue hand-offs (B19 C1) and a
+        // task's continuation with its attempt (B21 C7): never copied as a party's.
+        !runOwned(m) &&
         !isContinuation(m) &&
         m.to === agentParty(agent) &&
         m.delivery &&
@@ -744,7 +746,7 @@ export class Engines {
     const runIds = new Set(
       store
         .all()
-        .filter(sentByRun)
+        .filter(runOwned)
         .flatMap((m) => (m.delivery === undefined ? [] : [m.delivery.as])),
     );
     for (const input of request.inputs) {
@@ -1107,6 +1109,14 @@ export class Engines {
         // run prompt whose in-flight state was not kept. RunStore holds that attempt in Needs.
         const problem = journal.problem(canvas);
         if (problem !== undefined) throw new Error(problem);
+      },
+      // B19 C1: its queue hand-offs are its delivery's to deliver, recorded pending with the run.
+      // The run starts no task before its delivery is composed below (it is restored paused).
+      handOffs: {
+        record: (send) => (running.delivery as Delivery | undefined)?.handOff(send),
+        withdraw: (task) => {
+          (running.delivery as Delivery | undefined)?.withdrawHandOff(task);
+        },
       },
       // Each attempt the run sends is a message first, written with the run (B11 Design §3); the
       // first to an agent since a switch carries its handoff (B11a C7).

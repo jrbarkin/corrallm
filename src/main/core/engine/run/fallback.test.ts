@@ -160,22 +160,37 @@ describe('the fallback rule (B11a C3)', () => {
     expect(run.where()).toEqual({ a: 'running hand', b: 'done' });
   });
 
-  it('keeps warn, ask and wait on the queue owner’s backend, as built', () => {
-    const gate = admission();
-    const run = setup(
+  it('reads warn, ask and wait against a hand-off’s recipient, never its owner (B19 C1)', () => {
+    const owners = setup(
       [
         agent('a', [{ id: 'hand', message: 'Review this', target: 'b' }]),
         agent('b', [], 'codex.terminal'),
       ],
       manual,
       new Set(),
-      gate,
+      admission(),
     );
-    run.rule({ ...FALLBACK, action: 'ask' });
-    run.reading(fiveHour(90));
-    run.store.start();
-    expect(run.where()).toEqual({ a: 'asking hand', b: 'done' });
-    expect(run.sent).toEqual([]);
+    // Claude, which a spends, is over its rule's share; Codex, which b spends, isn't.
+    owners.rule({ ...FALLBACK, action: 'ask' });
+    owners.reading(fiveHour(90));
+    owners.store.start();
+    expect(owners.where()).toEqual({ a: 'running hand', b: 'done' });
+    expect(owners.sent.map(({ agent: to }) => to)).toEqual(['b']);
+    const recipients = setup(
+      [
+        agent('a', [{ id: 'hand', message: 'Review this', target: 'b' }]),
+        agent('b', [], 'codex.terminal'),
+      ],
+      manual,
+      new Set(),
+      admission(),
+    );
+    recipients.rule({ ...FALLBACK, action: 'ask' }, 'codex');
+    recipients.reading(fiveHour(90), 'codex');
+    recipients.store.start();
+    expect(recipients.where()).toEqual({ a: 'asking hand', b: 'done' });
+    expect(recipients.store.snapshot().agents.a?.usage).toMatchObject({ backend: 'codex' });
+    expect(recipients.sent).toEqual([]);
   });
 });
 
