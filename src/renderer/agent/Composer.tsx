@@ -25,6 +25,12 @@ import type {
 export interface ComposerControls {
   /** Sends a message, with the images pasted into it. */
   send: (text: string, images?: MessageImage[]) => void;
+  /**
+   * Why a message can't go as written, if the view knows before it is sent (for one it would offer
+   * to continue elsewhere: its images the destination refuses). Then it is not sent, and the draft
+   * and its images stay, with the reason shown.
+   */
+  refuses?: (text: string, images: MessageImage[]) => string | undefined;
   stop: () => void;
   unqueue: (queuedId: string) => void;
   setMode: (mode: Mode) => void;
@@ -82,6 +88,7 @@ export function Composer({
   above,
   commands = session.commands,
   initialDraft = '',
+  initialImages = [],
 }: {
   agentName: string;
   agent: AdapterId;
@@ -97,10 +104,17 @@ export function Composer({
   commands?: readonly SlashCommand[] | undefined;
   /** What its box starts with (a message rewound to, back to edit). */
   initialDraft?: string;
+  /** The images its box starts with (a continuation the core refused, back to correct). */
+  initialImages?: readonly MessageImage[];
 }) {
   const [draft, setDraft] = useState(initialDraft);
   const [caret, setCaret] = useState(0);
-  const [images, setImages] = useState<Attachment[]>([]);
+  const [images, setImages] = useState<Attachment[]>(() =>
+    initialImages.map((image) => ({
+      ...image,
+      url: `data:${image.mediaType};base64,${image.data}`,
+    })),
+  );
   const [problem, setProblem] = useState<string>();
   /** The mode that never asks it asks the user to confirm, picked from the mode menu. */
   const [confirming, setConfirming] = useState<Mode>();
@@ -212,6 +226,11 @@ export function Composer({
   const submit = (text = draft) => {
     if (text.trim() === '' && images.length === 0) return;
     const attachments = images.map(({ mediaType, data }) => ({ mediaType, data }));
+    const reason = controls.refuses?.(text, attachments);
+    if (reason !== undefined) {
+      setProblem(reason);
+      return;
+    }
     void flushDrafts(() => {
       controls.send(text, attachments);
     }).catch((error: unknown) => {

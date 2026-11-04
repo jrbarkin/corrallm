@@ -7,6 +7,8 @@ import type { Implementations, OpServices } from '.';
 
 /** What you are told when the remembered sites can't be read: a fixed sentence, no value. */
 const LINKS_UNREADABLE = 'corrallm couldn’t read the sites you said to open without asking.';
+/** What any reader is told when the settings can't be read: never the error, which names a file. */
+const SETTINGS_UNREADABLE = 'corrallm couldn’t read your settings.';
 
 /**
  * The app's settings (Core Server §4 A), and whether corrallm's MCP server listens on the port they
@@ -31,10 +33,16 @@ export function settingsOps({
 }: OpServices): Pick<Implementations, 'settings.get' | 'settings.set'> {
   return {
     'settings.get': async (_args, ctx) => {
-      const kept = await settings.get();
       const status = api();
-      // Stopped (or not yet started), it keeps the port it will listen on, if it keeps one.
-      const port = status.port ?? (await settings.apiPort()) ?? null;
+      let kept: Awaited<ReturnType<typeof settings.get>>;
+      let port: number | null;
+      try {
+        kept = await settings.get();
+        // Stopped (or not yet started), it keeps the port it will listen on, if it keeps one.
+        port = status.port ?? (await settings.apiPort()) ?? null;
+      } catch {
+        throw new OpFailure('unavailable', SETTINGS_UNREADABLE);
+      }
       const base = {
         defaultAdapter: kept.defaultAdapter,
         consents: kept.consents,

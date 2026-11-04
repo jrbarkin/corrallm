@@ -16,6 +16,7 @@ import { sessionView } from '../../shared/model/views';
 import type { MessageView } from '../../shared/model/views';
 import { AgentId } from '../../shared/api/ids';
 import { catalog } from '../catalog';
+import type { SessionFeatures } from '../../shared/features';
 import { ApiError } from '../api/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { useDisplayedSession } from './sessions';
@@ -485,4 +486,18 @@ it('keeps a Try again startup refusal in its core session, while reporting other
   await Promise.resolve();
   expect(failed).toHaveBeenCalledExactlyOnceWith(invalid);
   core.dispose();
+});
+
+it('shows the features its summary projects, and none while no generation is ready', () => {
+  const features: SessionFeatures = {
+    role: 'append',
+    resume: true,
+    list: true,
+    live: { effort: false, stopTask: false },
+    panels: { mcp: { changes: [] } },
+  };
+  const ready = sessionView(AgentId.parse('a'), connection, { ...NEW_SESSION, features });
+  expect(sessionDisplay(ready.summary, ready).features).toEqual(features);
+  const waiting = sessionView(AgentId.parse('a'), connection, NEW_SESSION);
+  expect(sessionDisplay(waiting.summary, waiting).features ?? null).toBeNull();
 });

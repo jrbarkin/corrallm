@@ -18,7 +18,12 @@ import {
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { ComponentProps, MouseEvent as ReactMouseEvent, SyntheticEvent } from 'react';
+import type {
+  ComponentProps,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  SyntheticEvent,
+} from 'react';
 
 import { absolutePosition, groupColors } from '../../shared/model/geometry';
 import { nodeView } from './flow';
@@ -44,7 +49,8 @@ import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
 import { settingsChange } from '../agent/settings-change';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
-import { catalog, continuesIn } from '../catalog';
+import { connectionIn } from '../../shared/adapter';
+import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { draftCall, flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
@@ -84,6 +90,7 @@ import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
 import type { TemplateInfo } from '../../shared/templates';
 import { StartSession } from './StartSession';
+import { SettingsPage } from '../settings/SettingsPage';
 import { CanvasMenu } from './CanvasMenu';
 import { RunFloat, ZoomFloat } from './Floats';
 import { Dock } from './Dock';
@@ -116,6 +123,15 @@ const PAN_BUTTONS = [1, 2];
 const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
 
 type Command = Exclude<KeyAction, 'rename'>;
+
+/** A foreground Settings covers: unreachable by keyboard or pointer meanwhile, layout unchanged. */
+function Covered({ by, children }: { by: boolean; children: ReactNode }) {
+  return (
+    <div style={{ display: 'contents' }} inert={by}>
+      {children}
+    </div>
+  );
+}
 
 /**
  * The editor, with a file bar backed by core operations, agents whose sessions the core runs (their
@@ -331,6 +347,8 @@ function Editor({
     [preferredEndpoint],
   );
   const [gallery, setGallery] = useState<boolean | TemplateInfo>(false);
+  /** Settings, if shown: local navigation only; `opener` gets focus back when it closes. */
+  const [settingsPage, setSettingsPage] = useState<{ opener: HTMLElement | null }>();
   const [startChoice, setStartChoice] = useState<{ canvas: CanvasId; open: boolean }>();
   const showStart =
     canonical !== undefined &&
@@ -448,6 +466,7 @@ function Editor({
   const modal =
     adding !== undefined ||
     showStart ||
+    settingsPage !== undefined ||
     front !== undefined ||
     work !== undefined ||
     drawn !== undefined ||
@@ -1015,6 +1034,26 @@ function Editor({
     if (menuNode) act(controls.resumeGroup(menuNode.id));
   };
 
+  /** Opening and closing Settings flush drafts first and send no operation. */
+  const openSettingsPage = (opener: HTMLElement | null) => {
+    // The agent chooser is a modal question about an Add under way: Settings does not open over it.
+    if (adding !== undefined) return;
+    void flushDrafts(() => {
+      setSettingsPage({ opener });
+    }).catch((error: unknown) => {
+      setProblem(ipcErrorMessage(error));
+    });
+  };
+  const closeSettingsPage = () => {
+    const opener = settingsPage?.opener;
+    void flushDrafts(() => {
+      setSettingsPage(undefined);
+      opener?.focus();
+    }).catch((error: unknown) => {
+      setProblem(ipcErrorMessage(error));
+    });
+  };
+
   return (
     <GraphContext
       inert={restoring}
@@ -1087,7 +1126,9 @@ function Editor({
           </p>
         )}
         <ReactFlow
-          inert={showStart || front !== undefined || queues !== undefined}
+          inert={
+            showStart || settingsPage !== undefined || front !== undefined || queues !== undefined
+          }
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -1328,8 +1369,10 @@ function Editor({
               }}
               onExamples={() => {
                 setStartChoice({ canvas: canvasId, open: false });
+                setSettingsPage(undefined);
                 setGallery(true);
               }}
+              onSettings={openSettingsPage}
               onDismiss={() => {
                 setProblem(undefined);
                 setDismissed(
@@ -1365,6 +1408,7 @@ function Editor({
                 onReply={commands.reply}
                 nodes={model.nodes}
                 onOpen={(agentId) => {
+                  setSettingsPage(undefined);
                   setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
                   setOpened({ ids: [agentId] });
@@ -1399,6 +1443,7 @@ function Editor({
             queues={queues !== undefined}
             onToggleQueues={() => {
               void flushDrafts(() => {
+                setSettingsPage(undefined);
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues((current) => (current ? undefined : front ? { from: front } : {}));
               }).catch((error: unknown) => {
@@ -1407,6 +1452,7 @@ function Editor({
             }}
             onOpen={(id) => {
               void flushDrafts(() => {
+                setSettingsPage(undefined);
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
@@ -1416,87 +1462,92 @@ function Editor({
               });
             }}
             onStart={() => {
+              setSettingsPage(undefined);
               setStartChoice({ canvas: canvasId, open: true });
             }}
+            onSettings={openSettingsPage}
           />
         </div>
         {openedNode && frontControls && !showStart && (
-          <AgentView
-            key={openedNode.id}
-            opening={opened}
-            node={openedNode}
-            queueState={queueControlText(run, openedNode.id)}
-            onAgentContextMenu={(event) => {
-              showAgentMenu(event, openedNode.id);
-            }}
-            nodes={displayNodes}
-            origin={openedCard}
-            from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
-            openingDuration={opened.from?.duration}
-            stack={stack}
-            onNewAgent={(relation, from) => {
-              perform(
-                api.canvasSpawnAgent({ canvas: canvasId, from: openedNode.id, relation }),
-                (result) => {
-                  if ('id' in result) {
-                    selectOne(result.id);
-                    setOpened(({ ids }) => ({
-                      ids: [result.id, ...ids],
-                      from: { id: result.id, rect: from },
-                    }));
-                  }
-                },
-              );
-            }}
-            onSwitch={(id, from) => {
-              selectOne(id);
-              setOpened(({ ids }) => ({
-                ids: [id, ...ids.filter((other) => other !== id)],
-                from: { id, rect: from },
-              }));
-            }}
-            onRename={(label) => {
-              perform(api.canvasRename({ canvas: canvasId, node: openedNode.id, label }));
-            }}
-            connection={connectionOf(openedNode.data)}
-            project={project}
-            terminal={terminalBackend}
-            onAgent={(agent, connection) => {
-              // The foreground session's connection chooser is a single composite. The settings
-              // sheet still changes only the document; X13 takes over these session controls.
-              perform(
-                agent === agentAdapter(openedNode.data)
-                  ? api.sessionContinueIn({ canvas: canvasId, agent: openedNode.id, connection })
-                  : changeAgent(openedNode.id, agent, connection),
-              );
-            }}
-            onOpenSettings={() => {
-              setSettingsAgent(openedNode.id);
-            }}
-            onContinueInTerminal={(command, images) => {
-              const connection = continuesIn(connectionOf(openedNode.data));
-              if (connection !== undefined)
-                act(
-                  api.sessionContinueIn({
-                    canvas: canvasId,
-                    agent: openedNode.id,
-                    connection,
-                    ...(command === undefined
-                      ? {}
-                      : { then: { text: command, ...(images?.length ? { images } : {}) } }),
-                  }),
+          <Covered by={settingsPage !== undefined}>
+            <AgentView
+              key={openedNode.id}
+              opening={opened}
+              node={openedNode}
+              queueState={queueControlText(run, openedNode.id)}
+              onAgentContextMenu={(event) => {
+                showAgentMenu(event, openedNode.id);
+              }}
+              nodes={displayNodes}
+              origin={openedCard}
+              from={opened.from?.id === openedNode.id ? opened.from.rect : undefined}
+              openingDuration={opened.from?.duration}
+              stack={stack}
+              onNewAgent={(relation, from) => {
+                perform(
+                  api.canvasSpawnAgent({ canvas: canvasId, from: openedNode.id, relation }),
+                  (result) => {
+                    if ('id' in result) {
+                      selectOne(result.id);
+                      setOpened(({ ids }) => ({
+                        ids: [result.id, ...ids],
+                        from: { id: result.id, rect: from },
+                      }));
+                    }
+                  },
                 );
-            }}
-            edits={edits}
-            marks={marks}
-            ask={asks.find((ask) => ask.agent.id === openedNode.id)}
-            onShowQueues={() => {
-              setQueues({ from: openedNode.id });
-            }}
-            session={frontSession}
-            controls={frontControls}
-            onClose={closeOpened}
-          />
+              }}
+              onSwitch={(id, from) => {
+                selectOne(id);
+                setOpened(({ ids }) => ({
+                  ids: [id, ...ids.filter((other) => other !== id)],
+                  from: { id, rect: from },
+                }));
+              }}
+              onRename={(label) => {
+                perform(api.canvasRename({ canvas: canvasId, node: openedNode.id, label }));
+              }}
+              connection={connectionOf(openedNode.data)}
+              project={project}
+              terminal={terminalBackend}
+              onAgent={(agent, connection) => {
+                // The foreground session's connection chooser is a single composite. The settings
+                // sheet still changes only the document; X13 takes over these session controls.
+                perform(
+                  agent === agentAdapter(openedNode.data)
+                    ? api.sessionContinueIn({ canvas: canvasId, agent: openedNode.id, connection })
+                    : changeAgent(openedNode.id, agent, connection),
+                );
+              }}
+              onOpenSettings={() => {
+                setSettingsAgent(openedNode.id);
+              }}
+              onContinue={(request, connection, command, images) => {
+                // The target the offer named, if this build has it.
+                if (connectionIn(catalog(), connection) === undefined) return undefined;
+                const call = api.sessionContinueIn({
+                  canvas: canvasId,
+                  agent: openedNode.id,
+                  connection,
+                  request,
+                  ...(command === undefined
+                    ? {}
+                    : { then: { text: command, ...(images?.length ? { images } : {}) } }),
+                });
+                act(call);
+                return call;
+              }}
+              edits={edits}
+              marks={marks}
+              ask={asks.find((ask) => ask.agent.id === openedNode.id)}
+              onShowQueues={() => {
+                setQueues({ from: openedNode.id });
+              }}
+              session={frontSession}
+              controls={frontControls}
+              onClose={closeOpened}
+            />
+          </Covered>
         )}
         {work && (
           <WorkDetail
@@ -1510,110 +1561,119 @@ function Editor({
           />
         )}
         {queues && (
-          <QueuesView
-            reports={reports}
-            renderPrompts={(agent) =>
-              coreNeeds?.items
-                .filter((item) => item.agent === agent && item.prompt)
-                .map((item) => (
-                  <OwnedPrompt
-                    key={item.id}
-                    item={item}
-                    mirror={mirror}
-                    onReply={(answer) => commands.reply(item.id, answer)}
-                    onOpen={(id) => {
-                      setQueues(undefined);
-                      selectOne(id);
-                      setOpened({ ids: [id] });
-                    }}
-                  />
-                ))
-            }
-            nodes={displayNodes}
-            sessions={sessions}
-            run={run}
-            edits={edits}
-            gauges={gauges}
-            onRun={() => {
-              void flushDrafts(() => controls.start()).catch((error: unknown) => {
-                setProblem(ipcErrorMessage(error));
-              });
-            }}
-            onStop={() => {
-              act(controls.stop());
-            }}
-            onResume={() => {
-              act(controls.resume());
-            }}
-            onAgentContextMenu={showAgentMenu}
-            onOpenSettings={setSettingsAgent}
-            settingsOptions={(adapter, agent) => sessionOptions(api, canvasId, adapter, agent)}
-            {...(queues.from === undefined ? {} : { focus: queues.from })}
-            backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
-            onOpenAgent={(id) => {
-              setQueues(undefined);
-              selectOne(id);
-              setOpened({ ids: [id] });
-            }}
-            onClose={closeQueues}
-          />
+          <Covered by={settingsPage !== undefined}>
+            <QueuesView
+              reports={reports}
+              renderPrompts={(agent) =>
+                coreNeeds?.items
+                  .filter((item) => item.agent === agent && item.prompt)
+                  .map((item) => (
+                    <OwnedPrompt
+                      key={item.id}
+                      item={item}
+                      mirror={mirror}
+                      onReply={(answer) => commands.reply(item.id, answer)}
+                      onOpen={(id) => {
+                        setQueues(undefined);
+                        selectOne(id);
+                        setOpened({ ids: [id] });
+                      }}
+                    />
+                  ))
+              }
+              nodes={displayNodes}
+              sessions={sessions}
+              run={run}
+              edits={edits}
+              gauges={gauges}
+              onRun={() => {
+                void flushDrafts(() => controls.start()).catch((error: unknown) => {
+                  setProblem(ipcErrorMessage(error));
+                });
+              }}
+              onStop={() => {
+                act(controls.stop());
+              }}
+              onResume={() => {
+                act(controls.resume());
+              }}
+              onAgentContextMenu={showAgentMenu}
+              onOpenSettings={setSettingsAgent}
+              settingsOptions={(adapter, agent) => sessionOptions(api, canvasId, adapter, agent)}
+              {...(queues.from === undefined ? {} : { focus: queues.from })}
+              backLabel={queues.from === undefined ? 'Canvas' : nameOf(queues.from)}
+              onOpenAgent={(id) => {
+                setQueues(undefined);
+                selectOne(id);
+                setOpened({ ids: [id] });
+              }}
+              onClose={closeQueues}
+            />
+          </Covered>
         )}
         {adding && (
-          <AddAgentChooser
-            client={api}
-            mirror={mirror}
-            installed={installed}
-            onClose={() => {
-              setAdding(undefined);
-            }}
-            onPick={(endpoint) => {
-              adding.choose(endpoint);
-              setAdding(undefined);
-            }}
-          />
+          <Covered by={settingsPage !== undefined}>
+            <AddAgentChooser
+              client={api}
+              mirror={mirror}
+              installed={installed}
+              onClose={() => {
+                setAdding(undefined);
+              }}
+              onPick={(endpoint) => {
+                adding.choose(endpoint);
+                setAdding(undefined);
+              }}
+            />
+          </Covered>
         )}
         {showStart && !gallery && !adding && (
-          <StartSession
-            client={api}
-            canvas={canvasId}
-            mirror={mirror}
-            project={project}
-            installed={installed}
-            onChooseProject={commands.chooseProject}
-            onClose={() => {
-              setStartChoice({ canvas: canvasId, open: false });
-            }}
-            onTemplate={(template) => {
-              setStartChoice({ canvas: canvasId, open: false });
-              setGallery(template);
-            }}
-            onShow={async (id) => {
-              await commands.show(id);
-              if (binding.canvas !== id) throw new Error('The recent canvas was not shown.');
-              setStartChoice({ canvas: id, open: false });
-            }}
-            onStart={async (adapter, connection, from) => {
-              await flushDrafts();
-              const box = wrapper.current?.getBoundingClientRect();
-              const at = box
-                ? screenToFlowPosition({
-                    x: box.left + box.width / 2,
-                    y: box.top + box.height / 2,
-                  })
-                : { x: 0, y: 0 };
-              const result = await api.canvasAddAgent({
-                canvas: canvasId,
-                at,
-                adapter,
-                connection,
-              });
-              if (binding.canvas !== canvasId || !('id' in result)) return;
-              setStartChoice({ canvas: canvasId, open: false });
-              selectOne(result.id);
-              setOpened({ ids: [result.id], from: { id: result.id, rect: from, duration: 440 } });
-            }}
-          />
+          <Covered by={settingsPage !== undefined}>
+            <StartSession
+              client={api}
+              canvas={canvasId}
+              mirror={mirror}
+              project={project}
+              installed={installed}
+              onChooseProject={commands.chooseProject}
+              onClose={() => {
+                setStartChoice({ canvas: canvasId, open: false });
+              }}
+              onTemplate={(template) => {
+                setSettingsPage(undefined);
+                setStartChoice({ canvas: canvasId, open: false });
+                setGallery(template);
+              }}
+              onShow={async (id) => {
+                await commands.show(id);
+                if (binding.canvas !== id) throw new Error('The recent canvas was not shown.');
+                setStartChoice({ canvas: id, open: false });
+              }}
+              onStart={async (adapter, connection, from) => {
+                await flushDrafts();
+                setSettingsPage(undefined);
+                const box = wrapper.current?.getBoundingClientRect();
+                const at = box
+                  ? screenToFlowPosition({
+                      x: box.left + box.width / 2,
+                      y: box.top + box.height / 2,
+                    })
+                  : { x: 0, y: 0 };
+                const result = await api.canvasAddAgent({
+                  canvas: canvasId,
+                  at,
+                  adapter,
+                  connection,
+                });
+                if (binding.canvas !== canvasId || !('id' in result)) return;
+                setStartChoice({ canvas: canvasId, open: false });
+                selectOne(result.id);
+                setOpened({ ids: [result.id], from: { id: result.id, rect: from, duration: 440 } });
+              }}
+            />
+          </Covered>
         )}
+        {settingsPage && <SettingsPage client={api} mirror={mirror} onClose={closeSettingsPage} />}
         {gallery && (
           <ExampleGallery
             preferredEndpoint={preferredEndpoint}

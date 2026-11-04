@@ -42,3 +42,10 @@ export function jobActionName(id: AdapterId, job: string): string {
   if (!action) throw new Error(`The test catalog's ${id} has no action for the ${job} job.`);
   return action.name;
 }
+
+/** The title the catalog declares for an adapter's first consent, as Settings lists it. */
+export function consentTitle(id: AdapterId): string {
+  const consent = adapterIn(catalog, id)?.consents?.[0];
+  if (!consent) throw new Error(`The test catalog's ${id} declares no consent.`);
+  return consent.title;
+}

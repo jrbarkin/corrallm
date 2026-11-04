@@ -31,11 +31,6 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 
 /** Today's offenders, by file: how many names each has. */
 const ALLOWED: Readonly<Record<string, number>> = {
-  // B16: continuation, terminal-only interception and its notices still use native connection identity; descriptor wiring must preserve command precedence and session continuity.
-  'src/renderer/agent/AgentView.tsx': 21,
-  // B16: the native terminal command table and shell interpretation move to continuation descriptors; deleting them now would send interactive commands to a structured session.
-  'src/renderer/agent/commands.ts': 15,
-
   // B16: NEW_LINE still encodes one native Shift+Enter binding; only recorded per-connection keys can replace it without guessing input bytes.
   'src/renderer/terminal/screen.ts': 4,
   // B16: rewindPoints still filters by one native conversation owner; another connection needs proven rewind identifiers and effective support.
