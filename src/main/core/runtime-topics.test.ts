@@ -138,6 +138,8 @@ async function start(
       sessions: {
         // Its agent callers are made up: no session authority issued them.
         callers: () => true,
+        // Its fake connector takes no route to corrallm's server, so none is issued or missed.
+        api: { 'codex.app-server': null },
         connectors: { 'codex.app-server': connector },
         environment: () => Promise.resolve({}),
       },

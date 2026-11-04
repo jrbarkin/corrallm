@@ -96,6 +96,10 @@ const UNHEARD = 'corrallm declined this request: nothing in corrallm hears what 
 /** What a session's transcript says, once, when its connection takes corrallm's server but none was issued. */
 const NO_API =
   'corrallm’s MCP server isn’t listening, so this session started without corrallm’s tools.';
+/** How many agents' last tool lists the manager keeps, to tell a resumed session of a change. */
+const TOOL_LISTS = 4096;
+/** How many tool names a change names, before counting the rest. */
+const TOOLS_NAMED = 8;
 /** How long a session may take to close before the manager stops waiting for it. */
 const CLOSE_MS = 5000;
 /** All connections have this long to spawn, handshake and finish their first ready state. */
@@ -225,9 +229,12 @@ export interface SessionManagerDeps {
    * agents call corrallm's MCP server by: asked for each generation's as it launches, after its
    * folder is admitted and its conversation claimed, before its connector starts; told each
    * generation's end beside every end of its prompts, as its close begins. None: no session gets
-   * corrallm's server.
+   * corrallm's server. Its `route`, where it has one, says which connections take a route (the
+   * catalog's descriptors otherwise): a session it issued none for says why only on those.
    */
-  api?: Pick<AgentApi, 'issue' | 'revoke'>;
+  api?: Pick<AgentApi, 'issue' | 'revoke'> & {
+    route?: (connection: ConnectionId) => 'http' | 'channel' | null;
+  };
   /** Sends a terminal event to the view showing the canvas's agent's terminal. */
   terminal?: (canvas: CanvasId, agentId: string, event: TerminalEvent) => void;
   /** The live claims on native conversations (claims.ts): the core's one, else the manager's own. */
@@ -342,6 +349,12 @@ export class SessionManager {
   /** Successful native claims recorded by this core, independent of the live lock's lifetime. */
   readonly #started = new Map<CanvasId, Map<string, Set<string>>>();
   readonly #claims: ConversationClaims;
+  /**
+   * The names of corrallm's tools each agent's last session was issued, by canvas and agent, in
+   * this core (B21 §9.2 C3): a resumed session whose own differ says so in its transcript. At most
+   * TOOL_LISTS agents' lists, the oldest forgotten first.
+   */
+  readonly #tools = new Map<string, readonly string[]>();
   /**
    * The sessions whose close has begun but not finished, by canvas and agent, however long after
    * the manager stopped waiting for them: a writer may still run there (`closing`).
@@ -958,6 +971,42 @@ export class SessionManager {
     (await this.#running(canvas, agentId))?.terminal?.resize(cols, rows);
   }
 
+  /**
+   * Keeps the names of corrallm's tools `tools` as the agent's last session's, and says how they
+   * differ from the previous session's when this one resumes its conversation (B21 §9.2 C3): a
+   * promotion's new tools, or a removed one, which the CLI lists afresh as it starts. Nothing for a
+   * new conversation, the agent's first session in this core, or the same tools.
+   */
+  #toolsChanged(
+    canvas: CanvasId,
+    agentId: string,
+    tools: readonly { name: string }[],
+    resumed: boolean,
+  ): string | undefined {
+    const key = `${canvas}\u0000${agentId}`;
+    const before = this.#tools.get(key);
+    const now = tools.map((tool) => tool.name).sort();
+    this.#tools.delete(key);
+    this.#tools.set(key, now);
+    if (this.#tools.size > TOOL_LISTS) {
+      const [oldest] = this.#tools.keys();
+      if (oldest !== undefined) this.#tools.delete(oldest);
+    }
+    if (!resumed || before === undefined) return undefined;
+    const added = now.filter((name) => !before.includes(name));
+    const removed = before.filter((name) => !now.includes(name));
+    if (added.length === 0 && removed.length === 0) return undefined;
+    const named = (names: string[]) =>
+      names.length > TOOLS_NAMED
+        ? `${names.slice(0, TOOLS_NAMED).join(', ')} and ${String(names.length - TOOLS_NAMED)} more`
+        : names.join(', ');
+    const parts = [
+      ...(added.length === 0 ? [] : [`added ${named(added)}`]),
+      ...(removed.length === 0 ? [] : [`removed ${named(removed)}`]),
+    ];
+    return `corrallm’s tools changed since this agent’s last session: ${parts.join('; ')}.`;
+  }
+
   /** Ends an agent's session, if it runs. Its id is kept: starting it again resumes it. */
   async close(canvas: CanvasId, agentId: string): Promise<void> {
     const agent = this.#agents.get(canvas)?.get(agentId);
@@ -1250,11 +1299,14 @@ export class SessionManager {
             connection,
           })
         : undefined;
+      const authority = this.#deps.api;
       if (
         api === undefined &&
-        this.#deps.api !== undefined &&
+        authority !== undefined &&
         live() &&
-        (connectionIn(this.#deps.catalog, connection)?.connection.api ?? null) !== null
+        (authority.route === undefined
+          ? (connectionIn(this.#deps.catalog, connection)?.connection.api ?? null)
+          : authority.route(connection)) !== null
       ) {
         this.#deps.emit(canvas, agentId, connection, {
           type: 'notice',
@@ -1262,6 +1314,17 @@ export class SessionManager {
           level: 'warning',
           text: NO_API,
         });
+      }
+      if (api !== undefined) {
+        const changed = this.#toolsChanged(canvas, agentId, api.tools, resume !== null);
+        if (changed !== undefined) {
+          this.#deps.emit(canvas, agentId, connection, {
+            type: 'notice',
+            id: randomUUID(),
+            level: 'info',
+            text: changed,
+          });
+        }
       }
       const session = await this.#start(
         connector,

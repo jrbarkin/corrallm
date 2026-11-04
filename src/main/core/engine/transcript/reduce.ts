@@ -84,6 +84,29 @@ export type SessionAction =
    */
   | { type: 'clear' };
 
+/**
+ * Whether a session's change was only a streamed word or thought (a `stream` action): it appends to
+ * a text or thinking entry and changes nothing else (the session's status, its queue, its user
+ * messages, its mode and its prompts stay as they were), so what reads only those need not look
+ * again. A reply streams many, and under load many arrive in one turn of the event loop. A change
+ * no action made (`undefined`) is never one.
+ */
+export function streamed(action: SessionAction | undefined): boolean {
+  return action?.type === 'stream';
+}
+
+/**
+ * `entries` with entry `id` replaced by what `change` makes of it (entry ids are unique), found from
+ * the newest: a reply streams its words, and a thought its seconds, into the last entries of what
+ * may be a long transcript, so each is one entry replaced and the rest copied as they are, never a
+ * callback per entry. A new list even where no entry has that id.
+ */
+function replaced(entries: readonly Entry[], id: string, change: (entry: Entry) => Entry): Entry[] {
+  const at = entries.findLastIndex((entry) => entry.id === id);
+  const entry = entries[at];
+  return entry === undefined ? [...entries] : entries.with(at, change(entry));
+}
+
 export function reduce(session: Session, action: SessionAction): Session {
   const update = (id: string, change: (entry: Entry) => Entry): Entry[] =>
     session.entries.map((entry) => {
@@ -144,11 +167,11 @@ export function reduce(session: Session, action: SessionAction): Session {
       };
     }
     case 'update':
-      return { ...session, entries: update(action.id, action.update) };
+      return { ...session, entries: replaced(session.entries, action.id, action.update) };
     case 'stream':
       return {
         ...session,
-        entries: update(action.id, (entry) =>
+        entries: replaced(session.entries, action.id, (entry) =>
           entry.kind === 'text' || entry.kind === 'thinking'
             ? { ...entry, text: entry.text + action.text }
             : entry,

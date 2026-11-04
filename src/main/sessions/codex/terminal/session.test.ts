@@ -690,6 +690,8 @@ it('its Terminal fake lists and calls the verified session entry with the shellâ
   const apiStart = (() => {
     const nth = ++calls;
     return Promise.resolve({
+      // The version its entry was recorded with (MIN_API_CODEX_VERSION).
+      version: '0.162.1',
       close,
       request: () =>
         Promise.resolve(

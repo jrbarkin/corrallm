@@ -224,8 +224,11 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   // Codex itself, its own agent, in the folder (trusted for this session), as a terminal; its
   // hooks trusted for the session (else it would stop at "Hooks need review").
   await expect.poll(starts).toHaveLength(1);
-  const [args] = await starts();
-  expect(args?.slice(0, 3)).toEqual(['--no-daemon', '-C', realpathSync(folder)]);
+  const [args = []] = await starts();
+  // After its session's corrallm entry (B21 C7), whose own e2e is agent-api.e2e.ts.
+  const at = args.indexOf('--no-daemon');
+  expect(args.slice(at, at + 3)).toEqual(['--no-daemon', '-C', realpathSync(folder)]);
+  expect(args.slice(0, at).some((arg) => arg.startsWith('mcp_servers.corrallm='))).toBe(true);
   const [start] = await logged();
   expect(start).toMatchObject({ cwd: realpathSync(folder), term: 'xterm-256color' });
   await codexReady();

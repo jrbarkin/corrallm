@@ -66,14 +66,14 @@ const directories: DirectoryResolver = {
   projectRoot: () => mintTrustedPath('/work/app'),
 };
 
-/** The shipped catalog, with `connection`'s descriptor declaring an `api` route. */
-function routed(connection: ConnectionId): Catalog {
+/** The shipped catalog, with `connection`'s descriptor declaring `api` (an http route, or none). */
+function routed(connection: ConnectionId, api: 'http' | null = 'http'): Catalog {
   return {
     ...CATALOG,
     adapters: CATALOG.adapters.map((adapter) => ({
       ...adapter,
       connections: adapter.connections.map((one) =>
-        one.id === connection ? { ...one, api: 'http' as const } : one,
+        one.id === connection ? { ...one, api } : one,
       ),
     })),
   };
@@ -175,7 +175,10 @@ describe('a session generation’s route', () => {
 
   it('is left out of the spec when the core issues none, and the session starts without it', async () => {
     const fake = fakeConnector();
-    const sessions = manager({ 'claude-code.sdk': logged(fake) }, { issue: () => undefined });
+    const sessions = manager(
+      { 'claude-code.sdk': logged(fake) },
+      { issue: () => undefined, catalog: routed('claude-code.sdk', null) },
+    );
     const canvas = newCanvasId();
     await sessions.start(canvas, 'b', SDK);
     expect(fake.started[0]).not.toHaveProperty('api');
@@ -324,5 +327,61 @@ describe('a session generation’s credential', () => {
     await closing.promise;
     expect(revokedBeforeClose).toBe(true);
     revokedBeside();
+  });
+});
+
+describe('a resumed session’s tools (§9.2 C3)', () => {
+  const grants = (...names: string[]) => names.map((name) => ({ name, destructive: false }));
+  // The fake's own notices (Resumed …) aside.
+  const notices = () =>
+    heard.flatMap(([, event]) =>
+      event.type === 'notice' && event.text.startsWith('corrallm’s tools') ? [event.text] : [],
+    );
+
+  it('are told once in its transcript when they differ from its last session’s, and never otherwise', async () => {
+    let tools = grants('agents', 'message', 'reply');
+    const fake = fakeConnector();
+    const sessions = manager(
+      { 'claude-code.sdk': logged(fake) },
+      { issue: (generation) => ({ ...ROUTE(generation), tools }) },
+    );
+    const canvas = newCanvasId();
+    // A new conversation: nothing to compare.
+    await sessions.start(canvas, 'b', SDK);
+    expect(fake.started.at(-1)?.resume).toBeNull();
+    await sessions.close(canvas, 'b');
+    // Resumed with the same tools: nothing said.
+    await sessions.start(canvas, 'b', SDK);
+    expect(fake.started.at(-1)?.resume).not.toBeNull();
+    expect(notices()).toEqual([]);
+    await sessions.close(canvas, 'b');
+    // Resumed after a promotion and a removal: said once, naming the change.
+    tools = grants('agents', 'ask', 'reply', 'team_add');
+    await sessions.start(canvas, 'b', SDK);
+    expect(notices()).toEqual([
+      'corrallm’s tools changed since this agent’s last session: added ask, team_add; removed message.',
+    ]);
+    await sessions.close(canvas, 'b');
+    await sessions.start(canvas, 'b', SDK);
+    expect(notices()).toHaveLength(1);
+    await sessions.closeEverything();
+  });
+
+  it('are named at most eight at a time, the rest counted', async () => {
+    let tools = grants('agents');
+    const fake = fakeConnector();
+    const sessions = manager(
+      { 'claude-code.sdk': logged(fake) },
+      { issue: (generation) => ({ ...ROUTE(generation), tools }) },
+    );
+    const canvas = newCanvasId();
+    await sessions.start(canvas, 'b', SDK);
+    await sessions.close(canvas, 'b');
+    tools = grants('agents', ...Array.from({ length: 10 }, (_, n) => `tool_${String(n)}`));
+    await sessions.start(canvas, 'b', SDK);
+    expect(notices()).toEqual([
+      'corrallm’s tools changed since this agent’s last session: added tool_0, tool_1, tool_2, tool_3, tool_4, tool_5, tool_6, tool_7 and 2 more.',
+    ]);
+    await sessions.closeEverything();
   });
 });

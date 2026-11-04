@@ -19,7 +19,7 @@ const SHELL_MS = 10_000;
  * with them would take itself for part of that.
  */
 const INHERITED = new Set([
-  ...ADAPTERS.flatMap((adapter) => adapter.inheritedEnv ?? []),
+  ...ADAPTERS.flatMap((adapter) => adapter.inheritedEnv ?? []).map((name) => name.toUpperCase()),
   'TERM_SESSION_ID',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
@@ -37,8 +37,8 @@ export function agentEnvironment(
     Object.entries(env).filter(
       (entry): entry is [string, string] =>
         entry[1] !== undefined &&
-        !INHERITED.has(entry[0]) &&
-        !INHERITED_PREFIXES.some((prefix) => entry[0].startsWith(prefix)),
+        !INHERITED.has(entry[0].toUpperCase()) &&
+        !INHERITED_PREFIXES.some((prefix) => entry[0].toUpperCase().startsWith(prefix)),
     ),
   );
   clean.CORRALLM_AGENT_SESSION = '1';

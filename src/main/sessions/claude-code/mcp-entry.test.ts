@@ -92,11 +92,11 @@ const called = (name: string) =>
     .map((h) => h.tool);
 
 describe("Claude Code · Terminal's corrallm entry (B21 C10)", () => {
-  it('keeps api null until the connection is turned on, and records its version', () => {
+  it('turns api on over http on this recording (C7), and records its version', () => {
     const connection = claudeCode.descriptor.connections.find(
       (one) => one.id === 'claude-code.terminal',
     );
-    expect((connection as { api?: unknown } | undefined)?.api ?? null).toBeNull();
+    expect(connection?.api).toBe('http');
     expect(fixture.recordedWith.claude).toBe('2.1.316');
     expect(fixture.minimumVersion).toBe('2.1.316');
   });

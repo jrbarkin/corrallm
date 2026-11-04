@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SessionApi } from '../connector';
 import { ClaudeCode } from './claude-code';
+import { channelApiReason } from './mcp-entry';
 
 const TOKEN = 'session-credential-canary';
 const API: Extract<SessionApi, { kind: 'http' }> = {
@@ -57,14 +58,42 @@ describe('Terminal session MCP entry', () => {
     >;
     expect(settings).toMatchObject({
       permissions: { allow: ['mcp__corrallm__probe_read'] },
-      allowedMcpServers: [{ serverName: 'corrallm' }],
       deniedMcpServers: API.off.map((serverName) => ({ serverName })),
     });
+    // No allowlist of its own where yours has none: one naming corrallm alone would block your
+    // other servers in this session (the recordings' entry, `settings`, has none).
+    expect(settings).not.toHaveProperty('allowedMcpServers');
     expect(JSON.stringify(settings)).not.toContain(TOKEN);
     const args = one.args({ dir, cwd: dir, id: null, resume: false, model: null, mode: null });
     expect(args).toContain(`--mcp-config=${file}`);
     expect(JSON.stringify(args)).not.toContain(TOKEN);
   });
+  it.each([
+    ['your user settings', (config: string) => path.join(config, 'settings.json')],
+    ['the project’s shared settings', () => path.join(dir, '.claude', 'settings.json')],
+    ['the project’s local settings', () => path.join(dir, '.claude', 'settings.local.json')],
+  ])(
+    'names corrallm in an MCP allowlist only where %s already hold one, which it joins (A5)',
+    async (_where, file) => {
+      const config = path.join(dir, 'config');
+      const where = file(config);
+      await mkdir(path.dirname(where), { recursive: true });
+      await writeFile(where, JSON.stringify({ allowedMcpServers: [{ serverName: 'github' }] }));
+      const one = new ClaudeCode({
+        cwd: dir,
+        home: dir,
+        env: { HOME: dir, CLAUDE_CONFIG_DIR: config },
+        managed: path.join(dir, 'managed'),
+        api: API,
+      });
+      await one.prepare(dir, hooks);
+      const settings = JSON.parse(
+        await readFile(path.join(dir, 'settings.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      expect(settings.allowedMcpServers).toEqual([{ serverName: 'corrallm' }]);
+      expect(one.api()).toEqual({ available: true });
+    },
+  );
   it.each(['managed-mcp.json', 'managed-settings.json', 'managed-settings.d/one.json'])(
     'starts without an entry when %s is deployed',
     async (name) => {
@@ -86,6 +115,32 @@ describe('Terminal session MCP entry', () => {
     },
   );
 });
+
+it.each(['user', 'project', 'local'] as const)(
+  'leaves the channel off when %s settings cannot be read as an object',
+  async (scope) => {
+    const config = path.join(dir, 'config');
+    const file =
+      scope === 'user'
+        ? path.join(config, 'settings.json')
+        : path.join(dir, '.claude', `settings${scope === 'local' ? '.local' : ''}.json`);
+    const check = () =>
+      channelApiReason(dir, { HOME: dir, CLAUDE_CONFIG_DIR: config }, path.join(dir, 'managed'));
+    expect(await check()).toBeUndefined();
+    await mkdir(path.dirname(file), { recursive: true });
+    for (const content of ['{private-setting-canary', 'null', '[]']) {
+      await writeFile(file, content);
+      expect(await check()).toBe(
+        'Claude Code’s settings could not be read; corrallm’s API is off for this session.',
+      );
+    }
+    await rm(file);
+    await mkdir(file);
+    expect(await check()).toBe(
+      'Claude Code’s settings could not be read; corrallm’s API is off for this session.',
+    );
+  },
+);
 
 it('retries only a documented sideload refusal once, with the entry and grants removed', async () => {
   const one = cli();

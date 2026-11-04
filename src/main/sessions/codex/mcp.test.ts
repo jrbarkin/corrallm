@@ -83,6 +83,7 @@ describe('session MCP config', () => {
     const start = vi.fn((options: AppServerOptions) => {
       calls.push(options);
       return Promise.resolve({
+        version: '0.162.1',
         close,
         request: vi.fn(() =>
           Promise.resolve(
@@ -144,6 +145,86 @@ describe('session MCP config', () => {
   });
 });
 
+describe('the recorded version', () => {
+  /** A preflight app server of Codex `version` whose config holds the user's corrallm-server. */
+  const preflight = (version: string | undefined) => {
+    let reads = 0;
+    const request = vi.fn(() =>
+      Promise.resolve(
+        ++reads === 1
+          ? { config: { mcp_servers: { 'corrallm-server': { enabled: true } } } }
+          : {
+              config: {
+                mcp_servers: {
+                  corrallm: apiEntry(API),
+                  'corrallm-server': { enabled: false },
+                },
+                shell_environment_policy: { set: { CORRALLM_SESSION_TOKEN: '' } },
+              },
+              origins: {
+                ...(recorded('clean').origins as object),
+                'corrallm-server.enabled': 'sessionFlags',
+                'shell_environment_policy.set.CORRALLM_SESSION_TOKEN': 'sessionFlags',
+              },
+            },
+      ),
+    );
+    const start = vi.fn(() =>
+      Promise.resolve({
+        version,
+        close: () => Promise.resolve(),
+        request,
+      } as unknown as AppServer),
+    ) as unknown as typeof startAppServer;
+    return { start, request };
+  };
+
+  it.each([
+    ['0.160.1', 'This is Codex 0.160.1'],
+    ['0.162.0', 'This is Codex 0.162.0'],
+    ['0.162.1-alpha.1', 'This is Codex 0.162.1-alpha.1'],
+    [undefined, 'This is an unknown version of Codex'],
+    ['0.162.1;rm -rf', 'This is an unknown version of Codex'],
+  ])(
+    'keeps the API off on Codex %s, older than the recorded 0.162.1, still switching off outside names',
+    async (version, said) => {
+      const { start, request } = preflight(version);
+      const ready = await prepareApi(CONTEXT, API, { start });
+      expect(ready).toMatchObject({
+        available: false,
+        args: ['-c', 'mcp_servers.corrallm-server.enabled=false'],
+        reason: `${said}; corrallm’s tools need Codex 0.162.1 or later, so this session started without them.`,
+      });
+      expect(ready.env.CORRALLM_SESSION_TOKEN).toBeUndefined();
+      // Only the credential-free read of what the user's config holds.
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['0.163.0suffix', '1.0.0suffix', '0.162.1.0', '0.162.1-', '0.162.1+'])(
+    'requires a valid release version before checking the proposed entry: %s',
+    async (version) => {
+      const { start, request } = preflight(version);
+      const ready = await prepareApi(CONTEXT, API, { start });
+      expect(ready.available).toBe(false);
+      expect(ready.env.CORRALLM_SESSION_TOKEN).toBeUndefined();
+      expect(ready.args).toEqual(['-c', 'mcp_servers.corrallm-server.enabled=false']);
+      expect(request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['0.162.1', '0.162.1+build.2', '0.163.0', '1.0.0'])(
+    'supplies the verified entry on a release at or above the recorded floor: %s',
+    async (version) => {
+      const { start, request } = preflight(version);
+      const ready = await prepareApi(CONTEXT, API, { start });
+      expect(ready.available).toBe(true);
+      expect(ready.env.CORRALLM_SESSION_TOKEN).toBe(API.token);
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
 it('keeps the native entry in its default local environment', () => {
   const read = recorded('clean') as {
     config: { mcp_servers: { corrallm: Record<string, unknown> } };
@@ -162,6 +243,7 @@ it('requires each configured outside registration to be disabled by session flag
   let nth = 0;
   const start = (() =>
     Promise.resolve({
+      version: '0.162.1',
       close: () => Promise.resolve(),
       request: () =>
         Promise.resolve(

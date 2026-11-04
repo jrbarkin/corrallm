@@ -1,10 +1,13 @@
+import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { inspectProcess } from '../core/process-identity';
 import { TestChildren } from './test-children';
+import { stopTestGroup } from './test-process-groups';
 
 let directory: string;
 let children: TestChildren;
@@ -28,6 +31,43 @@ function alive(pid: number): boolean {
     throw error;
   }
 }
+
+it.skipIf(process.platform === 'win32')(
+  'stops what a group’s exited leader left running in it, then passes',
+  async () => {
+    // G3's crash test: a fake codex's sleeping command, in the codex's own group, outlived it.
+    const file = path.join(directory, 'left.json');
+    const leader = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const child = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+         require('node:fs').writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: child.pid }));
+         setTimeout(() => process.exit(0), 300);`,
+      ],
+      { detached: true, stdio: 'ignore' },
+    );
+    const group = leader.pid ?? 0;
+    const exited = new Promise((resolve) => leader.once('exit', resolve));
+    try {
+      const started = inspectProcess(group)?.started;
+      if (started === undefined) throw new Error('The leader exited before it was recorded.');
+      await exited;
+      const left = (JSON.parse(await readFile(file, 'utf8')) as { pid: number }).pid;
+      expect(alive(left)).toBe(true);
+      expect(inspectProcess(group)).toBeUndefined();
+      await expect(stopTestGroup({ pid: group, started })).resolves.toBeUndefined();
+      expect(alive(left)).toBe(false);
+    } finally {
+      try {
+        process.kill(-group, 'SIGKILL');
+      } catch {
+        // Already gone, as it should be.
+      }
+    }
+  },
+  30_000,
+);
 
 it.skipIf(process.platform === 'win32').each(['stdio', 'terminal'])(
   'kills the %s server and its descendants after SIGKILL of its test worker',

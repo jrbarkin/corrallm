@@ -264,6 +264,65 @@ describe('a connected session', () => {
     });
   });
 
+  it('reads only its newest entries for a streamed word, however long its transcript', () => {
+    // G2: a long session's every word was looked up from its transcript's first entry, and its
+    // whole transcript rewritten through a callback per entry, for the newest entry of all.
+    const { store, emit } = connected();
+    store.open('a');
+    const older = 2000;
+    for (let i = 0; i < older; i++)
+      emit('a', 'claude-code.sdk', { type: 'text', id: `older-${String(i)}`, text: 'Done.' });
+    emit('a', 'claude-code.sdk', { type: 'thinking', id: 'thought', text: 'Hmm' });
+    emit('a', 'claude-code.sdk', { type: 'text', id: 'reply', text: 'Working' });
+    let visited = 0;
+    const long = (array: unknown) => Array.isArray(array) && array.length > older;
+    for (const name of [
+      'find',
+      'findIndex',
+      'findLast',
+      'findLastIndex',
+      'map',
+      'filter',
+      'some',
+    ] as const) {
+      const { value: original } = Object.getOwnPropertyDescriptor(Array.prototype, name) as {
+        value: (...args: unknown[]) => unknown;
+      };
+      vi.spyOn(Array.prototype, name).mockImplementation(function (
+        this: unknown[],
+        callback: (...args: unknown[]) => unknown,
+        ...rest: unknown[]
+      ) {
+        if (!long(this)) return original.call(this, callback, ...rest);
+        return original.call(
+          this,
+          (...args: unknown[]) => {
+            visited += 1;
+            return callback(...args);
+          },
+          ...rest,
+        );
+      } as never);
+    }
+    const words = 50;
+    try {
+      for (let word = 0; word < words; word++) {
+        emit('a', 'claude-code.sdk', { type: 'text', id: 'reply', text: ` ${String(word)}` });
+        emit('a', 'claude-code.sdk', { type: 'thinking', id: 'thought', text: ` ${String(word)}` });
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+    const { entries } = store.of('a');
+    expect(entries).toHaveLength(older + 2);
+    expect(entries.at(-2)).toMatchObject({ id: 'thought', kind: 'thinking' });
+    expect(entries.at(-1)).toMatchObject({ id: 'reply', kind: 'text' });
+    expect((entries.at(-2) as { text: string }).text).toMatch(/^Hmm 0 1 .* 49$/);
+    expect((entries.at(-1) as { text: string }).text).toMatch(/^Working 0 1 .* 49$/);
+    // A few entries a word, never its transcript's length.
+    expect(visited).toBeLessThanOrEqual(2 * words * 6);
+  });
+
   it('keeps an outgoing turn ahead of its queue while a preceding native message ends', async () => {
     const { store, backend, emit, sent } = connected();
     const done = vi.fn();

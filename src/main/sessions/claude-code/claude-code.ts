@@ -19,7 +19,7 @@ import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
 import type { SessionApi } from '../connector';
-import { entrySettings, managedApiReason, sideloadRefused } from './mcp-entry';
+import { entrySettings, managedApiReason, mcpAllowlisted, sideloadRefused } from './mcp-entry';
 import type { Screen } from '../terminal/screen';
 import {
   statusLineContext,
@@ -113,6 +113,8 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
   readonly #api: SessionApi | undefined;
   #apiReason: string | undefined;
   #entry = false;
+  /** Whether your settings hold an MCP allowlist, which the session's entry then joins. */
+  #allowlisted = false;
   #settings: Record<string, unknown> = {};
   #dir: string | undefined;
   /** Why corrallm can't hear it, once its settings were read (they turn its hooks off). */
@@ -159,6 +161,7 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
     this.#dir = dir;
     this.#apiReason = this.#api === undefined ? undefined : await managedApiReason(this.#managed);
     this.#entry = this.#api?.kind === 'http' && this.#apiReason === undefined;
+    this.#allowlisted = this.#entry && (await mcpAllowlisted(cwd, this.#env));
     this.#settings = {
       ...(off === undefined ? hookSettings(hooks.url, hooks.token) : { hooks: {} }),
       ...statusLine,
@@ -205,7 +208,9 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       path.join(this.#dir, SETTINGS),
       JSON.stringify({
         ...this.#settings,
-        ...(this.#api === undefined ? {} : entrySettings(this.#api, this.#entry)),
+        ...(this.#api === undefined
+          ? {}
+          : entrySettings(this.#api, this.#entry, this.#allowlisted)),
       }),
       { mode: 0o600 },
     );

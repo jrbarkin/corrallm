@@ -2,6 +2,7 @@ import { execFile } from '../process';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { gte, valid } from 'semver';
 
 import { canRun, findExecutable, searchPath } from '../executables';
 
@@ -71,21 +72,23 @@ export function parseVersion(output: string): string | undefined {
   return /codex-cli\s+(\d+\.\d+\.\d+\S*)/.exec(output)?.[1];
 }
 
+/**
+ * The oldest Codex a session gets corrallm's own MCP entry on (B21 C7): the one its recordings
+ * were made with (the entry, its approval modes and the shell policy that keeps the session token
+ * out of the agent's shell and Codex's files). An older one starts without the entry.
+ */
+export const MIN_API_CODEX_VERSION = '0.162.1';
+
+/** Whether a valid Codex release is `min` or later, including prerelease ordering. */
+export function versionAtLeast(version: string, min: string): boolean {
+  return valid(version) !== null && gte(version, min);
+}
+
 /** Why a Codex of `version` is too old for corrallm, or undefined if it is not. */
 export function checkVersion(version: string): string | undefined {
-  const parts = (value: string) => value.split(/[.-]/).slice(0, 3).map(Number);
-  const have = parts(version);
-  const need = parts(MIN_CODEX_VERSION);
-  for (let i = 0; i < need.length; i += 1) {
-    const a = have[i] ?? 0;
-    const b = need[i] ?? 0;
-    if (a !== b) {
-      return a > b
-        ? undefined
-        : `This is Codex ${version}; corrallm needs Codex ${MIN_CODEX_VERSION} or later. Update Codex, then try again.`;
-    }
-  }
-  return undefined;
+  return versionAtLeast(version, MIN_CODEX_VERSION)
+    ? undefined
+    : `This is Codex ${version}; corrallm needs Codex ${MIN_CODEX_VERSION} or later. Update Codex, then try again.`;
 }
 
 /** How long `codex --version` may take. */

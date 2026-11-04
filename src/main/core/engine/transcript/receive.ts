@@ -290,7 +290,9 @@ export class ConnectedDriver implements SessionDriver {
   /** Plays an event from main onto the session. */
   receive(event: SessionEvent): void {
     const io = this.#io;
-    const find = (id: string) => io.session().entries.find((entry) => entry.id === id);
+    // From the newest: what an event names (a reply's words, a tool's progress) is nearly always
+    // among the last entries, and a long session's transcript is long. Entry ids are unique.
+    const find = (id: string) => io.session().entries.findLast((entry) => entry.id === id);
     const parent = (p: string | undefined) => (p === undefined ? {} : { parent: p });
     switch (event.type) {
       case 'started':

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { ID_PATTERN, JOBS } from '../../adapter';
 import type { Catalog } from '../../adapter';
+import { MAX_CONSENT_DESCRIPTION, MAX_CONSENT_TITLE, MAX_CONSENTS } from '../limits';
 import { MCP_CHANGES, REWIND_RESTORES } from '../../session';
 import { PromptDescriptor } from '../../model/prompts';
 import { define } from '../define';
@@ -59,24 +60,49 @@ const Connection = z.strictObject({
   fileMentions: z.literal(true).optional(),
 });
 
-const Adapter = z.strictObject({
-  id: z.string(),
-  name: z.string(),
-  accent: z.number(),
-  logo: z.string().optional(),
-  words: z.strictObject({ defaults: z.string(), mcpHint: z.string().optional() }),
-  modes: z.array(Mode),
-  runtimeModes: z.boolean(),
-  role: z.enum(['append', 'append-new', 'none']),
-  resume: z.boolean(),
-  list: z.boolean(),
-  actions: z.array(
-    z.strictObject({ name: z.string(), description: z.string(), job: z.enum(JOBS).optional() }),
-  ),
-  connections: z.array(Connection),
-  registerMcp: z.string().optional(),
-  registerMcpHelper: z.string().optional(),
+/**
+ * A consent an adapter asks you for (B22a C3): words, bounded, and the connections that ask. It
+ * holds no field saying whether it was given, and nothing about your account.
+ */
+const Consent = z.strictObject({
+  key: z.string().regex(ID_PATTERN),
+  title: z.string().min(1).max(MAX_CONSENT_TITLE),
+  description: z.string().max(MAX_CONSENT_DESCRIPTION),
+  connections: z.array(z.string()).min(1),
 });
+
+const Adapter = z
+  .strictObject({
+    id: z.string(),
+    name: z.string(),
+    accent: z.number(),
+    logo: z.string().optional(),
+    words: z.strictObject({ defaults: z.string(), mcpHint: z.string().optional() }),
+    modes: z.array(Mode),
+    runtimeModes: z.boolean(),
+    role: z.enum(['append', 'append-new', 'none']),
+    resume: z.boolean(),
+    list: z.boolean(),
+    actions: z.array(
+      z.strictObject({ name: z.string(), description: z.string(), job: z.enum(JOBS).optional() }),
+    ),
+    connections: z.array(Connection),
+    registerMcp: z.string().optional(),
+    registerMcpHelper: z.string().optional(),
+    consents: z.array(Consent).max(MAX_CONSENTS).optional(),
+  })
+  // Each consent by a key of its own, asked on its own adapter's connections, each named once.
+  .refine(({ connections, consents = [] }) => {
+    const own = new Set(connections.map(({ id }) => id));
+    return (
+      new Set(consents.map(({ key }) => key)).size === consents.length &&
+      consents.every(
+        (consent) =>
+          new Set(consent.connections).size === consent.connections.length &&
+          consent.connections.every((id) => own.has(id)),
+      )
+    );
+  });
 
 const UsageBackend = z.strictObject({
   id: z.string(),

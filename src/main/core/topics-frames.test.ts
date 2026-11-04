@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { MAX_TOPIC_FRAME } from '../../shared/api/limits';
+import { MAX_LINK_LENGTH, MAX_REMEMBERED_SITES, MAX_TOPIC_FRAME } from '../../shared/api/limits';
 import { OPS } from '../../shared/api/registry';
 import type { RuntimeSnapshotFrame, TopicUpdate } from '../../shared/api/topics';
 import type { Entities, NodeEntity } from '../../shared/model/state';
@@ -170,7 +170,7 @@ it('keeps the settings’ default agent and api in a chunked snapshot’s summar
   const frames = batches.flat() as RuntimeSnapshotFrame[];
   expect(
     frames.filter((frame) => frame.kind === 'chunk').flatMap((frame) => frame.entries),
-  ).toEqual(Object.entries(consents).map(([key, value]) => ({ key, value })));
+  ).toEqual(Object.entries(consents).map(([key, value]) => ({ key: `consent/${key}`, value })));
   // None is said as none.
   topics.close();
   topics = new Topics({
@@ -179,5 +179,72 @@ it('keeps the settings’ default agent and api in a chunked snapshot’s summar
   expect(await topics.subscribe(1, { topic: 'settings' }, ctx)).toMatchObject({
     kind: 'begin',
     summary: { defaultAdapter: null, api },
+  });
+});
+
+it('divides your remembered sites into chunks in their order, never in the summary (B22a C2)', async () => {
+  // The most sites kept, each as long as a link may be: far past a frame together.
+  const sites = Array.from({ length: MAX_REMEMBERED_SITES }, (_, n) => {
+    const head = `https://site-${String(n).padStart(3, '0')}.`;
+    return `${head}${'a'.repeat(MAX_LINK_LENGTH - 1 - head.length - '.example'.length)}.example`;
+  }).reverse();
+  const consents = { codex: { plan: true }, 'old-adapter': { allowed: true } };
+  const api = { state: 'stopped', port: null } as const;
+  const notifications = { enabled: false, lastDelivery: 'shown' } as const;
+  const links = { state: 'ready', sites, builtIn: ['https://github.com'] } as const;
+  const settings = { defaultAdapter: null, consents, api, notifications, links };
+  expect(OPS['settings.get'].output.safeParse(settings).success).toBe(true);
+  topics = new Topics({ read: () => Promise.resolve({ ok: true, value: settings }) });
+  const batches: TopicUpdate[][] = [];
+  topics.listen(1, (batch) => batches.push(batch));
+  const ctx = { caller: CALLERS.you, signal: new AbortController().signal } as OpContext;
+  const begin = await topics.subscribe(1, { topic: 'settings' }, ctx);
+  expect(JSON.stringify(begin)).not.toContain('site-');
+  expect(begin).toMatchObject({
+    kind: 'begin',
+    topic: 'settings',
+    summary: {
+      defaultAdapter: null,
+      api,
+      notifications,
+      links: { state: 'ready', builtIn: ['https://github.com'] },
+    },
+  });
+  await vi.waitFor(() => {
+    expect(batches.flat().at(-1)).toMatchObject({ kind: 'end' });
+  });
+  const frames = batches.flat() as RuntimeSnapshotFrame[];
+  expect(
+    frames.filter((frame) => frame.kind === 'chunk').flatMap((frame) => frame.entries),
+  ).toEqual([
+    { key: 'consent/codex', value: { plan: true } },
+    { key: 'consent/old-adapter', value: { allowed: true } },
+    ...sites.map((site) => ({ key: `site/${encodeURIComponent(site)}`, value: site })),
+  ]);
+  for (const batch of batches)
+    expect(Buffer.byteLength(JSON.stringify(batch))).toBeLessThan(MAX_TOPIC_FRAME);
+
+  // Unreadable, the list is said in the summary, with no site.
+  topics.close();
+  const unavailable = { state: 'unavailable', sentence: 'Not now.' } as const;
+  topics = new Topics({
+    read: () =>
+      Promise.resolve({
+        ok: true,
+        value: {
+          ...settings,
+          consents: Object.fromEntries(
+            Array.from({ length: 30_000 }, (_, n) => [
+              `adapter-${String(n).padStart(8, '0')}`,
+              { [`key-${'k'.repeat(20)}`]: true },
+            ]),
+          ),
+          links: unavailable,
+        },
+      }),
+  });
+  expect(await topics.subscribe(1, { topic: 'settings' }, ctx)).toMatchObject({
+    kind: 'begin',
+    summary: { links: unavailable },
   });
 });

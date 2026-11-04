@@ -31,8 +31,11 @@ function declared(session: object) {
 }
 
 describe("Codex's adapter", () => {
-  it('keeps the agent API unavailable on every connection until its evidence gate opens', () => {
-    for (const one of descriptor.connections) expect(one).toHaveProperty('api', null);
+  it('routes the agent API over http on both connections, as recorded (B21 C7)', () => {
+    // Each takes the session's -c entry, its bearer from CORRALLM_SESSION_TOKEN, and the per-key
+    // shell policy that keeps the token out of the agent's shell and Codex's files, recorded with
+    // Codex 0.162.1 (app-server/ and terminal/ fixtures/mcp-entry.json, mcp-shell-policy.json).
+    for (const one of descriptor.connections) expect(one.api).toBe('http');
   });
 
   it('declares context on the App Server alone: its Terminal knows no window in production', () => {
@@ -58,6 +61,17 @@ describe("Codex's adapter", () => {
       },
       signals: false,
     });
+  });
+
+  it('declares its one consent, to use a ChatGPT plan, asked on the App Server alone (B22a C3)', () => {
+    expect(descriptor.consents).toEqual([
+      {
+        key: 'plan',
+        title: 'Use your ChatGPT plan',
+        description: expect.stringMatching(/App Server.*ChatGPT plan.*asks again/s) as unknown,
+        connections: ['codex.app-server'],
+      },
+    ]);
   });
 
   it('runs text starting with ! as a shell command in Terminal only', () => {

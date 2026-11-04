@@ -148,6 +148,11 @@ export class SessionAuthority implements AgentApi {
     return { kind: 'http', server: CORRALLM_AGENT_MCP_SERVER, url, token, tools, off };
   }
 
+  /** The route `connection` takes to corrallm's server (its descriptor's), or null for none. */
+  route(connection: ConnectionId): 'http' | 'channel' | null {
+    return this.#deps.route(connection);
+  }
+
   revoke(canvas: CanvasId, agent: string, generation: number): void {
     const key = keyOf(canvas, agent, generation);
     const entry = this.#entries.get(key);

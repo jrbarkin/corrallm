@@ -124,6 +124,12 @@ export class LoopStore {
     return this.turns(x, y) >= LOOP_TURNS;
   }
 
+  /** Whether any pair's next turn waits for the user. */
+  holding(): boolean {
+    for (const { turns } of this.#kept.values()) if (turns >= LOOP_TURNS) return true;
+    return false;
+  }
+
   /** Every pair counting now, with its turns. */
   pairs(): { pair: Pair; turns: number }[] {
     return [...this.#kept.values()].map(({ pair, turns }) => ({ pair, turns }));

@@ -11,6 +11,7 @@ import type { NeedsItem } from '../../../shared/model/needs';
 
 import type { Engine } from '../engine/engine';
 import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
+import { streamed } from '../engine/transcript/reduce';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import {
   agentOf,
@@ -378,7 +379,13 @@ export class Delivery {
         this.heard(agents);
       },
     });
-    this.#stop = [deps.engine.sessions.subscribe(schedule), deps.engine.run.subscribe(schedule)];
+    this.#stop = [
+      // A streamed word changes nothing a check reads: a reply's many never make one.
+      deps.engine.sessions.subscribe((action) => {
+        if (!streamed(action)) this.schedule();
+      }),
+      deps.engine.run.subscribe(schedule),
+    ];
   }
 
   /**
@@ -670,10 +677,11 @@ export class Delivery {
    * The pair of agents a message is a turn between, if it is one that counts (B21 C6): a party's
    * message, an ask, an answer, a reply delivered as a turn, a task's continuation, or the record
    * of how an ask ended (counted for the pair that asked), each from one agent of the canvas to
-   * another. Nothing from you or an outside party, nor corrallm's own (the run's sends, a handoff
-   * request, a notice or any record no turn is made of).
+   * another (`here`: the agents on it now, read once by whoever asks of many). Nothing from you or
+   * an outside party, nor corrallm's own (the run's sends, a handoff request, a notice or any
+   * record no turn is made of).
    */
-  #turnPair(message: Message): Pair | undefined {
+  #turnPair(message: Message, here: ReadonlySet<string>): Pair | undefined {
     if (!isTurn(message) || sentByRun(message) || this.#request(message)) return undefined;
     let { from, to } = message;
     if (message.kind === 'settled') {
@@ -685,16 +693,43 @@ export class Delivery {
     const x = agentOf(from);
     const y = agentOf(to);
     if (x === undefined || y === undefined || x === y) return undefined;
-    const here = this.#here();
     return here.has(x) && here.has(y) ? orderedPair(x, y) : undefined;
   }
 
-  /** The pairs held now, each with its Needs item: a pair at LOOP_TURNS with a turn waiting. */
+  /**
+   * Each of `messages` waiting that is a turn between two agents of the canvas (`here`), with its
+   * pair; and the message each pair's sender is told of its hold by: its oldest waiting turn from a
+   * party (both directions share a pair's notice; corrallm's record of how an ask ended takes none).
+   */
+  #turns(
+    messages: readonly Message[],
+    here: ReadonlySet<string>,
+  ): { pairs: Map<string, Pair>; notices: Map<string, string> } {
+    const pairs = new Map<string, Pair>();
+    const notices = new Map<string, string>();
+    for (const message of messages) {
+      if (message.state !== 'pending') continue;
+      const pair = this.#turnPair(message, here);
+      if (pair === undefined) continue;
+      pairs.set(message.id, pair);
+      if (message.from === 'corrallm') continue;
+      const key = JSON.stringify(pair);
+      if (!notices.has(key)) notices.set(key, message.id);
+    }
+    return { pairs, notices };
+  }
+
+  /**
+   * The pairs held now, each with its Needs item: a pair at LOOP_TURNS with a turn waiting. While
+   * no pair is at LOOP_TURNS, none: what waits is not read (every look at Needs asks).
+   */
   #holds(): { pair: Pair; item: NeedsItem }[] {
+    if (!this.#deps.loops.holding()) return [];
     const holds = new Map<string, { pair: Pair; item: NeedsItem }>();
+    const here = this.#here();
     for (const message of this.#deps.store.active()) {
       if (message.state !== 'pending') continue;
-      const pair = this.#turnPair(message);
+      const pair = this.#turnPair(message, here);
       if (pair === undefined || !this.#deps.loops.held(...pair)) continue;
       const key = pair.join('\u0000');
       const previous = holds.get(key);
@@ -945,7 +980,8 @@ export class Delivery {
     this.#withdrawGone();
     this.#withdrawStale();
     // B21 C6: the counts of a pair with an agent no longer on the canvas go.
-    this.#deps.loops.prune(this.#here());
+    const here = this.#here();
+    this.#deps.loops.prune(here);
     let messages = store.active();
     for (const id of this.#images.keys()) {
       const message = store.get(id);
@@ -993,18 +1029,11 @@ export class Delivery {
     if (lostImages) messages = store.active();
     /** What waits for each agent, in the order it came, once its record is on disk. */
     const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
-    // Both directions share a pair's notice: choose its oldest party send before walking agents.
-    const loopNotices = new Map<string, string>();
-    const turnPairs = new Map<string, Pair>();
-    for (const message of messages) {
-      if (message.state !== 'pending') continue;
-      const pair = this.#turnPair(message);
-      if (pair === undefined) continue;
-      turnPairs.set(message.id, pair);
-      if (message.from === 'corrallm') continue;
-      const key = JSON.stringify(pair);
-      if (!loopNotices.has(key)) loopNotices.set(key, message.id);
-    }
+    // B21 C6: each waiting turn's pair, and each pair's notice, of what waited as this check
+    // began; read once a pair is held (one may be as this check delivers), never while none is.
+    const waited = messages;
+    let turns: { pairs: Map<string, Pair>; notices: Map<string, string> } | undefined;
+    const turnsNow = () => (turns ??= this.#turns(waited, here));
     // A handoff request whose record is on its way to disk is first in line already: no party's
     // message to its agent goes before it.
     const asking = new Set(
@@ -1053,7 +1082,7 @@ export class Delivery {
       for (const message of waits) {
         // B21 C6: the eleventh turn between two agents waits for you, whatever else holds or frees
         // the agent; nothing of yours, the run's or an outside party's is ever one.
-        const pair = turnPairs.get(message.id);
+        const pair = this.#deps.loops.holding() ? turnsNow().pairs.get(message.id) : undefined;
         const hold: Hold | undefined =
           pair !== undefined && this.#deps.loops.held(...pair)
             ? { kind: 'loop' }
@@ -1073,7 +1102,7 @@ export class Delivery {
         if (
           hold.kind === 'loop' &&
           pair !== undefined &&
-          loopNotices.get(JSON.stringify(pair)) === message.id
+          turnsNow().notices.get(JSON.stringify(pair)) === message.id
         ) {
           this.#tell(
             `loop:${message.id}`,
@@ -1179,25 +1208,35 @@ export class Delivery {
   /**
    * The messages waiting for each agent, of `messages` (those delivery acts on, unless given), by
    * its id, each in the order they came, but corrallm's handoff request first, then (B21 C7) the
-   * continuations of its tasks: none for an agent nothing waits for.
+   * continuations of its tasks: none for an agent nothing waits for. One pass, each message ranked
+   * once (every check of what waits asks, under load with many waiting).
    */
   #waiting(messages = this.#deps.store.active()): Map<string, Message[]> {
     const waiting = new Map<string, Message[]>();
+    /** What goes ahead of the rest in a line: corrallm's handoff requests, then continuations. */
+    let ahead: Map<string, [Message[], Message[]]> | undefined;
     for (const message of messages) {
       const agent = agentOf(message.to);
       if (agent === undefined || message.state !== 'pending') continue;
-      const waits = waiting.get(agent) ?? [];
-      waiting.set(agent, waits);
+      let line = waiting.get(agent);
+      if (line === undefined) waiting.set(agent, (line = []));
       const rank = this.#rank(message);
-      const at = waits.findIndex((one) => this.#rank(one) > rank);
-      if (at === -1) waits.push(message);
-      else waits.splice(at, 0, message);
+      if (rank === 2) {
+        line.push(message);
+        continue;
+      }
+      ahead ??= new Map();
+      let first = ahead.get(agent);
+      if (first === undefined) ahead.set(agent, (first = [[], []]));
+      first[rank].push(message);
     }
+    for (const [agent, [requests, continuations]] of ahead ?? [])
+      waiting.set(agent, [...requests, ...continuations, ...(waiting.get(agent) ?? [])]);
     return waiting;
   }
 
   /** Where a message waits in line: corrallm's handoff request, a task's continuation, the rest. */
-  #rank(message: Message): number {
+  #rank(message: Message): 0 | 1 | 2 {
     return this.#request(message) ? 0 : isContinuation(message) ? 1 : 2;
   }
 
@@ -1508,7 +1547,7 @@ export class Delivery {
       this.#deps.store.retell(message.id, `${HANDOFF_CARRIED}${carried.carry}`);
     }
     // B21 C6: a turn between two agents is counted in the write that journals it as delivering.
-    const pair = this.#turnPair(message);
+    const pair = this.#turnPair(message, this.#here());
     if (pair !== undefined)
       this.#counted.set(message.id, { pair, run: this.#deps.loops.count(...pair) });
     this.#deps.store.update(message.id, {

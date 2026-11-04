@@ -92,6 +92,27 @@ export interface AdapterDescriptor {
    * contents (holding no single quote). None where its CLI has no such helper.
    */
   registerMcpHelper?: string;
+  /**
+   * The consents its connections ask you for (B22a C3), each by the key it is kept by: words for
+   * the settings page alone, granting nothing. None where it asks for none.
+   */
+  consents?: ConsentDescriptor[];
+}
+
+/**
+ * A consent an adapter asks you for, by the key its connections ask by (settings keep what you
+ * gave for good under it, by adapter): what it means, and the connections that ask. Only your
+ * answer to the prompt it raises gives it; the settings page can only take it back.
+ */
+export interface ConsentDescriptor {
+  /** Its key, unique within its adapter (an id's shape). */
+  key: string;
+  /** What it allows, in a few words (at most MAX_CONSENT_TITLE characters). */
+  title: string;
+  /** What it means and how long it lasts (at most MAX_CONSENT_DESCRIPTION characters). */
+  description: string;
+  /** The connections of its own adapter that ask for it: at least one. */
+  connections: ConnectionId[];
 }
 
 export interface ModeDescriptor {
@@ -201,6 +222,15 @@ export function connectionIn(
     if (connection) return { adapter, connection };
   }
   return undefined;
+}
+
+/** The consent `adapter` declares by `key`, if the catalog has it (B22a C3). */
+export function consentIn(
+  catalog: Catalog,
+  adapter: AdapterId,
+  key: string,
+): ConsentDescriptor | undefined {
+  return adapterIn(catalog, adapter)?.consents?.find((consent) => consent.key === key);
 }
 
 /** The usage backend `id` names, if the catalog has it. */
