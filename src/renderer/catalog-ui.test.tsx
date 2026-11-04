@@ -15,19 +15,13 @@ import {
   connectionsOf,
 } from './graph/agents';
 import { cycledModes, modesOf } from './agent/modes';
+import { continuesIn } from './catalog';
 import { useCatalog } from './test-catalog';
 import { fakeCore } from './test-api';
 
 it('builds chip choices from the catalog loaded after the chip module was imported', async () => {
   await useCatalog(MADE_UP);
-  render(
-    <AgentChip
-      adapter="zed"
-      connection="zed.acp"
-      onChange={vi.fn()}
-      onContinueInTerminal={vi.fn()}
-    />,
-  );
+  render(<AgentChip adapter="zed" connection="zed.acp" onChange={vi.fn()} onContinue={vi.fn()} />);
   fireEvent.click(screen.getByRole('button', { name: 'Agent: Zed Agent · ACP' }));
   expect(screen.getAllByRole('option').map((one) => one.textContent.trim())).toEqual([
     'Zed Agent · ACP',
@@ -82,12 +76,7 @@ it('keeps a transcript before a terminal in Start and the chip', async () => {
     expect(select.value).toBe('yak.free');
     expect(connectionsOf('yak')).toEqual(['yak.free', 'yak.terminal']);
     render(
-      <AgentChip
-        adapter="yak"
-        connection="yak.free"
-        onChange={vi.fn()}
-        onContinueInTerminal={vi.fn()}
-      />,
+      <AgentChip adapter="yak" connection="yak.free" onChange={vi.fn()} onContinue={vi.fn()} />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Agent: Yak Agent · Free' }));
     expect(
@@ -134,15 +123,20 @@ it.each([
 
 it('uses the catalog accent for a newly declared adapter’s chip', async () => {
   await useCatalog(TWO_MADE_UP);
-  render(
-    <AgentChip
-      adapter="yak"
-      connection="yak.free"
-      onChange={vi.fn()}
-      onContinueInTerminal={vi.fn()}
-    />,
-  );
+  render(<AgentChip adapter="yak" connection="yak.free" onChange={vi.fn()} onContinue={vi.fn()} />);
   expect(
     screen.getByRole('button', { name: 'Agent: Yak Agent · Free' }).getAttribute('data-accent'),
   ).toBe('1');
+});
+
+it('continues nowhere when the declared target is missing from the loaded catalog', async () => {
+  const made = structuredClone(TWO_MADE_UP);
+  const yak = made.adapters[1]?.connections[0];
+  if (!yak) throw new Error('No connection');
+  yak.continueIn = { connection: 'yak.terminal', commands: [], shell: false, mcpSignIn: false };
+  await useCatalog(made);
+  expect(continuesIn('yak.free')).toBe('yak.terminal');
+  yak.continueIn.connection = 'yak.gone';
+  await useCatalog(made);
+  expect(continuesIn('yak.free')).toBeUndefined();
 });

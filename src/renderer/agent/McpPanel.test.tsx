@@ -14,8 +14,8 @@ it('explains an empty server list with the adapter’s own hint', async () => {
     <McpPanel
       adapter="yak"
       list={() => Promise.resolve([])}
+      changes={[]}
       change={vi.fn()}
-      onSignIn={vi.fn()}
       onClose={vi.fn()}
     />,
   );

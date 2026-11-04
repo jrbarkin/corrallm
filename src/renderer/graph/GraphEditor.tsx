@@ -49,7 +49,8 @@ import { NO_USAGE } from '../../shared/usage';
 import { AgentView } from '../agent/AgentView';
 import { settingsChange } from '../agent/settings-change';
 import { AgentSettingsPanel } from '../agent/AgentSettings';
-import { catalog, continuesIn } from '../catalog';
+import { connectionIn } from '../../shared/adapter';
+import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import { draftCall, flushDrafts } from '../useDraft';
 import { QueuesView } from '../queues/QueuesView';
@@ -1521,19 +1522,20 @@ function Editor({
               onOpenSettings={() => {
                 setSettingsAgent(openedNode.id);
               }}
-              onContinueInTerminal={(command, images) => {
-                const connection = continuesIn(connectionOf(openedNode.data));
-                if (connection !== undefined)
-                  act(
-                    api.sessionContinueIn({
-                      canvas: canvasId,
-                      agent: openedNode.id,
-                      connection,
-                      ...(command === undefined
-                        ? {}
-                        : { then: { text: command, ...(images?.length ? { images } : {}) } }),
-                    }),
-                  );
+              onContinue={(request, connection, command, images) => {
+                // The target the offer named, if this build has it.
+                if (connectionIn(catalog(), connection) === undefined) return undefined;
+                const call = api.sessionContinueIn({
+                  canvas: canvasId,
+                  agent: openedNode.id,
+                  connection,
+                  request,
+                  ...(command === undefined
+                    ? {}
+                    : { then: { text: command, ...(images?.length ? { images } : {}) } }),
+                });
+                act(call);
+                return call;
               }}
               edits={edits}
               marks={marks}

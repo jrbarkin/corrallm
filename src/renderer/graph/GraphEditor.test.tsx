@@ -755,6 +755,18 @@ describe('GraphEditor', () => {
     await events.doubleClick(card);
     const view = within(screen.getByRole('dialog', { name: 'a' }));
     const composer = view.getByRole('textbox', { name: 'Message a' });
+    // Its session is ready, so the panel its connection declares can open.
+    act(() => {
+      sessions.emit('a', 'claude-code.sdk', {
+        type: 'started',
+        role: 'append',
+        resume: true,
+        list: true,
+        model: null,
+        mode: null,
+        models: [],
+      });
+    });
     await events.change(composer, { target: { value: '/mcp' } });
     await events.keyDown(composer, { key: 'Enter' });
     const side = within(view.getByRole('complementary', { name: 'Questions and queue' }));

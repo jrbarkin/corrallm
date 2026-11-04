@@ -102,9 +102,13 @@ export function routeRefusal(route: Route, agent: string, target: string): strin
     case 'panel':
       return `${agent}’s /${route.panel} is answered by its view, never sent as a message: ${PANEL_OPS[route.panel]}.`;
     case 'continue':
-      return `/${route.command.name} runs only in ${agent}’s ${target}: it runs there once you switch the agent to it (session.continueIn), which only you do.`;
+      return target === ''
+        ? `/${route.command.name} runs only in the connection ${agent} continues in, which this build lacks: nothing was sent, and only you can switch the agent.`
+        : `/${route.command.name} runs only in ${agent}’s ${target}: it runs there once you switch the agent to it (session.continueIn), which only you do.`;
     case 'shell':
-      return `That shell command runs only in ${agent}’s ${target}: it runs there once you switch the agent to it (session.continueIn), which only you do.`;
+      return target === ''
+        ? `That shell command runs only in the connection ${agent} continues in, which this build lacks: nothing was sent, and only you can switch the agent.`
+        : `That shell command runs only in ${agent}’s ${target}: it runs there once you switch the agent to it (session.continueIn), which only you do.`;
     case 'command':
     case 'send':
       return undefined;

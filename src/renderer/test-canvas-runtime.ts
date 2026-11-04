@@ -10,6 +10,11 @@ import type { Run } from '../shared/model/run';
 import type { MessageImage, SessionMode, SessionOptions } from '../shared/session';
 import { isSessionMode } from '../shared/session';
 import type { ConnectionId } from '../shared/adapter';
+import { connectionIn } from '../shared/adapter';
+import { imageRefusal } from '../shared/images';
+import { routeOf, routeRefusal } from '../shared/routing';
+import { declaredFeatures, effectiveFeatures, usableFeatures } from '../shared/features';
+import type { SessionFeatures } from '../shared/features';
 import { OPS } from '../shared/api/registry';
 import { AgentId, MessageId } from '../shared/api/ids';
 import { runView, sessionView } from '../shared/model/views';
@@ -52,6 +57,41 @@ export function canvasRuntime(
   const connectionOf = (id: string) => {
     const node = nodes.find((n) => n.id === id);
     return lookups.connectionOf(node?.type === 'agent' ? node.data : {});
+  };
+  /**
+   * What a `started` report makes usable, as the manager would project it with every method the
+   * fake core stands in for: the effective report within the adapter's maxima, and the usable part
+   * of the connection's `panels` and `live`. None for a connection or report it can't read.
+   */
+  const featuresOf = (connection: string, report: unknown): SessionFeatures | null => {
+    const found = connectionIn(catalog(), connection);
+    const effective = found && effectiveFeatures(report, declaredFeatures(found.adapter));
+    return found && effective
+      ? usableFeatures(effective, found.connection, {
+          setEffort: true,
+          stopTask: true,
+          mcpServers: true,
+          changeMcpServer: true,
+          rewindFiles: true,
+          listConversations: true,
+          forkConversation: true,
+        })
+      : null;
+  };
+  /** Why `body` isn't sent to `agent` as a message, by the one routing decision (the core's). */
+  const routeRefusalFor = (agent: string, body: string): string | undefined => {
+    const found = connectionIn(catalog(), connectionOf(agent));
+    if (found === undefined) return undefined;
+    const target = found.connection.continueIn
+      ? connectionIn(catalog(), found.connection.continueIn.connection)
+      : undefined;
+    const route = routeOf(body, {
+      connection: found.connection,
+      target: target?.connection,
+      offered: of(agent).commands,
+    });
+    const named = target === undefined ? '' : `${target.adapter.name} · ${target.connection.label}`;
+    return routeRefusal(route, agent, named);
   };
   const input = () => ({ canvas, nodes, run, sessions, catalog: lookups });
   function publish() {
@@ -209,7 +249,12 @@ export function canvasRuntime(
     const current = of(agent);
     switch (event.type) {
       case 'started':
-        setSession(agent, { ...current, ...event, status: 'idle' });
+        setSession(agent, {
+          ...current,
+          ...event,
+          status: 'idle',
+          features: featuresOf(connection, event),
+        });
         break;
       case 'status':
         setSession(agent, { ...current, status: event.status });
@@ -343,7 +388,8 @@ export function canvasRuntime(
         refused.delete(agent);
         const rest = { ...current };
         delete rest.running;
-        setSession(agent, { ...rest, status: 'idle' });
+        // No generation is ready once it closed.
+        setSession(agent, { ...rest, features: null, status: 'idle' });
         break;
       }
       case 'history':
@@ -486,6 +532,10 @@ export function canvasRuntime(
       const args = OPS.message.input.parse(raw);
       // As the core: you message agents, never a party (B21 C5).
       if (typeof args.to !== 'string') throw new Error('You message agents: name an agent.');
+      // As the core: text its connection doesn't send is refused with the shared words.
+      const refusal = routeRefusalFor(args.to, args.body);
+      if (refusal !== undefined)
+        return { ok: false as const, error: { code: 'refused', sentence: refusal } };
       return send(args.to, args.body, args.images);
     });
     core.reply('session.viewCommand', async (raw) => {
@@ -576,7 +626,22 @@ export function canvasRuntime(
       });
     core.reply('session.continueIn', async (raw) => {
       const { agent, connection, then } = OPS['session.continueIn'].input.parse(raw);
+      // As the core: images its destination can't take are refused before anything switches.
+      const to = connectionIn(catalog(), connection);
+      const pasted = then?.images ?? [];
+      const refusal =
+        to === undefined
+          ? undefined
+          : imageRefusal(
+              pasted,
+              to.connection.images,
+              `${to.adapter.name} · ${to.connection.label}`,
+            );
+      if (refusal !== undefined)
+        return { ok: false as const, error: { code: 'refused', sentence: refusal } };
       await replies.close(agent);
+      // The old generation's features go with it, and the new one has none until it starts.
+      setSession(agent, { ...of(agent), features: null });
       commit(
         AgentOps.setConnection(
           { ...document, nodes },

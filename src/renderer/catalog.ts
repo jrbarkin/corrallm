@@ -28,8 +28,9 @@ export function adapterOf(connection: ConnectionId | undefined): AdapterId | und
 
 /** The connection that continues a connection's conversation for what it can't do, if any. */
 export function continuesIn(connection: ConnectionId | undefined): ConnectionId | undefined {
-  if (connection === undefined) return undefined;
-  return connectionIn(catalog(), connection)?.connection.continueIn?.connection;
+  const target = connectionIn(catalog(), connection)?.connection.continueIn?.connection;
+  // A target this build's catalog lacks offers nothing.
+  return target !== undefined && connectionIn(catalog(), target) !== undefined ? target : undefined;
 }
 
 /** Whether a connection's agent view is its CLI's own terminal (else corrallm's transcript). */

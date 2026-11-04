@@ -9,23 +9,28 @@ import { ipcErrorMessage } from '../ipc-error';
 /**
  * /mcp for an agent, above its composer: its session's MCP servers, each with how it is
  * ("Connected · user · 12 tools", "Failed: Connection refused · project") and what can be done:
- * reconnect, disable, enable, or, for a server that needs the user to sign in, the agent's own
- * /mcp in Terminal (where the connection cannot sign in). Esc or Close closes it.
+ * reconnect, disable or enable, only as far as the session's usable `changes` allow (none: a
+ * read-only list) and its state suits, or, for a server that needs the user to sign in, the
+ * connection it continues in (`signIn`, given only where that connection declares it and is
+ * there). Esc or Close closes it.
  */
 export function McpPanel({
   adapter,
+  changes,
   list,
   change,
-  onSignIn,
+  signIn,
   onClose,
 }: {
   adapter: AdapterId;
+  /** The changes the session may make to a server (its usable `panels.mcp.changes`). */
+  changes: readonly McpChange[];
   /** The servers, from main (session:mcp). */
   list: () => Promise<McpServer[]>;
   /** Changes one; resolves with them all as they are then. */
   change: (server: string, change: McpChange) => Promise<McpServer[]>;
-  /** Signs in to a server through the agent’s own terminal. */
-  onSignIn: () => void;
+  /** Signs in to a server in the connection it continues in, named by `label`, if it may. */
+  signIn?: { label: string; onSignIn: () => void } | undefined;
   onClose: () => void;
 }) {
   const [servers, setServers] = useState<McpServer[]>();
@@ -63,17 +68,18 @@ export function McpPanel({
       },
     );
   };
-  const button = (server: McpServer, what: McpChange, label: string) => (
-    <button
-      type="button"
-      disabled={busy !== undefined}
-      onClick={() => {
-        act(server.name, what);
-      }}
-    >
-      {label}
-    </button>
-  );
+  const button = (server: McpServer, what: McpChange, label: string) =>
+    changes.includes(what) && (
+      <button
+        type="button"
+        disabled={busy !== undefined}
+        onClick={() => {
+          act(server.name, what);
+        }}
+      >
+        {label}
+      </button>
+    );
 
   return (
     <div
@@ -115,13 +121,17 @@ export function McpPanel({
                   button(server, 'enable', 'Enable')
                 ) : (
                   <>
-                    {server.status === 'needs-auth' ? (
-                      <button type="button" disabled={busy !== undefined} onClick={onSignIn}>
-                        Sign in in Terminal
-                      </button>
-                    ) : (
-                      server.status !== 'pending' && button(server, 'reconnect', 'Reconnect')
-                    )}
+                    {server.status === 'needs-auth'
+                      ? signIn && (
+                          <button
+                            type="button"
+                            disabled={busy !== undefined}
+                            onClick={signIn.onSignIn}
+                          >
+                            Sign in in {signIn.label}
+                          </button>
+                        )
+                      : server.status !== 'pending' && button(server, 'reconnect', 'Reconnect')}
                     {button(server, 'disable', 'Disable')}
                   </>
                 )}

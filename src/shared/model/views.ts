@@ -196,7 +196,7 @@ export function sessionView(
     agent,
     connection: connection ?? null,
     api: false,
-    features: null,
+    features: session.features ?? null,
     fallback,
     handoff,
     status: session.status,

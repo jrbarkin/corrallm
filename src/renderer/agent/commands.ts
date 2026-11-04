@@ -1,16 +1,22 @@
-import type { ConnectionDescriptor } from '../../shared/adapter';
+import { connectionIn } from '../../shared/adapter';
+import type { ConnectionDescriptor, ConnectionId } from '../../shared/adapter';
+import type { SessionFeatures } from '../../shared/features';
+import { PANELS, routeOf } from '../../shared/routing';
+import type { Panel, Route } from '../../shared/routing';
 import type { SlashCommand } from '../../shared/session';
+import { catalog } from '../catalog';
 
 /*
- * The slash commands an Agent SDK agent's composer knows besides its session's own. Claude Code
- * has commands that open a screen of its own (/permissions, /login, /hooks…): the Agent SDK runs
- * none of them. The agent view answers some itself (VIEW_COMMANDS: /resume's picker, /mcp's
- * servers, /rewind); for the others it offers to continue the conversation in Terminal, where Claude Code
- * itself runs, instead of sending them. So it does for Claude Code's bash mode ("!" first: a shell
- * command run directly, its output put in the conversation), which only its terminal has.
+ * The slash commands an agent's composer knows besides its session's own, and where a message
+ * goes (src/shared/routing.ts: the one decision the core's `message` admission shares). Some
+ * commands the view answers itself, in a panel its connection declares (VIEW_COMMANDS: /resume's
+ * picker, /mcp's servers, /rewind); the others a connection's descriptor says only its
+ * `continueIn` connection runs, and a shell command is text that connection's own `shellPrefix`
+ * starts. Those are offered to continue there, never sent. Nothing here names a CLI: what is
+ * particular to one is in its adapter's descriptor.
  */
 
-/** The commands the agent view answers itself, as Claude Code describes them. */
+/** The commands the agent view answers itself, each a panel a connection may declare. */
 export const VIEW_COMMANDS = [
   { name: 'resume', description: 'Resume a previous conversation', argumentHint: '' },
   { name: 'mcp', description: 'Manage MCP servers', argumentHint: '' },
@@ -19,107 +25,103 @@ export const VIEW_COMMANDS = [
     description: 'Restore the code and/or conversation to a previous point',
     argumentHint: '',
   },
-] as const satisfies readonly SlashCommand[];
+] as const satisfies readonly (SlashCommand & { name: Panel })[];
 
 export type ViewCommand = (typeof VIEW_COMMANDS)[number]['name'];
 
-/** A command that runs only in Claude Code's terminal. */
-interface TerminalCommand extends SlashCommand {
-  /**
-   * Only without arguments: with them, the session's own command of that name runs (a bare
-   * /config opens Claude Code's settings; /config with a setting sets it).
-   */
-  bare?: true;
+/** The connection an agent's connection continues in, if it declares one this build has. */
+export function continuationOf(
+  connection: ConnectionId | undefined,
+): ConnectionDescriptor | undefined {
+  const continueIn = connectionIn(catalog(), connection)?.connection.continueIn;
+  return continueIn && connectionIn(catalog(), continueIn.connection)?.connection;
 }
 
-/** Claude Code's commands that open a screen of its own, as Claude Code describes them. */
-export const TERMINAL_COMMANDS: readonly TerminalCommand[] = (
-  [
-    { name: 'login', description: 'Sign in to your Anthropic account' },
-    { name: 'logout', description: 'Sign out from your Anthropic account' },
-    { name: 'permissions', description: 'Manage allow and deny tool permission rules' },
-    { name: 'hooks', description: 'View hook configurations for tool events' },
-    { name: 'memory', description: 'Edit CLAUDE.md files and memory settings' },
-    {
-      name: 'status',
-      description: 'Show Claude Code status: version, model, account, API connectivity',
-    },
-    { name: 'export', description: 'Export the current conversation to a file or clipboard' },
-    { name: 'add-dir', description: 'Add a new working directory' },
-    { name: 'config', description: 'Open settings', bare: true },
-    { name: 'theme', description: 'Change the theme' },
-    { name: 'ide', description: 'Manage IDE integrations and show status' },
-    { name: 'plugin', description: 'Manage Claude Code plugins' },
-    { name: 'skills', description: 'List available skills' },
-    { name: 'rename', description: 'Rename the current conversation' },
-    { name: 'privacy-settings', description: 'View and update your privacy settings' },
-    { name: 'help', description: 'Show help and available commands' },
-  ] satisfies Omit<TerminalCommand, 'argumentHint'>[]
-).map((command) => ({ argumentHint: '', ...command }));
-
-/** A message's command, if it is one: its name and what follows it. */
-function parse(text: string): { name: string; args: string } | undefined {
-  const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-  const name = match?.[1];
-  return name === undefined ? undefined : { name, args: match?.[2]?.trim() ?? '' };
-}
-
-/**
- * The shell command a message runs in Claude Code's bash mode, if it is one: what follows a "!" at
- * its start ("!npm test": "npm test").
- */
-export function bashCommand(text: string): string | undefined {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('!')) return undefined;
-  const command = trimmed.slice(1).trim();
-  return command === '' ? undefined : command;
-}
-
-/** The view's own command a message runs, if it runs one ("/resume"). */
-export function viewCommand(text: string): ViewCommand | undefined {
-  const typed = parse(text);
-  return VIEW_COMMANDS.find((c) => c.name === typed?.name)?.name;
-}
-
-/**
- * The command a message runs, if it runs only in Claude Code's terminal: one of TERMINAL_COMMANDS
- * that the session (`offered`: its own commands) does not run itself.
- */
-export function terminalCommand(
+/** Where `text` goes for an agent on `connection` whose session offers `offered`. */
+export function routeText(
   text: string,
+  connection: ConnectionId | undefined,
   offered: readonly SlashCommand[] | undefined,
-): SlashCommand | undefined {
-  const typed = parse(text);
-  if (!typed) return undefined;
-  const command = TERMINAL_COMMANDS.find((c) => c.name === typed.name);
-  if (!command) return undefined;
-  const own = offered?.some((c) => c.name === typed.name) ?? false;
-  if (own && !(command.bare === true && typed.args === '')) return undefined;
-  const { name, description, argumentHint } = command;
-  return { name, description, argumentHint };
+): Route {
+  const found = connectionIn(catalog(), connection)?.connection;
+  if (found === undefined) return { kind: 'send' };
+  return routeOf(text, { connection: found, target: continuationOf(connection), offered });
+}
+
+/** Whether the panel of `panel` can open now in a session whose usable features are `features`. */
+export function panelOpens(panel: Panel, features: SessionFeatures | null | undefined): boolean {
+  if (!features) return false;
+  switch (panel) {
+    case 'resume':
+      return features.panels.resume === true;
+    case 'mcp':
+      return features.panels.mcp !== undefined;
+    case 'rewind':
+      return (features.panels.rewind?.restores.length ?? 0) > 0;
+  }
+}
+
+/** What a declared panel says when it can't open now, and that nothing was sent. */
+export function panelWords(
+  panel: Panel,
+  features: SessionFeatures | null | undefined,
+  connection: string,
+  reported = false,
+): string {
+  const command = `/${panel}`;
+  if (!features && reported) {
+    return `${command} isn’t available: this agent’s session is running but didn’t say what it supports, so none of its conversation features are offered. Nothing was sent.`;
+  }
+  if (!features) {
+    return `${command} can’t open yet: this agent’s session isn’t ready. Nothing was sent; try it once the session has started.`;
+  }
+  const why: Readonly<Record<Panel, string>> = {
+    resume: `${connection} can’t list this folder’s conversations to resume in this session`,
+    mcp: `${connection} can’t list its MCP servers in this session`,
+    rewind: `${connection} can’t restore to an earlier point in this session`,
+  };
+  return `${command} isn’t available now: ${why[panel]}. Nothing was sent.`;
+}
+
+/** What an offer to continue in `target` says about the text that starts it. */
+export function offerWords(
+  text: string,
+  route: Extract<Route, { kind: 'continue' | 'shell' }>,
+  target: Pick<ConnectionDescriptor, 'label' | 'shellPrefix'>,
+): string {
+  const shown = text.trim();
+  return route.kind === 'continue'
+    ? `${shown} runs only in ${target.label}: continue this conversation in ${target.label} to run it there.`
+    : `${shown} is a shell command: ${target.label} runs text starting with "${target.shellPrefix ?? ''}" as one, without asking. Continue this conversation in ${target.label} to run it there.`;
 }
 
 /**
- * Completes the session's commands and its declared view panels. When requested, also offers
- * the Terminal-only commands below, unless the session offers one of that name.
+ * Completes the session's commands, the panels of its connection that can open now, and the
+ * commands only its `continueIn` connection runs (saying where), unless the session offers one of
+ * that name. A name its connection declares as a panel is the panel's, whatever the session offers.
  */
 export function completedCommands(
   offered: readonly SlashCommand[] | undefined,
-  panels: ConnectionDescriptor['panels'],
-  terminal = false,
+  connection: ConnectionId | undefined,
+  features: SessionFeatures | null | undefined,
 ): SlashCommand[] {
-  const shown = VIEW_COMMANDS.filter((c) => Object.hasOwn(panels, c.name));
-  const views = new Set<string>(shown.map((c) => c.name));
-  const own = (offered ?? []).filter((c) => !views.has(c.name));
+  const found = connectionIn(catalog(), connection)?.connection;
+  const declared = new Set<string>(
+    PANELS.filter((panel) => found !== undefined && Object.hasOwn(found.panels, panel)),
+  );
+  const shown = VIEW_COMMANDS.filter((c) => declared.has(c.name) && panelOpens(c.name, features));
+  const own = (offered ?? []).filter((c) => !declared.has(c.name));
   const names = new Set(own.map((c) => c.name));
+  const target = continuationOf(connection);
+  const continued = target ? (found?.continueIn?.commands ?? []) : [];
   return [
     ...own,
     ...shown,
-    ...(terminal ? TERMINAL_COMMANDS : [])
+    ...continued
       .filter((c) => !names.has(c.name))
       .map(({ name, description, argumentHint }) => ({
         name,
-        description: `In Terminal · ${description}`,
+        description: `In ${target?.label ?? ''} · ${description}`,
         argumentHint,
       })),
   ];
