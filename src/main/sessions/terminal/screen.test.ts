@@ -102,3 +102,44 @@ describe('Screen', () => {
     expect([made.cols, made.rows]).toEqual([120, 40]);
   });
 });
+
+describe('a frame the CLI is drawing (DEC 2026)', () => {
+  const OPEN = '\x1b[?2026h';
+  const CLOSE = '\x1b[?2026l';
+
+  it('is drawn once the CLI closes the synchronized update it opened, and not before', async () => {
+    const { screen: shown } = screen();
+    shown.write(`${OPEN}\x1b[1;1HWould you like to run`);
+    let drawn = false;
+    const waiting = shown.drawn(10_000).then(() => {
+      drawn = true;
+    });
+    await shown.settled();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(drawn).toBe(false);
+    shown.write(`\x1b[2;1HPress enter to confirm${CLOSE}`);
+    await waiting;
+    expect(shown.lastRows(2)).toEqual(['Would you like to run', 'Press enter to confirm']);
+  });
+
+  it('is drawn at once with no frame open, and after its limit with one never closed', async () => {
+    const { screen: shown } = screen();
+    shown.write('hello');
+    await shown.drawn(10_000);
+    expect(shown.lastRows(1)).toEqual(['hello']);
+    shown.write(`${OPEN}half`);
+    const started = performance.now();
+    await shown.drawn(30);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(25);
+    shown.dispose();
+  });
+
+  it('lets a wait end when the screen is disposed', async () => {
+    const { screen: shown } = screen();
+    shown.write(`${OPEN}half`);
+    const waiting = shown.drawn(10_000);
+    await shown.settled();
+    shown.dispose();
+    await waiting;
+  });
+});

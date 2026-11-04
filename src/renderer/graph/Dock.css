@@ -125,6 +125,9 @@
 .dock-start > button {
   font-size: 24px;
 }
+.dock-settings > button {
+  font-size: 18px;
+}
 .canvas-dock[data-horizontal] {
   top: 10px;
   left: 0;

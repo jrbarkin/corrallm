@@ -8,7 +8,7 @@ vi.mock('../terminal/screen', async () => ({
 }));
 
 afterEach(cleanup);
-it.each(['New', 'Open…', 'Save', 'Save as…'] as const)(
+it.each(['New', 'Open…', 'Save', 'Save as…', 'Settings…'] as const)(
   'the canvas menu keeps %s behind its name and invokes one action',
   async (name) => {
     const actions = {
@@ -17,6 +17,7 @@ it.each(['New', 'Open…', 'Save', 'Save as…'] as const)(
       onSave: vi.fn(),
       onSaveAs: vi.fn(),
       onExamples: vi.fn(),
+      onSettings: vi.fn(),
       onDismiss: vi.fn(),
     };
     render(
@@ -38,7 +39,13 @@ it.each(['New', 'Open…', 'Save', 'Save as…'] as const)(
     expect(within(menu).getByRole('button', { name: 'Canvases' })).toBeTruthy();
     await events.click(within(menu).getByRole('button', { name }));
     const key = (
-      { New: 'onNew', 'Open…': 'onOpen', Save: 'onSave', 'Save as…': 'onSaveAs' } as const
+      {
+        New: 'onNew',
+        'Open…': 'onOpen',
+        Save: 'onSave',
+        'Save as…': 'onSaveAs',
+        'Settings…': 'onSettings',
+      } as const
     )[name];
     expect(actions[key]).toHaveBeenCalledOnce();
     expect(Object.values(actions).reduce((sum, action) => sum + action.mock.calls.length, 0)).toBe(
@@ -59,6 +66,7 @@ it('canvas commands dismiss with Escape or a click outside, without dispatching'
       onSave={action}
       onSaveAs={action}
       onExamples={action}
+      onSettings={action}
       onDismiss={action}
     />,
   );

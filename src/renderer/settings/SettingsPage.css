@@ -1,0 +1,105 @@
+.settings-page {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, -50%);
+  width: min(640px, calc(100% - 100px));
+  max-height: calc(100% - 130px);
+  display: flex;
+  flex-direction: column;
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid var(--float-line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.28);
+  user-select: text;
+}
+.settings-page:focus {
+  outline: none;
+}
+.settings-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--float-line);
+}
+.settings-page-header h2,
+.settings-page-header p {
+  margin: 0;
+}
+.settings-page-header h2 {
+  font-size: 16px;
+}
+.settings-page-header p {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.settings-page-body {
+  overflow: auto;
+  padding: 4px 16px 16px;
+}
+.settings-page h3 {
+  margin: 16px 0 4px;
+  font-size: 13px;
+}
+.settings-page section > p {
+  margin: 4px 0;
+  font-size: 12px;
+}
+.settings-page ul {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+}
+.settings-page li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--float-line);
+  font-size: 12px;
+}
+.settings-page li > div {
+  flex: 1 1 100%;
+}
+.settings-origin {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.settings-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.settings-page [role='alert'] {
+  flex-basis: 100%;
+  margin: 2px 0;
+  font-size: 12px;
+}
+.settings-page button {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--float-line);
+  border-radius: 6px;
+  background: var(--float-bg);
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.settings-page button:disabled,
+.settings-page [aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-page button:hover:not(:disabled, [aria-disabled='true']) {
+  background: var(--float-hover);
+}
+.settings-page button:focus-visible,
+.settings-page input:focus-visible {
+  outline: 2px solid var(--graph-accent, #3a6fd8);
+  outline-offset: 2px;
+}
