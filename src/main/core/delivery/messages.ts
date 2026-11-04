@@ -7,9 +7,11 @@ import {
 } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { AskColumn } from '../../../shared/model/asks';
+import { Purpose } from '../../../shared/model/purpose';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
+  isQueueHandoff,
   isSettled,
   isTurn,
   MESSAGE_KINDS,
@@ -37,8 +39,9 @@ import { Sequence } from './sequence';
  * prompt's decision, what was decided (`settled`: B13 §9.2 C9, written with its row and never
  * changed after), or for an ask, how it ended (B21 C6: written once, as it ends, never after), and
  * an ask's questions or an answer's answers (`ask`: B21 C6, migration 9, written with its row and
- * never changed after), and a result's verdict (`verdict`: B21 C8, migration 10, written with its
- * row and never changed after). Their order (`seq`) is one every canvas's messages share, whose
+ * never changed after), a result's verdict (`verdict`: B21 C8, migration 10, written with its
+ * row and never changed after), and a queue hand-off's or its evidence's purpose (`purpose`: B19
+ * C1, migration 12, written with its row and never changed after). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -116,7 +119,8 @@ export class MessageTable {
     return this.#store
       .prepare(
         `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
-           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask, verdict
+           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask, verdict,
+           purpose
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -150,16 +154,16 @@ export class MessageTable {
    * Within a write: a message's row, as kept (each column written by name, so that what a newer
    * corrallm keeps beside them stays). A record's settled decision is written with its row and
    * never after: no change writes it again; an ask's settlement is written once, as it ends (a
-   * row that has one keeps it). An ask's questions or an answer's answers, and a result's verdict,
-   * are written with its row and never after.
+   * row that has one keeps it). An ask's questions or an answer's answers, a result's verdict, and
+   * a queue hand-off's or its evidence's purpose (B19 C1), are written with its row and never after.
    */
   keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
     this.#store
       .prepare(
         `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
            reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
-           settled, ask, verdict)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           settled, ask, verdict, purpose)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
            task = excluded.task, turn = excluded.turn, state = excluded.state,
@@ -189,6 +193,7 @@ export class MessageTable {
         json(message.settled),
         json(message.ask),
         json(message.verdict),
+        json(message.purpose),
       );
   }
 
@@ -208,6 +213,12 @@ export class MessageStore {
   #active = new Map<string, Kept>();
   /** The latest place of a message `#active` has taken: one placed later goes last in it. */
   #activeLast = 0;
+  /**
+   * B19 C2: the messages delivery still acts on, by their recipient, each in the store's order, with
+   * the latest place each line has taken: what reads one agent's line (a gap offered it) reads it
+   * alone, never every message delivery acts on.
+   */
+  readonly #activeTo = new Map<PartyId, { line: Map<string, Kept>; last: number }>();
   /** Only records eligible for pruning: globally, and by both parties, in original order. */
   readonly #settled = new Sequence();
   readonly #parties = new Map<PartyId, Sequence>();
@@ -280,6 +291,15 @@ export class MessageStore {
   /** Every message kept, in the store's order. */
   all(): Message[] {
     return Array.from(this.#kept.values(), ({ message }) => message);
+  }
+
+  /**
+   * B19 C2: the messages kept that delivery still acts on (isActive) to party `to`, in the store's
+   * order: what waits for one agent, read without a walk of the rest.
+   */
+  activeTo(to: PartyId): Message[] {
+    const kept = this.#activeTo.get(to);
+    return kept === undefined ? [] : Array.from(kept.line.values(), ({ message }) => message);
   }
 
   /**
@@ -491,7 +511,11 @@ export class MessageStore {
   ): Message | undefined {
     const kept = this.#kept.get(id);
     if (!kept) return undefined;
-    const message = { ...kept.message, ...change };
+    // B19 C1: a purpose is the row's from its first write, as its column keeps it: never changed.
+    const { purpose } = kept.message;
+    const message: Message = { ...kept.message, ...change };
+    if (purpose === undefined) delete message.purpose;
+    else message.purpose = purpose;
     this.#keep({
       ...kept,
       message,
@@ -652,6 +676,7 @@ export class MessageStore {
         else this.#unsettle(row);
       }
     }
+    this.#lineOf(before, kept);
     if (!isActive(kept.message)) {
       this.#active.delete(id);
     } else if (this.#active.has(id) || kept.seq > this.#activeLast) {
@@ -675,6 +700,37 @@ export class MessageStore {
     }
     this.#kept.delete(id);
     this.#active.delete(id);
+    if (kept !== undefined) this.#lineOf(kept, undefined);
+  }
+
+  /**
+   * B19 C2: keeps a message's recipient's line (`#activeTo`) as it is now (`kept`, none: gone), as
+   * `#active` is kept: in its place, or last, or (active again behind one taken since) in order.
+   */
+  #lineOf(before: Kept | undefined, kept: Kept | undefined): void {
+    const id = (kept ?? before)?.message.id;
+    if (id === undefined) return;
+    if (before !== undefined && before.message.to !== kept?.message.to) {
+      const old = this.#activeTo.get(before.message.to);
+      old?.line.delete(id);
+      if (old?.line.size === 0) this.#activeTo.delete(before.message.to);
+    }
+    if (kept === undefined) return;
+    const { to } = kept.message;
+    let line = this.#activeTo.get(to);
+    if (!isActive(kept.message)) {
+      line?.line.delete(id);
+      if (line?.line.size === 0) this.#activeTo.delete(to);
+      return;
+    }
+    if (line === undefined) this.#activeTo.set(to, (line = { line: new Map(), last: 0 }));
+    if (line.line.has(id) || kept.seq > line.last) {
+      line.line.set(id, kept);
+      line.last = Math.max(line.last, kept.seq);
+    } else {
+      line.line.set(id, kept);
+      line.line = new Map([...line.line].sort(([, a], [, b]) => a.seq - b.seq));
+    }
   }
 
   #settle({ seq, message: { id, from, to } }: Kept): void {
@@ -792,10 +848,25 @@ function prunable({ message, withdrawal }: Kept): boolean {
  * task link, which only the runtime's mailbox gives a message (Engines), never a caller. The run
  * sends it and settles it; delivery never delivers, takes back or kills it as a party's. An answer
  * to an ask a task's attempt made carries its task too (B21 C7: a continuation), but is no send of
- * the run's: delivery delivers it, as the attempt's own turn.
+ * the run's: delivery delivers it, as the attempt's own turn. Nor is a message with a purpose (B19
+ * C1): a queue hand-off, which delivery delivers, or its evidence, a record.
  */
 export function sentByRun(message: Message): boolean {
-  return message.kind === 'text' && message.task !== undefined && message.ask === undefined;
+  return (
+    message.kind === 'text' &&
+    message.task !== undefined &&
+    message.ask === undefined &&
+    message.purpose === undefined
+  );
+}
+
+/**
+ * Whether a message is the run's own work (B19 C1): one of its sends of a task's attempt, or a
+ * queue hand-off, which delivery delivers but which its run owns. No party takes it back, no
+ * sender is told of it, no loop counts it, and Stop, Kill and a restart treat it as the run's.
+ */
+export function runOwned(message: Message): boolean {
+  return sentByRun(message) || isQueueHandoff(message);
 }
 
 /**
@@ -908,6 +979,12 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
       ? undefined
       : Verdict.safeParse(parsed(row.verdict));
   if (verdict?.success === false) return undefined;
+  // A purpose this code doesn't read (another version's): the row is left as it is too.
+  const purpose =
+    row.purpose === null || row.purpose === undefined
+      ? undefined
+      : Purpose.safeParse(parsed(row.purpose));
+  if (purpose?.success === false) return undefined;
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -929,6 +1006,7 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     ...(decided === undefined ? {} : { settled: decided.data }),
     ...(asked === undefined ? {} : { ask: asked.data }),
     ...(verdict === undefined ? {} : { verdict: verdict.data }),
+    ...(purpose === undefined ? {} : { purpose: purpose.data }),
     at,
   } as unknown as Message;
   const kept: Kept = {

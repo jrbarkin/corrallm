@@ -42,7 +42,8 @@ export function brandedId<B extends Brand, S extends z.ZodString | z.ZodStringFo
 /**
  * A Needs item (API Spec §5.9), by its id on its canvas: what it is, then its agent's id (escaped),
  * a hold's or a prompt's generation and what of the agent's it is (src/shared/model/needs-selectors.ts), or a
- * proposal's, a file review's, a setup card's or a workspace change's own id. A proposal returns one.
+ * proposal's, a file review's, a setup card's or a workspace change's own id; a loop's (B21 C6) or a
+ * hand-off cycle's (B19 C2, `cycle/<agent>`) its agents. A proposal returns one.
  */
 export const NeedId = brandedId(
   'NeedId',
@@ -50,7 +51,7 @@ export const NeedId = brandedId(
     .string()
     .max(MAX_NEED_ID)
     .regex(
-      /^(?:hold|start|unasking|limited|prompt|proposal|file|stalled|setup|rebind|message|ask|loop)\/[\s\S]+$/,
+      /^(?:hold|start|unasking|limited|prompt|proposal|file|stalled|setup|rebind|message|ask|loop|cycle)\/[\s\S]+$/,
     ),
 );
 export type NeedId = z.infer<typeof NeedId>;

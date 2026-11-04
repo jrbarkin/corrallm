@@ -13,6 +13,7 @@ import { toolName } from '../../shared/api/registry';
 import type { Message } from '../../shared/model/messages';
 import { keepCanvases, readOnDisk } from '../core/store/test-store';
 import { TestChildren } from './test-children';
+import { httpFetch } from './test-http-fetch';
 import type { TestChild } from './test-children';
 import { cleanupCrash } from './test-crash-cleanup';
 
@@ -151,6 +152,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve, killed again and 
     await client.connect(
       new StreamableHTTPClientTransport(new URL(url), {
         requestInit: { headers: { Authorization: `Bearer ${token}` } },
+        // Not Node's own fetch, which throws uncaught on macOS writing to a server just killed.
+        fetch: httpFetch,
       }),
     );
     return client;

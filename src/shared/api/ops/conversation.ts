@@ -6,6 +6,7 @@ import { MESSAGE_KINDS, MESSAGE_STATES, PARTY_PATTERN } from '../../model/messag
 import { NEED_KINDS } from '../../model/needs';
 import { Choice, PromptNeedView, PromptReplyAnswer } from '../../model/prompts';
 import { AskColumn } from '../../model/asks';
+import { Purpose } from '../../model/purpose';
 import { Verdict } from '../../model/results';
 import { Settled } from '../../model/settled';
 import { TURN_REASONS } from '../../session';
@@ -58,6 +59,8 @@ export const Message = z.strictObject({
   ask: AskColumn.optional(),
   /** A result record's verdict (B21 C8): the outcome its agent reported, and its summary. */
   verdict: Verdict.optional(),
+  /** B19 C1: what the core made it for: a queue hand-off, or a hand-off's evidence. Core-minted. */
+  purpose: Purpose.optional(),
   at: z.number(),
 });
 

@@ -313,7 +313,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "5d89d53c9e1cbabd"
+      "output": "53fc28b0a7c3ae2d"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -357,7 +357,7 @@
     },
     "worktree.remove": {
       "input": "6c53b4b2cbe1d85f",
-      "output": "16d9c3e93cdb745e"
+      "output": "8099323308d78df8"
     },
     "branch.diff": {
       "input": "ea58dbaf93714d81",
@@ -369,7 +369,7 @@
     },
     "canvas.create": {
       "input": "3394f69e468a0469",
-      "output": "acea2da07183ace8"
+      "output": "e619ef3265bdf5aa"
     },
     "canvas.open": {
       "input": "8ed9ce92c68e70c8",
@@ -377,7 +377,7 @@
     },
     "canvas.save": {
       "input": "f676d264f07b5166",
-      "output": "d04339764c838ea7"
+      "output": "5795d0b0c8f2eaad"
     },
     "canvas.saveAs": {
       "input": "f676d264f07b5166",
@@ -385,7 +385,7 @@
     },
     "canvas.close": {
       "input": "1a908234579fefb6",
-      "output": "eba6496cf38ca8d8"
+      "output": "4c505095e823139a"
     },
     "project.choose": {
       "input": "f676d264f07b5166",
@@ -421,7 +421,7 @@
     },
     "canvas.delete": {
       "input": "13089a4ee94a5b15",
-      "output": "18a421e3864bef06"
+      "output": "8a9e17e511045ed0"
     },
     "canvas.link": {
       "input": "621da187728c140f",
@@ -449,7 +449,7 @@
     },
     "canvas.batch": {
       "input": "b74ddd470d7555ec",
-      "output": "f1b91b6477f67401"
+      "output": "223328d52b5c827f"
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
@@ -505,7 +505,7 @@
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
-      "output": "ebcffdddb1f95662"
+      "output": "6ff43b8dfeb01fc8"
     },
     "message": {
       "input": "1bc3cefb59c8f144",
@@ -513,11 +513,11 @@
     },
     "wait": {
       "input": "d429567b08fb223f",
-      "output": "c7b55e47bd14bafa"
+      "output": "276ef50894b3f798"
     },
     "reply": {
-      "input": "21ada39b9ec4d54c",
-      "output": "d334f64773514652"
+      "input": "c71a16cffbc733d2",
+      "output": "ca8edf6065e9eb84"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
@@ -573,7 +573,7 @@
     },
     "session.rewind": {
       "input": "948321df0cdae09f",
-      "output": "624b766511d75eb2"
+      "output": "dfc6d03cdf9fe7f4"
     },
     "session.continueIn": {
       "input": "8c4c055fef37a203",

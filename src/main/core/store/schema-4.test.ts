@@ -190,7 +190,7 @@ const submissionsOf = (canvas: CanvasId) =>
 
 /**
  * The message rows the fixture has, as migration 4 classifies each by what made it (and migrations
- * 7, 9 and 10 leave them: no settled decision, no ask, no verdict).
+ * 7, 9, 10 and 12 leave them: no settled decision, no ask, no verdict, no purpose).
  */
 function classified(): Row[] {
   return (FIXTURE.tables.message ?? []).map((row) => {
@@ -208,6 +208,7 @@ function classified(): Row[] {
       settled: null,
       ask: null,
       verdict: null,
+      purpose: null,
     };
   });
 }

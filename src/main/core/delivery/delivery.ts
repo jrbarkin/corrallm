@@ -1,4 +1,4 @@
-import { endpointRefusal } from '../../../shared/model/catalog';
+import { endpointRefusal, fileMentionRefusal, shellRefusal } from '../../../shared/model/catalog';
 import type { SessionAvailability } from '../../../shared/session';
 import { randomUUID } from 'node:crypto';
 
@@ -10,20 +10,31 @@ import type { UnaskingWhy } from '../../../shared/model/needs-selectors';
 import type { NeedsItem } from '../../../shared/model/needs';
 
 import type { Engine } from '../engine/engine';
-import type { Admission, AdmittedWork, PauseCause } from '../engine/run/runner';
+import type {
+  Admission,
+  AdmittedWork,
+  DeliveryPoint,
+  PauseCause,
+  QueueHold,
+  RunHandOff,
+} from '../engine/run/runner';
+import { holdGeneration } from '../../../shared/model/needs-selectors';
 import { streamed } from '../engine/transcript/reduce';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import {
   agentOf,
   agentParty,
   isContinuation,
+  isHandoffEvidence,
+  isQueueHandoff,
   isTurn,
   outsideOf,
 } from '../../../shared/model/messages';
+import { HANDOFF_EVIDENCE, QUEUE_HANDOFF } from '../../../shared/model/purpose';
 import type { Session } from '../../../shared/model/session';
 import type { Message, PartyId } from '../../../shared/model/messages';
 import { threadTitle } from '../../../shared/model/session';
-import { holdText, resetTime } from '../../../shared/model/words';
+import { andList, holdText, resetTime } from '../../../shared/model/words';
 import { isSessionMode } from '../../../shared/session';
 import type { TaskMessage, TurnReason, TurnResult, UserMessage } from '../../../shared/session';
 import type { UsageHold } from '../../../shared/usage';
@@ -41,7 +52,7 @@ import { answerFrame, askFrame, Asks, continuationFrame } from './asks';
 import { DeliveryError } from './errors';
 import { orderedPair } from './loops';
 import type { LoopStore, Pair } from './loops';
-import { capBody, sentByRun } from './messages';
+import { capBody, runOwned, sentByRun } from './messages';
 
 export { DeliveryError } from './errors';
 import type { MessageStore } from './messages';
@@ -64,7 +75,9 @@ import type { MessageStore } from './messages';
  * for you, and when it ends withdrawn or unresolved. A turn between two agents is also counted as
  * it is journaled (B21 C6, LoopStore): after ten without you, the eleventh and every later one of
  * that pair wait for you, whatever else frees their agent, until you let them go on or speak to
- * either agent.
+ * either agent. While an agent's queue runs, a party's message (and a queue hand-off, B19 C1) also
+ * waits for the agent's delivery point, which the run's interpreter says (B19 C2: RunStore.point),
+ * sharing the agent's one slot with the run (RunStore.reserve, RunPoints.offer).
  */
 
 export interface DeliveryDeps {
@@ -105,6 +118,12 @@ export interface DeliveryDeps {
    * and a fallback rule holds as ask does.
    */
   admit?: (agent: string, work: AdmittedWork) => Admission;
+  /**
+   * B19 C1: why the canvas's run can't be kept on disk now (its checkpoint too large or complex),
+   * if it can't: a queue hand-off, the run's work, is never sent while it can't, as the run's own
+   * sends are not. None: it always can.
+   */
+  unsaved?: () => string | undefined;
   /**
    * B11a C7: the core's handoff service, for corrallm's handoff requests (`ask`) and what the first
    * send after a switch carries. None: a request is withdrawn, and nothing is carried.
@@ -182,7 +201,14 @@ type Hold =
   | ({ kind: 'stuck' } & Unstartable)
   | { kind: 'unasking'; why: UnaskingWhy }
   | { kind: 'limited'; backend: string; until: number }
-  | { kind: 'usage'; hold: UsageHold; until: number };
+  | { kind: 'usage'; hold: UsageHold; until: number }
+  /**
+   * B19 C2: not at its agent's delivery point now (its queue runs a stretch nothing enters), or
+   * later than the gap it is at: it waits for a later point, its sender told nothing.
+   */
+  | { kind: 'later' }
+  /** B19 C2: its agent's queue waits on a hold of its own: its sender is told once. */
+  | { kind: 'queue'; hold: QueueHold; of: string; need?: string };
 
 /**
  * Why a session would not start, the connection it would not start on, when it refused, and
@@ -216,7 +242,13 @@ interface Withdrawal {
  * or its sender, or (B21 C7) the task it continues was stopped, which tells no one: the run holds
  * that task for you, as it holds its own sends a Stop took back.
  */
-type TakeBackWhy = 'withdrawn' | 'recipient killed' | 'sender killed' | 'task stopped';
+type TakeBackWhy =
+  | 'withdrawn'
+  | 'recipient killed'
+  | 'sender killed'
+  | 'task stopped'
+  /** B19 C1: the run took back its queue hand-off (Stop, Run again). */
+  | 'run stopped';
 
 interface TakingBack {
   by: PartyId;
@@ -359,6 +391,27 @@ export class Delivery {
    */
   #unrecordable: (() => void) | undefined;
   readonly #images = new Map<string, NonNullable<UserMessage['images']>>();
+  /**
+   * B19 C1: the owners and recipients (`owner\0to`) whose hand-off waited unsent for room in the
+   * recipient's line (MAX_WAITING): the run is told once there is.
+   */
+  readonly #full = new Set<string>();
+  /**
+   * B19 C2: the slot of each agent whose next native turn delivery holds (RunStore.reserve, or a gap
+   * it took), by agent: the token it holds it under, and the message it delivers in it, once one.
+   */
+  readonly #slots = new Map<string, { token: object; message?: string }>();
+  /** B19 C2: the gap each agent's queue was last at, and what was kept as it opened (its place). */
+  readonly #gaps = new Map<string, { gap: string; cutoff: number }>();
+  /** B19 C2: the agents whose senders were told of a hold of their queues'. */
+  readonly #queueTold = new Set<string>();
+  /**
+   * B19 C2: the queues that wait on each other's hand-offs, each running its own (so none is at a
+   * delivery point for the one it is handed), as delivery last looked: each cycle's agents, in
+   * order, from the first by its UTF-8 bytes, and its Needs item's id. Read from what it looked at.
+   */
+  #cycles: { id: string; agents: string[] }[] = [];
+  #cycleKey = '';
   #scheduled = false;
   /** Whether it delivers yet: not until it starts, though messages may be sent before. */
   #started = false;
@@ -437,9 +490,12 @@ export class Delivery {
    */
   async close(): Promise<void> {
     this.#closed = true;
+    this.#cycles = [];
     this.asks.close();
     this.#images.clear();
     this.#carried.clear();
+    // B19 C2: its run is paused as it closes, never moved on by a slot let go.
+    this.#slots.clear();
     for (const stop of this.#stop) stop();
     this.#alarm?.cancel();
     this.#alarm = undefined;
@@ -523,9 +579,260 @@ export class Delivery {
     return message;
   }
 
+  /**
+   * B19 C1: records a queue hand-off (the run's: RunHandOffs.record), pending, from the queue's agent
+   * to its recipient, its task the item's attempt: delivered once its record is on disk, at its
+   * recipient's delivery point, under every hold a party's message waits on there and, as its run's
+   * work, while the run doesn't go or its owner is paused. Its id; none, nothing recorded, while
+   * its owner has MAX_WAITING messages waiting for its recipient (the run is told once one goes).
+   * Its record that can't reach the disk leaves it unresolved, never sent, and its item told so.
+   */
+  handOff({ owner, to, text, task }: RunHandOff): string | undefined {
+    const { store } = this.#deps;
+    const from = agentParty(owner);
+    if (this.waitingFrom(to, from) >= MAX_WAITING) {
+      this.#full.add(`${owner}\u0000${to}`);
+      return undefined;
+    }
+    const message = store.add({
+      from,
+      to: agentParty(to),
+      kind: 'text',
+      origin: 'run',
+      body: text,
+      task,
+      state: 'pending',
+      purpose: QUEUE_HANDOFF,
+    });
+    this.#recording.add(message.id);
+    void store.durable().then(
+      () => {
+        this.#recording.delete(message.id);
+        this.schedule();
+      },
+      (error: unknown) => {
+        this.#recording.delete(message.id);
+        console.error('Could not record a queue hand-off:', error);
+        const kept = store.get(message.id);
+        if (kept?.state !== 'pending') return;
+        const why = error instanceof Error ? error.message : String(error);
+        const turn: TurnResult = {
+          status: 'failed',
+          reason: 'error',
+          message: threadTitle(
+            `The run could not be saved, so the message was not handed over: ${why}`,
+            REASON,
+          ),
+        };
+        store.update(message.id, { state: 'unresolved', turn });
+        this.#handOffEnded(kept, '', turn);
+      },
+    );
+    return message.id;
+  }
+
+  /**
+   * B19 C1: the run takes back attempt `task`'s queue hand-off (Stop, Run again): withdrawn by
+   * corrallm while it waits, nothing sent and no one told; else taken back, its turn interrupted,
+   * its recipient told with its next message should it have reached it.
+   */
+  withdrawHandOff(task: TaskMessage): void {
+    if (this.#closed) return;
+    for (const message of this.#deps.store.active()) {
+      if (!isQueueHandoff(message) || !sameTask(message.task, task)) continue;
+      if (message.state === 'pending')
+        this.#deps.store.update(message.id, {
+          state: 'withdrawn',
+          by: 'corrallm',
+          turn: TAKEN_BACK,
+        });
+      else if (this.#inFlight(message)) this.#takeBack(message, 'corrallm', 'run stopped');
+    }
+    this.schedule();
+  }
+
+  /**
+   * B19 C1: a queue hand-off's turn ended, or it never went (withdrawn, declined, unrecorded): its
+   * run hears how, judging its item, which it does once and for its own attempt alone.
+   */
+  #handOffEnded(message: Message, reply: string, result: TurnResult): void {
+    if (message.task === undefined || !isQueueHandoff(message)) return;
+    this.#deps.engine.run.handedOff(message.task, {
+      failed: result.status !== 'completed',
+      reply,
+      result,
+    });
+  }
+
+  /**
+   * B19 C1: what holds a queue hand-off as its run's work, beside what holds a party's message to
+   * its recipient: the run not going (a restart's pause), and its owner's pause (its own or a
+   * group's), which never interrupts a turn it already started.
+   */
+  #runWorkHold(message: Message): Hold | undefined {
+    const { run } = this.#deps.engine;
+    if (!run.snapshot().running) return { kind: 'busy' };
+    const owner = agentOf(message.from);
+    if (owner !== undefined && run.holding({ agent: owner }).length > 0) return { kind: 'busy' };
+    return undefined;
+  }
+
+  /**
+   * B19 C1: why a queue hand-off can't go to agent `node` as its connection runs now: its text, as
+   * written, starts with that connection's shell prefix, or holds a native file mention there.
+   */
+  #handOffRefusal(node: AgentNode, message: Message): string | undefined {
+    const { catalog } = this.#deps.engine;
+    const connection = catalog.connectionOf(node.data);
+    return (
+      shellRefusal(catalog, connection, message.body) ??
+      fileMentionRefusal(catalog, connection, message.body)
+    );
+  }
+
+  /** B19 C1: a hand-off its recipient's connection refuses is never sent: its item is told why. */
+  #decline(message: Message, refusal: string): void {
+    const turn: TurnResult = { status: 'failed', reason: 'declined', message: refusal };
+    this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm', turn });
+    this.#freeSlotOf(message.id);
+    this.#handOffEnded(message, '', turn);
+    this.schedule();
+  }
+
+  /**
+   * B19 C2: the run's queue for agent `agent` is at gap `gap` (RunPoints.offer): whether delivery
+   * takes the agent's next native turn first, under `token`, for what waited for it as the gap
+   * opened (in the order it came), from a party (never yours, corrallm's handoff request or a
+   * task's continuation, which keep their own lanes). It takes it where one of those isn't held for
+   * good (only a check still to finish holds it: its workspace's, its CLI's default, a switch, its
+   * session busy), and then delivers it as it next looks, or lets the slot go.
+   */
+  offer(agent: string, gap: string, token: object): boolean {
+    if (!this.#started || this.#closed || this.#frozen || this.#slots.has(agent)) return false;
+    const node = this.#deps.nodes().find((one) => one.type === 'agent' && one.id === agent);
+    if (node?.type !== 'agent') return false;
+    const cutoff = this.#cutoff(agent, gap);
+    const { store } = this.#deps;
+    // What waits for this agent alone, read from its line, never every message delivery acts on.
+    const prefix = (this.#waiting(store.activeTo(agentParty(agent))).get(agent) ?? []).filter(
+      (message) => this.#theirs(message) && (store.seqOf(message.id) ?? Infinity) <= cutoff,
+    );
+    if (prefix.length === 0) return false;
+    /** What holds a party's message, and a hand-off (the run's work), for good: read once each. */
+    const forGood = (hold: Hold | undefined) => hold !== undefined && hold.kind !== 'busy';
+    let party: boolean | undefined;
+    let handOff: boolean | undefined;
+    const here = this.#here();
+    const takes = prefix.some((message) => {
+      const pair = this.#deps.loops.holding() ? this.#turnPair(message, here) : undefined;
+      if (pair !== undefined && this.#deps.loops.held(...pair)) return false;
+      if (!isQueueHandoff(message)) return !(party ??= forGood(this.#holdOf(node)));
+      handOff ??= forGood(this.#holdOf(node, false, false));
+      return !handOff && this.#runWorkHold(message) === undefined;
+    });
+    if (!takes) return false;
+    this.#slots.set(agent, { token });
+    this.schedule();
+    return true;
+  }
+
+  /** B19 C2: whether a message waits as a party's, which delivery points hold: not one of the lanes. */
+  #theirs(message: Message): boolean {
+    return !this.#yours(message) && !this.#request(message) && !isContinuation(message);
+  }
+
+  /**
+   * B19 C2: the last place given in the store's order as agent `agent`'s queue opened gap `gap`:
+   * what came later waits for a later point, however much keeps arriving.
+   */
+  #cutoff(agent: string, gap: string): number {
+    const known = this.#gaps.get(agent);
+    if (known?.gap === gap) return known.cutoff;
+    const cutoff = this.#deps.store.end();
+    this.#gaps.set(agent, { gap, cutoff });
+    return cutoff;
+  }
+
+  /**
+   * B19 C2: what agent `node`'s delivery point holds a party's message `message` to it by now, if
+   * anything: the stretch its queue runs (it waits for a later point), a gap that opened before
+   * it came, or a hold of its queue's (its sender told once).
+   */
+  #atPoint(
+    node: AgentNode,
+    message: Message,
+    point = this.#deps.engine.run.point(node.id),
+  ): Hold | undefined {
+    switch (point.kind) {
+      case 'open':
+        return undefined;
+      case 'gap':
+        return (this.#deps.store.seqOf(message.id) ?? Infinity) <= this.#cutoff(node.id, point.gap)
+          ? undefined
+          : LATER;
+      case 'protected':
+        // Queues handing off to each other wait here, each running its own: their cycle is a Needs
+        // item of its own (#findCycles), with Stop.
+        return LATER;
+      case 'held':
+        return this.#queueHold(node, point);
+    }
+  }
+
+  /** B19 C2: a hold of agent `node`'s queue's, as its senders are told of it: once each. */
+  #queueHold(node: AgentNode, { hold }: Extract<DeliveryPoint, { kind: 'held' }>): Hold {
+    const at = this.#deps.engine.run.snapshot().agents[node.id];
+    const generation = holdGeneration(at);
+    const current = at?.current ?? '';
+    const need =
+      at?.status === 'asking' && at.current !== undefined
+        ? `hold/${encodeURIComponent(node.id)}/${generation}/${at.current}`
+        : undefined;
+    return {
+      kind: 'queue',
+      hold,
+      of: `${generation}:${encodeURIComponent(current)}`,
+      ...(need === undefined ? {} : { need }),
+    };
+  }
+
+  /**
+   * B19 C2: lets agent `agent`'s slot go, should delivery hold it: its queue goes on from where it
+   * is, the run offering its gap again once a turn delivered in it ended; past it, never offered
+   * again, where the gap it took held nothing it could deliver after all.
+   */
+  #free(agent: string): void {
+    const slot = this.#slots.get(agent);
+    if (slot === undefined) return;
+    this.#slots.delete(agent);
+    this.#deps.engine.run.release(agent, slot.token, slot.message === undefined);
+  }
+
+  /**
+   * B19 C2: whether message `message` still holds its agent's slot, which the run yields to: once
+   * it took it, the queue moving on meanwhile never takes the turn it was journaled for.
+   */
+  #holdsSlot(message: Message): boolean {
+    const agent = agentOf(message.to);
+    const slot = agent === undefined ? undefined : this.#slots.get(agent);
+    return (
+      agent !== undefined &&
+      slot?.message === message.id &&
+      this.#deps.engine.run.holds(agent, slot.token)
+    );
+  }
+
+  /** B19 C2: lets go the slot message `id` was delivered in, if it was. */
+  #freeSlotOf(id: string): void {
+    const agent = agentOf(this.#deps.store.get(id)?.to ?? 'you');
+    if (agent !== undefined && this.#slots.get(agent)?.message === id) this.#free(agent);
+  }
+
   /** How many messages `from` has waiting for agent `agent` (asks count: MAX_WAITING). */
   waitingFrom(agent: string, from: PartyId): number {
-    return (this.#waiting().get(agent) ?? []).filter((message) => message.from === from).length;
+    return (this.#waiting(this.#deps.store.activeTo(agentParty(agent))).get(agent) ?? []).filter(
+      (message) => message.from === from,
+    ).length;
   }
 
   /** Looks again, soon, at what waits: once, however often asked before then. */
@@ -557,11 +864,7 @@ export class Delivery {
     { images, told }: { images?: UserMessage['images']; told?: string } = {},
   ): Promise<Message> {
     const { store } = this.#deps;
-    if (
-      from !== 'you' &&
-      (this.#waiting().get(to) ?? []).filter((message) => message.from === from).length >=
-        MAX_WAITING
-    ) {
+    if (from !== 'you' && this.waitingFrom(to, from) >= MAX_WAITING) {
       throw new DeliveryError(
         'refused',
         `${this.#name(to)} already has ${String(MAX_WAITING)} of your messages waiting; send another once one of them goes.`,
@@ -619,7 +922,75 @@ export class Delivery {
    * to you, and the pairs of agents held for ten turns without you.
    */
   items(): NeedsItem[] {
-    return [...this.asks.items(), ...this.#holds().map(({ item }) => item)];
+    return [...this.asks.items(), ...this.#holds().map(({ item }) => item), ...this.#cycleItems()];
+  }
+
+  /** B19 C2: the hand-off cycle `cycle/<agent>` names, as you see it in Needs, if one holds now. */
+  cycleItem(need: string): NeedsItem | undefined {
+    return this.#cycleItems().find(({ id }) => id === need);
+  }
+
+  /**
+   * B19 C2: each cycle of queues waiting on each other's hand-offs, as a Needs item for you alone
+   * (it names no agent a token reaches): what it is, in corrallm's words and the agents' names, and
+   * Stop, yours, which takes the hand-offs back.
+   */
+  #cycleItems(): NeedsItem[] {
+    if (this.#cycles.length === 0) return [];
+    const nodes = this.#deps.nodes();
+    return this.#cycles.map(({ id, agents }) => {
+      const names = agents.map((agent) => partyName(nodes, agentParty(agent)));
+      return {
+        id,
+        canvas: this.#deps.canvas,
+        kind: 'hold',
+        for: 'you',
+        by: ['you'],
+        title:
+          names.length === 2
+            ? `${andList(names)} each wait on a hand-off to the other, so neither can be delivered: stop the run to end it.`
+            : `${andList(names)} each wait on a hand-off to the next, so none can be delivered: stop the run to end it.`,
+        choices: [{ value: 'stop', label: 'Stop the run', humanOnly: CYCLE_STOP }],
+        answerIn: 'api',
+      };
+    });
+  }
+
+  /**
+   * B19 C2: the cycles among `edges` (each queue's agent and the agent its pending hand-off waits
+   * for, that agent running its own hand-off), found in one walk of the edges alone; Needs is
+   * looked at again only as they change.
+   */
+  #findCycles(edges: ReadonlyMap<string, string>): void {
+    const cycles: { id: string; agents: string[] }[] = [];
+    const done = new Set<string>();
+    for (const start of edges.size > 1 ? edges.keys() : []) {
+      const path: string[] = [];
+      const seen = new Map<string, number>();
+      let agent: string | undefined = start;
+      while (agent !== undefined && !done.has(agent) && !seen.has(agent)) {
+        seen.set(agent, path.length);
+        path.push(agent);
+        agent = edges.get(agent);
+      }
+      const from = agent === undefined ? undefined : seen.get(agent);
+      for (const one of path) done.add(one);
+      if (from === undefined) continue;
+      const ring = path.slice(from);
+      const first = ring.reduce((a, b) =>
+        Buffer.compare(Buffer.from(a), Buffer.from(b)) <= 0 ? a : b,
+      );
+      const at = ring.indexOf(first);
+      const id = `cycle/${encodeURIComponent(first)}`;
+      // An id too long for the API is no item; the cycle still holds, and Stop still ends it.
+      if (id.length <= MAX_NEED_ID)
+        cycles.push({ id, agents: [...ring.slice(at), ...ring.slice(0, at)] });
+    }
+    const key = JSON.stringify(cycles.map(({ agents }) => agents));
+    this.#cycles = cycles;
+    if (key === this.#cycleKey) return;
+    this.#cycleKey = key;
+    this.#deps.changed();
   }
 
   /** The pair hold `loop/<a>/<b>` names, as you see it in Needs, if it holds now. */
@@ -692,7 +1063,8 @@ export class Delivery {
    * record no turn is made of).
    */
   #turnPair(message: Message, here: ReadonlySet<string>): Pair | undefined {
-    if (!isTurn(message) || sentByRun(message) || this.#request(message)) return undefined;
+    // B19 C1: a queue hand-off is the run's work, which no loop counts.
+    if (!isTurn(message) || runOwned(message) || this.#request(message)) return undefined;
     let { from, to } = message;
     if (message.kind === 'settled') {
       const ask = message.replyTo === undefined ? undefined : this.#deps.store.get(message.replyTo);
@@ -818,7 +1190,8 @@ export class Delivery {
         'A question, its answer and its end can’t be taken back: a question stays open until it is answered, dismissed or expires.',
       );
     }
-    if (sentByRun(message)) {
+    // B19 C1: a queue hand-off, and its evidence, are the run's too.
+    if (runOwned(message) || isHandoffEvidence(message)) {
       throw new DeliveryError(
         'refused',
         'That message is the run’s own: stop the run, or pause or kill its agent, to take it back.',
@@ -989,6 +1362,12 @@ export class Delivery {
     this.asks.sweep();
     this.#withdrawGone();
     this.#withdrawStale();
+    // B19 C2: a slot whose message no longer goes (settled elsewhere) is let go.
+    for (const [agent, slot] of [...this.#slots]) {
+      if (slot.message === undefined || this.#writing.has(agent)) continue;
+      const message = store.get(slot.message);
+      if (message === undefined || !this.#inFlight(message)) this.#free(agent);
+    }
     // B21 C6: the counts of a pair with an agent no longer on the canvas go.
     const here = this.#here();
     this.#deps.loops.prune(here);
@@ -1039,6 +1418,14 @@ export class Delivery {
     if (lostImages) messages = store.active();
     /** What waits for each agent, in the order it came, once its record is on disk. */
     const waiting = this.#waiting(messages.filter(({ id }) => !this.#recording.has(id)));
+    /** B19 C2: the agents a message is on its way to disk for. */
+    const recording = new Set(
+      this.#recording.size === 0
+        ? []
+        : messages.flatMap((message) => (this.#recording.has(message.id) ? [message.to] : [])),
+    );
+    // B19 C1: a hand-off that waited for room in its recipient's line goes once there is.
+    if (this.#full.size > 0) this.#roomFor(waiting);
     // B21 C6: each waiting turn's pair, and each pair's notice, of what waited as this check
     // began; read once a pair is held (one may be as this check delivers), never while none is.
     const waited = messages;
@@ -1054,6 +1441,8 @@ export class Delivery {
     this.#tellWaiting(messages);
     this.#followDefaults();
     let alarm: number | undefined;
+    /** B19 C2: each queue's agent whose pending hand-off waits for an agent running its own. */
+    const edges = new Map<string, string>();
     for (const node of this.#deps.nodes()) {
       if (node.type !== 'agent') continue;
       this.#forgetReleased(node);
@@ -1063,6 +1452,16 @@ export class Delivery {
       const limited = this.#limited(node);
       if (limited !== undefined) alarm = Math.min(alarm ?? limited.until, limited.until);
       const waits = waiting.get(node.id);
+      const slot = this.#slots.get(node.id);
+      // B19 C2: a gap taken with nothing left to deliver in it is let go (but for a message whose
+      // record is still on its way to disk, which it waits for).
+      if (
+        !waits &&
+        slot !== undefined &&
+        slot.message === undefined &&
+        !recording.has(agentParty(node.id))
+      )
+        this.#free(node.id);
       if (!waits || this.#writing.has(node.id)) continue;
       // Yours go past the run's holds, into its session's queue, unless that won't start; what
       // holds a party's message holds every party's behind it. corrallm's handoff request, first in
@@ -1084,10 +1483,27 @@ export class Delivery {
         theirs: asking.has(agentParty(node.id))
           ? ({ kind: 'busy' } as const)
           : (directory ??
-            (waits.some((message) => !this.#yours(message) && !this.#request(message))
+            (waits.some(
+              (message) =>
+                !this.#yours(message) && !this.#request(message) && !isQueueHandoff(message),
+            )
               ? this.#holdOf(node)
               : undefined)),
+        // B19 C1: a queue hand-off, the run's work, admitted and held on its recipient's usage
+        // rule by the run before it was recorded: what else holds a party's message holds it.
+        handOff: asking.has(agentParty(node.id))
+          ? ({ kind: 'busy' } as const)
+          : (directory ??
+            (waits.some((message) => isQueueHandoff(message))
+              ? this.#holdOf(node, false, false)
+              : undefined)),
       };
+      // B19 C2: where its queue is, for a party's message: read once, if one waits.
+      const point = waits.some((message) => this.#theirs(message))
+        ? engine.run.point(node.id)
+        : undefined;
+      /** Whether a party's message waits only on a check still to finish (its slot is kept). */
+      let checking = false;
       let next: Message | undefined;
       for (const message of waits) {
         // B21 C6: the eleventh turn between two agents waits for you, whatever else holds or frees
@@ -1102,10 +1518,32 @@ export class Delivery {
                 ? holds.request
                 : isContinuation(message)
                   ? holds.continuation
-                  : holds.theirs;
+                  : isQueueHandoff(message)
+                    ? (holds.handOff ??
+                      this.#runWorkHold(message) ??
+                      (point && this.#atPoint(node, message, point)))
+                    : (holds.theirs ?? (point && this.#atPoint(node, message, point)));
         if (!hold) {
           next ??= message;
           continue;
+        }
+        if (hold.kind === 'busy' && this.#theirs(message)) checking = true;
+        if (
+          hold === LATER &&
+          point?.kind === 'protected' &&
+          isQueueHandoff(message) &&
+          engine.run.handingTo(node.id) !== undefined
+        ) {
+          const owner = agentOf(message.from);
+          if (owner !== undefined) edges.set(owner, node.id);
+        }
+        if (hold.kind === 'queue') {
+          this.#queueTold.add(node.id);
+          this.#tell(
+            holdKey('queue', node.id, hold.of, message.from),
+            message,
+            queueHoldText(this.#name(node.id), hold),
+          );
         }
         // Told to the sender of the pair's oldest held turn that has one to tell: corrallm's own
         // record of how an ask ended is told to no one, and takes no one's notice.
@@ -1166,12 +1604,47 @@ export class Delivery {
           );
         }
       }
+      // B19 C2: a gap taken where what waited is now held for good is let go.
+      if (
+        next === undefined &&
+        slot?.message === undefined &&
+        !checking &&
+        !recording.has(agentParty(node.id))
+      )
+        this.#free(node.id);
       if (next === undefined || this.#unrecordable) continue;
-      if (!this.#yours(next) && next !== request && !isContinuation(next)) this.#warnUsage(node);
+      if (this.#theirs(next)) {
+        // B19 C2: a party's message takes its agent's slot (a gap's, taken, or one reserved now),
+        // so that nothing of the run's goes to the agent meanwhile; none, and it waits.
+        if (slot?.message !== undefined) continue;
+        const token = slot?.token ?? engine.run.reserve(node.id);
+        if (token === undefined) continue;
+        this.#slots.set(node.id, { token, message: next.id });
+      }
+      if (!this.#yours(next) && next !== request && !isContinuation(next) && !isQueueHandoff(next))
+        this.#warnUsage(node);
       this.#directories.delete(node.id);
       this.#deliver(node, next);
     }
+    this.#findCycles(edges);
     this.#arm(alarm);
+  }
+
+  /** B19 C1: tells the run once a recipient whose line was full has room for an owner's hand-off. */
+  #roomFor(waiting: ReadonlyMap<string, readonly Message[]>): void {
+    let room = false;
+    for (const key of [...this.#full]) {
+      const [owner = '', to = ''] = key.split('\u0000');
+      const from = agentParty(owner);
+      const line = waiting.get(to) ?? [];
+      if (line.filter((message) => message.from === from).length >= MAX_WAITING) continue;
+      this.#full.delete(key);
+      room = true;
+    }
+    if (room)
+      queueMicrotask(() => {
+        if (!this.#closed) this.#deps.engine.run.admissionChanged();
+      });
   }
 
   /**
@@ -1192,6 +1665,7 @@ export class Delivery {
       const to = gone(message.to);
       if (to === undefined && gone(message.from) === undefined) continue;
       this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
+      this.#handOffEnded(message, '', TAKEN_BACK);
       if (to !== undefined && gone(message.from) === undefined) {
         this.#notice(
           message,
@@ -1209,10 +1683,34 @@ export class Delivery {
    */
   #withdrawStale(): void {
     for (const message of this.#deps.store.active()) {
-      if (message.state !== 'pending' || !this.#request(message)) continue;
+      if (message.state !== 'pending') continue;
+      if (isQueueHandoff(message)) {
+        this.#withdrawStaleHandOff(message);
+        continue;
+      }
+      if (!this.#request(message)) continue;
       if ((this.#deps.handoff?.request(message) ?? 'stale') !== 'stale') continue;
       this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm' });
     }
+  }
+
+  /**
+   * B19 C1: a queue hand-off waiting for an attempt its run no longer runs is never sent: withdrawn
+   * by corrallm where the run ended that attempt (a Stop, a Kill, Run again), unresolved where the
+   * run holds no such attempt at all (its checkpoint and its rows disagree), never made again.
+   */
+  #withdrawStaleHandOff(message: Message): void {
+    const { task } = message;
+    if (task === undefined || this.#recording.has(message.id) || this.#running(task)) return;
+    const known = this.#deps.engine.run
+      .snapshot()
+      .agents[task.agent]?.attempts?.[task.item]?.some(({ id }) => id === task.attempt);
+    this.#deps.store.update(
+      message.id,
+      known === true
+        ? { state: 'withdrawn', by: 'corrallm', turn: TAKEN_BACK }
+        : { state: 'unresolved', turn: STALE_HANDOFF },
+    );
   }
 
   /**
@@ -1314,11 +1812,12 @@ export class Delivery {
    * What holds a message from a party (anyone but you) to agent `node` now, if anything; but a usage
    * rule, where not `usage` (a task's continuation).
    */
-  #holdOf(node: AgentNode, usage = true): Hold | undefined {
+  #holdOf(node: AgentNode, usage = true, admit = true): Hold | undefined {
     const { engine } = this.#deps;
     // B11a C3: admission first, never while the agent is paused (its pause holds the message): a
-    // switch of its backend holds what waits, which then goes to the new endpoint.
-    const admitted = this.#admit(node);
+    // switch of its backend holds what waits, which then goes to the new endpoint. (B19 C1: never
+    // for a queue hand-off, which the run admitted, as run work, before it recorded it.)
+    const admitted = admit ? this.#admit(node) : 'go';
     if (admitted === 'switching') return { kind: 'busy' };
     const limited = this.#limited(node);
     if (limited !== undefined) return limited;
@@ -1534,6 +2033,11 @@ export class Delivery {
     if (this.#directories.get(node.id)?.ready === true) this.#forget('workspace', node.id);
     if (this.#asking(node, false) === 'asks') this.#forget('unasking', node.id);
     if (this.#limited(node) === undefined) this.#forget('limited', node.id);
+    // B19 C2: its queue no longer holds: told again should it hold again.
+    if (this.#queueTold.has(node.id) && engine.run.point(node.id).kind !== 'held') {
+      this.#queueTold.delete(node.id);
+      this.#forget('queue', node.id);
+    }
   }
 
   /** Forgets what each sender was told of a hold of `kind` on agent `agent`. */
@@ -1552,6 +2056,13 @@ export class Delivery {
    * never the messages.
    */
   #deliver(node: AgentNode, message: Message): void {
+    // B19 C1: a hand-off its recipient's connection would run as a shell command, or whose file
+    // mentions it would expand, is never sent.
+    const refusal = isQueueHandoff(message) ? this.#handOffRefusal(node, message) : undefined;
+    if (refusal !== undefined) {
+      this.#decline(message, refusal);
+      return;
+    }
     const as = randomUUID();
     const attempt = (message.delivery?.attempt ?? 0) + 1;
     const request = this.#request(message);
@@ -1596,12 +2107,38 @@ export class Delivery {
           if (this.#deps.store.get(message.id)?.state !== 'delivering') {
             this.#uncarry(message.id);
             this.#uncount(message.id);
+            this.#freeSlotOf(message.id);
             this.schedule();
           } else {
             const current = this.#deps
               .nodes()
               .find((one) => one.id === node.id && one.type === 'agent');
-            if (
+            const declined =
+              current?.type === 'agent' && isQueueHandoff(message)
+                ? this.#handOffRefusal(current, message)
+                : undefined;
+            // B19 C1: nor does one go whose run, which links its attempt to it, isn't on disk.
+            const unsaved = isQueueHandoff(message) ? this.#deps.unsaved?.() : undefined;
+            if (unsaved !== undefined) {
+              this.#uncarry(message.id);
+              this.#uncount(message.id);
+              const turn: TurnResult = {
+                status: 'failed',
+                reason: 'error',
+                message: threadTitle(
+                  `The run could not be saved, so the message was not handed over: ${unsaved}`,
+                  REASON,
+                ),
+              };
+              this.#deps.store.update(message.id, { state: 'unresolved', turn });
+              this.#handOffEnded(message, '', turn);
+              this.#freeSlotOf(message.id);
+              this.schedule();
+            } else if (declined !== undefined) {
+              this.#uncarry(message.id);
+              this.#uncount(message.id);
+              this.#decline(message, declined);
+            } else if (
               !this.#yours(message) &&
               (current?.type !== 'agent' ||
                 this.#deps.engine.sessions.of(node.id).running === undefined ||
@@ -1609,11 +2146,19 @@ export class Delivery {
                   ? this.#requestHold(current, message)
                   : isContinuation(message)
                     ? this.#continuationHold(current)
-                    : this.#holdOf(current)) !== undefined)
+                    : isQueueHandoff(message)
+                      ? (this.#holdOf(current, false, false) ??
+                        this.#runWorkHold(message) ??
+                        (this.#holdsSlot(message) ? undefined : this.#atPoint(current, message)))
+                      : (this.#holdOf(current) ??
+                        (this.#theirs(message) && !this.#holdsSlot(message)
+                          ? this.#atPoint(current, message)
+                          : undefined))) !== undefined)
             ) {
               this.#uncarry(message.id);
               this.#uncount(message.id);
               this.#deps.store.update(message.id, { state: 'pending' });
+              this.#freeSlotOf(message.id);
               this.schedule();
             } else this.#hand(node, message, as);
           }
@@ -1630,6 +2175,7 @@ export class Delivery {
         // Never sent: what it would have carried waits for the next send.
         this.#uncarry(message.id);
         this.#deps.store.update(message.id, { state: 'pending' });
+        this.#freeSlotOf(message.id);
         this.#unrecordable ??= this.#deps.later(() => {
           this.#unrecordable = undefined;
           this.schedule();
@@ -1712,14 +2258,39 @@ export class Delivery {
     const taking = this.#withdrawing.get(id);
     if (taking !== undefined) {
       this.#takenBack(message, taking, result.status === 'cancelled');
+      this.#freeSlotOf(id);
       this.schedule();
       return;
     }
     // B11a C7: a handoff request's whole reply, kept (if accepted) in the write recording it.
     if (this.#request(message)) this.#deps.handoff?.replied(message, reply, result);
+    // B19 C1: a queue hand-off's turn is its queue's item's: replied, its reply kept as that item's
+    // evidence (a record to the queue's agent, never a turn of its), and the run judging the item
+    // on the whole reply, all in this tick, so that one write holds them. No ordinary reply.
+    if (isQueueHandoff(message)) {
+      store.update(id, { state: 'replied', turn: result });
+      store.add({
+        from: message.to,
+        to: message.from,
+        kind: 'text',
+        origin: 'run',
+        body: capBody(reply, 'reply'),
+        replyTo: id,
+        ...(message.task === undefined ? {} : { task: message.task }),
+        turn: result,
+        state: 'delivered',
+        purpose: HANDOFF_EVIDENCE,
+      });
+      this.#handOffEnded(message, reply, result);
+      // B19 C2: then its recipient's queue goes on from its point.
+      this.#freeSlotOf(id);
+      this.schedule();
+      return;
+    }
     // B21 C6: an ask's turn ended with no structured answer: its reply answers it, or it stays open.
     if (message.kind === 'prompt') {
       this.asks.turnEnded(message, reply, result);
+      this.#freeSlotOf(id);
       this.schedule();
       return;
     }
@@ -1749,6 +2320,8 @@ export class Delivery {
         state: agentOf(message.from) === undefined ? 'delivered' : 'pending',
       });
     }
+    // B19 C2: its reply kept, the agent's queue goes on from its point.
+    this.#freeSlotOf(id);
     this.schedule();
   }
 
@@ -1780,6 +2353,7 @@ export class Delivery {
     const takeBack = this.#sent.get(id);
     this.#sent.delete(id);
     takeBack?.();
+    this.#freeSlotOf(id);
     this.schedule();
   }
 
@@ -1797,6 +2371,7 @@ export class Delivery {
       // Still being journaled: it is never sent.
       this.#uncount(message.id);
       this.#withdrawn(message, by);
+      this.#freeSlotOf(message.id);
       return { reached: false, interrupted: false };
     }
     const taking: TakingBack = { by, why, reached: this.#reached(message) };
@@ -1854,13 +2429,16 @@ export class Delivery {
     const how =
       why === 'withdrawn'
         ? `by its sender after it reached you${turn}`
-        : `after it reached you${turn}, when ${killedText(nodes, message, by, why)}`;
+        : why === 'run stopped'
+          ? `after it reached you${turn}, when the run its queue is in was stopped`
+          : `after it reached you${turn}, when ${killedText(nodes, message, by, why)}`;
     return `Message ${message.id} from ${sender} was withdrawn ${how}. Do not carry out what it asked unless someone asks again. Anything it already did is left as it is.`;
   }
 
   /** Withdraws a message for `by`, telling its sender when someone else did. */
   #withdrawn(message: Message, by: PartyId, note?: string): void {
     this.#deps.store.update(message.id, { state: 'withdrawn', by }, note);
+    this.#handOffEnded(message, '', TAKEN_BACK);
     if (by !== message.from) {
       this.#notice(
         message,
@@ -1883,7 +2461,7 @@ export class Delivery {
     )
       this.#deps.store.retell(message.id, undefined);
     this.#deps.store.update(message.id, { state: 'unresolved' });
-    if (sentByRun(message) || isContinuation(message)) return;
+    if (runOwned(message) || isContinuation(message)) return;
     this.#notice(
       message,
       message.kind === 'prompt'
@@ -1896,7 +2474,7 @@ export class Delivery {
   /**
    * Tells each party whose message's turn waits for you so, once: by what the turn itself waits
    * on, its session's prompt or what its CLI asks in its terminal; never a hold of the run's on its
-   * agent, which holds no party's message.
+   * agent (which, B19 C2, holds a party's message before its turn, telling its sender then).
    */
   #tellWaiting(messages: readonly Message[]): void {
     const { engine } = this.#deps;
@@ -1905,7 +2483,7 @@ export class Delivery {
       if (
         agent === undefined ||
         message.from === 'you' ||
-        sentByRun(message) ||
+        runOwned(message) ||
         !this.#inFlight(message) ||
         this.#told.has(`waiting:${message.id}`)
       ) {
@@ -1942,7 +2520,8 @@ export class Delivery {
 
   /** A notice to a message's sender, about it: a record, never delivered as a turn. */
   #notice(message: Message, text: string, turn?: TurnResult, key?: string): void {
-    if (message.from === 'corrallm') return;
+    // B19 C1: nor is a queue hand-off's owner told: its run holds its item.
+    if (message.from === 'corrallm' || isQueueHandoff(message)) return;
     this.#deps.store.add(
       {
         from: 'corrallm',
@@ -1982,6 +2561,9 @@ export class Delivery {
     if (message.kind === 'prompt') return askFrame(this.#deps.nodes(), message);
     if (message.ask?.type === 'answer') return answerFrame(this.#deps.nodes(), message);
     const { from, id, replyTo, turn, body } = message;
+    // B19 C1: a queue hand-off is a task from another agent's queue, never the user's input.
+    if (isQueueHandoff(message))
+      return `[corrallm] Task from agent ${quotedParty(this.#deps.nodes(), from)} (from its queue: an agent, not the user; message ${id}):\n${body}`;
     const agent = agentOf(from);
     const outside = outsideOf(from);
     const [who, what] =
@@ -2048,13 +2630,49 @@ export class Delivery {
   }
 }
 
+/** What a queue hand-off its run holds no attempt for ends with (B19 C1): never sent. */
+const STALE_HANDOFF: TurnResult = {
+  status: 'cancelled',
+  reason: 'interrupted',
+  message: 'Its queue’s run no longer holds the task it was for, so it was never sent.',
+};
+
+/** Whether `task` names the attempt `of`. */
+function sameTask(task: TaskMessage | undefined, of: TaskMessage): boolean {
+  return task?.attempt === of.attempt && task.agent === of.agent && task.item === of.item;
+}
+
 /** Whether a message is the record of how an ask ended, sent its asker (B21 C6). */
 function isAskEnd(message: Message): boolean {
   return message.settled !== undefined && 'ask' in message.settled;
 }
 
 /** The kinds of hold a sender is told of, by the agent they hold. */
-type HoldKind = 'workspace' | 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited';
+type HoldKind = 'workspace' | 'paused' | 'stuck' | 'unasking' | 'usage' | 'limited' | 'queue';
+
+/** B19 C2: why only you stop the run from a hand-off cycle's Needs item. */
+const CYCLE_STOP = 'Only you stop the run from here; a token stops it with run.stop.';
+
+/** B19 C2: a party's message not at its agent's delivery point: it waits for a later one. */
+const LATER: Hold = Object.freeze({ kind: 'later' });
+
+/**
+ * B19 C2: what a sender is told of its message to agent `name` waiting on a hold of its queue's: in
+ * corrallm's words and the hold's Needs item where the user answers it, never what the hold holds.
+ */
+function queueHoldText(name: string, hold: Extract<Hold, { kind: 'queue' }>): string {
+  const need = hold.need === undefined ? '' : ` (${hold.need})`;
+  switch (hold.hold) {
+    case 'delay':
+      return `${name}’s queue is at a delay, so your message waits until its queue goes on.`;
+    case 'approval':
+      return `${name}’s queue waits for the user’s OK${need}, so your message waits until the user answers it.`;
+    case 'problem':
+      return `${name}’s queue holds a task for the user${need}, so your message waits until the user decides about it.`;
+    case 'condition':
+      return `${name}’s queue waits for the user to judge a condition${need}, so your message waits until the user does.`;
+  }
+}
 
 /**
  * Whom the kill that took back `message` killed, its recipient or its sender, and who killed it, as
@@ -2065,7 +2683,7 @@ function killedText(
   nodes: readonly CanvasNode[],
   message: Message,
   by: PartyId,
-  why: Exclude<TakeBackWhy, 'withdrawn' | 'task stopped'>,
+  why: Exclude<TakeBackWhy, 'withdrawn' | 'task stopped' | 'run stopped'>,
 ): string {
   const [whom, own, killed] =
     why === 'recipient killed'

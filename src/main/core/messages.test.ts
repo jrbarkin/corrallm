@@ -1945,15 +1945,29 @@ describe('a turn waiting for you', () => {
       builder: { status: 'asking', current: 'ok' },
       checker: { status: 'asking', current: 'ok' },
     });
+    return engine;
   }
 
   it('tells no one a turn waits for you over a hold of the run’s on its agent', async () => {
-    await heldAtOks();
+    const engine = await heldAtOks();
     const id = await send('builder', 'Say hello');
+    // B19 C2: while the run goes, its OK holds a party's message: its sender is told so, once.
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(1);
+    });
+    expect((await find(id))?.state).toBe('pending');
+    engine.run.decide('builder', 'ok', { choice: 'approve' });
     await vi.waitFor(async () => {
       expect((await find(id))?.state).toBe('replied');
     });
-    expect(await notices()).toEqual([]);
+    expect(await notices()).toEqual([
+      expect.objectContaining({
+        replyTo: id,
+        body: expect.stringMatching(
+          /^Builder’s queue waits for the user’s OK \(hold\/builder\/[0-9a-f]{8}\/ok\)/u,
+        ) as unknown,
+      }),
+    ]);
   });
 
   /** A connector whose every turn waits on what `prompt` asks, for the message it was sent. */
@@ -2043,17 +2057,22 @@ describe('a turn waiting for you', () => {
   });
 
   it('names what the turn itself waits on, never a hold of the run’s', async () => {
-    await heldAtOks();
+    const engine = await heldAtOks();
     const id = await send('checker', 'Run the tests');
+    // B19 C2: its OK holds it first, as the run goes; once approved, it goes, and its turn waits.
     await vi.waitFor(async () => {
       expect(await notices()).toHaveLength(1);
     });
-    expect(await notices()).toEqual([
+    engine.run.decide('checker', 'ok', { choice: 'approve' });
+    await vi.waitFor(async () => {
+      expect(await notices()).toHaveLength(2);
+    });
+    expect((await notices())[1]).toEqual(
       expect.objectContaining({
         replyTo: id,
         body: 'Checker is waiting for the user: Run this command?',
       }),
-    ]);
+    );
   });
 });
 
