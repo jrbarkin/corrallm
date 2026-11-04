@@ -16,6 +16,7 @@ it('cycles only asking modes declared by an unfamiliar adapter and confirms its 
       agent="zed"
       session={NEW_SESSION}
       field={createRef<HTMLTextAreaElement>()}
+      imageRules={{ declared: null, subject: 'Zed Agent' }}
       controls={{ setMode, send: vi.fn(), stop: vi.fn(), unqueue: vi.fn(), setModel: vi.fn() }}
     />,
   );

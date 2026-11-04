@@ -1504,7 +1504,7 @@ describe('a connected agent', () => {
     await events.paste(composer, { clipboardData: { files, getData: () => '' } });
     expect(
       await view.findByText(
-        'shot-5.png would take the images past 20 MB: a message’s images can be up to 20 MB together.',
+        'shot-5.png: Claude Code · Agent SDK takes at most 20 MB of images in a message.',
       ),
     ).toBeTruthy();
     await view.findByRole('img', { name: 'Image 4' });

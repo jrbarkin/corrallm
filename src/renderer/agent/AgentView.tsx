@@ -329,7 +329,8 @@ export function AgentView({
   /** The user's messages it can rewind to (since the last /clear), oldest first. */
   const points = rewindPoints(session.entries);
   /** Whether its connection offers rewind now: idle, with a message of the user's. */
-  const declared = connectionIn(catalog(), connection)?.connection;
+  const found = connectionIn(catalog(), connection);
+  const declared = found?.connection;
   /** What its ready session can do now: none while no generation is ready. */
   const features = session.features ?? null;
   /** The connection it continues in, if it declares one this build has. */
@@ -470,6 +471,11 @@ export function AgentView({
     return (route.kind === 'continue' || route.kind === 'shell') && target
       ? imageRefusal(images, target.images, target.label)
       : undefined;
+  };
+  /** What its composer's images are held to: this connection's, one the catalog lacks takes none. */
+  const imageRules = {
+    declared: declared?.images ?? null,
+    subject: found ? `${found.adapter.name} · ${found.connection.label}` : 'This connection',
   };
   const send = (text: string, images?: MessageImage[]) => {
     const route = routeText(text, connection, session.commands);
@@ -722,6 +728,7 @@ export function AgentView({
                     agent={agent}
                     session={session}
                     commands={commands}
+                    imageRules={imageRules}
                     controls={{ ...controls, send, refuses }}
                     field={composer}
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}

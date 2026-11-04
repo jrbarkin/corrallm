@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from './api/limits';
-import { bytesText, imageLimits, imageRefusal } from './images';
+import { bytesText, imageFactsRefusal, imageLimits, imageRefusal } from './images';
 import type { ConnectionDescriptor } from './adapter';
 import { imageBytes } from './session';
 import type { MessageImage } from './session';
@@ -98,5 +98,22 @@ describe('imageRefusal', () => {
     expect(bytesText(900)).toBe('900 bytes');
     expect(bytesText(200 * 1024)).toBe('200 KB');
     expect(bytesText(1536 * 1024)).toBe('1.5 MB');
+  });
+});
+
+describe('imageFactsRefusal', () => {
+  it('judges kinds and decoded byte counts alone, as a draft knows them before reading a file', () => {
+    const png = (bytes: number) => ({ mediaType: 'image/png', bytes });
+    expect(imageFactsRefusal([png(300)], TINY, 'It')).toBeUndefined();
+    expect(imageFactsRefusal([png(301)], TINY, 'It')).toBe(
+      'It takes images of at most 300 bytes each.',
+    );
+    expect(imageFactsRefusal([png(1), png(1)], TINY, 'It')).toBe(
+      'It takes at most 1 image in a message.',
+    );
+    expect(imageFactsRefusal([{ mediaType: 'image/gif', bytes: 1 }], TINY, 'It')).toBe(
+      'It takes only PNG images.',
+    );
+    expect(imageFactsRefusal([png(1)], null, 'It')).toBe('It takes no images.');
   });
 });

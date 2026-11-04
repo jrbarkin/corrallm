@@ -3,8 +3,9 @@ import type { ClipboardEvent, DragEvent, ReactNode, RefObject } from 'react';
 import { flushDrafts } from '../useDraft';
 import { ipcErrorMessage } from '../ipc-error';
 
-import type { AdapterId } from '../../shared/adapter';
-import { MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL, MAX_IMAGES } from '../../shared/api/limits';
+import type { AdapterId, ConnectionDescriptor } from '../../shared/adapter';
+import { imageFactsRefusal, imageRefusal } from '../../shared/images';
+import type { ImageFacts } from '../../shared/images';
 import { imageBytes, IMAGE_TYPES } from '../../shared/session';
 import type { ImageType, SlashCommand } from '../../shared/session';
 
@@ -43,10 +44,24 @@ export interface ComposerControls {
   findFiles?: (query: string) => Promise<string[]>;
 }
 
+/** What a composer's images are held to: its connection's own limits (src/shared/images.ts). */
+export interface ImageRules {
+  /** The connection's `images`; undefined for one the catalog doesn't know (it takes none). */
+  declared: ConnectionDescriptor['images'] | undefined;
+  /** Whose limits they are, as a sentence names them ("Claude Code · SDK"). */
+  subject: string;
+}
+
 /** An image pasted into the draft: what is sent, and how it shows. */
 interface Attachment extends MessageImage {
   url: string;
 }
+
+/** An attachment as the image limits see it. */
+const factsOf = ({ mediaType, data }: Attachment): ImageFacts => ({
+  mediaType,
+  bytes: imageBytes(data),
+});
 
 /** A completion the composer offers: what it shows, and what goes into the draft. */
 interface Choice {
@@ -87,6 +102,7 @@ export function Composer({
   placeholder,
   above,
   commands = session.commands,
+  imageRules,
   initialDraft = '',
   initialImages = [],
 }: {
@@ -102,6 +118,11 @@ export function Composer({
   above?: ReactNode;
   /** The slash commands it completes: the session's, unless the view knows more. */
   commands?: readonly SlashCommand[] | undefined;
+  /**
+   * What the images pasted, dropped or sent are held to: its connection's limits, within the
+   * platform's ceilings. They are read again when a file has been read and when a message is sent.
+   */
+  imageRules: ImageRules;
   /** What its box starts with (a message rewound to, back to edit). */
   initialDraft?: string;
   /** The images its box starts with (a continuation the core refused, back to correct). */
@@ -116,6 +137,15 @@ export function Composer({
     })),
   );
   const [problem, setProblem] = useState<string>();
+  /** The images held, shown or still being read: what a paste is counted against at once. */
+  const held = useRef<{ shown: Attachment[]; reading: Map<object, ImageFacts> }>({
+    shown: images,
+    reading: new Map(),
+  });
+  /** The connection's limits as they are now, for a file whose read ends later. */
+  const rules = useRef(imageRules);
+  /** Whether the composer is still there to take an image once it is read. */
+  const here = useRef(true);
   /** The mode that never asks it asks the user to confirm, picked from the mode menu. */
   const [confirming, setConfirming] = useState<Mode>();
   /** The completion picked in the menu, by its place. */
@@ -131,7 +161,26 @@ export function Composer({
   const listId = useId();
   useEffect(() => {
     findFiles.current = controls.findFiles;
+    rules.current = imageRules;
   });
+  useEffect(() => {
+    here.current = true;
+    const pending = held.current.reading;
+    return () => {
+      here.current = false;
+      pending.clear();
+    };
+  }, []);
+  /** Shows these as the draft's images. */
+  const show = (next: Attachment[]) => {
+    held.current.shown = next;
+    setImages(next);
+  };
+  /** Forgets the images and the reads begun: none comes back into a draft that was sent or cleared. */
+  const clearImages = () => {
+    held.current.reading.clear();
+    show([]);
+  };
   const working = session.status !== 'idle';
   const models = session.models ?? DEFAULT_MODEL;
   const model = models.find((m) => m.value === session.model) ?? models[0];
@@ -226,7 +275,10 @@ export function Composer({
   const submit = (text = draft) => {
     if (text.trim() === '' && images.length === 0) return;
     const attachments = images.map(({ mediaType, data }) => ({ mediaType, data }));
-    const reason = controls.refuses?.(text, attachments);
+    // The connection it has now, not the one the images were pasted under.
+    const reason =
+      imageRefusal(attachments, imageRules.declared, imageRules.subject) ??
+      controls.refuses?.(text, attachments);
     if (reason !== undefined) {
       setProblem(reason);
       return;
@@ -237,7 +289,7 @@ export function Composer({
       setProblem(ipcErrorMessage(error));
     });
     setDraft('');
-    setImages([]);
+    clearImages();
     setProblem(undefined);
     setRecalled(undefined);
   };
@@ -254,33 +306,49 @@ export function Composer({
     edit(done.text, done.caret);
   };
 
-  /** Adds pasted or dropped images to the draft (what the agent reads, up to its limits). */
+  /**
+   * Adds pasted or dropped images to the draft, as many as the connection takes: each file is
+   * counted against the images shown and those still being read before any is read, so rapid
+   * pastes cannot overrun its count or the total; a file it refuses is said so, in the words of
+   * the limit that applies, and nothing else changes.
+   */
   const attach = (files: readonly File[]) => {
-    let total = images.reduce((sum, { data }) => sum + imageBytes(data), 0);
     for (const file of files) {
       if (!IMAGE_TYPES.some((type) => type === file.type)) continue;
-      if (file.size > MAX_IMAGE_BYTES) {
-        setProblem(`${file.name || 'The image'} is too large: images can be up to 5 MB.`);
+      const name = file.name || 'The image';
+      const facts: ImageFacts = { mediaType: file.type, bytes: file.size };
+      const { shown, reading } = held.current;
+      const refusal = imageFactsRefusal(
+        [...shown.map(factsOf), ...reading.values(), facts],
+        imageRules.declared,
+        imageRules.subject,
+      );
+      if (refusal !== undefined) {
+        setProblem(`${name}: ${refusal}`);
         continue;
       }
-      if (total + file.size > MAX_IMAGE_TOTAL) {
-        setProblem(
-          `${file.name || 'The image'} would take the images past 20 MB: a message’s images can ` +
-            'be up to 20 MB together.',
-        );
-        continue;
-      }
-      total += file.size;
+      const key = {};
+      reading.set(key, facts);
       const reader = new FileReader();
       reader.onload = () => {
+        // Gone, sent or cleared meanwhile: it is not this draft's any more.
+        if (!here.current || held.current.reading.get(key) === undefined) return;
+        held.current.reading.delete(key);
         const url = typeof reader.result === 'string' ? reader.result : '';
         const data = url.slice(url.indexOf(',') + 1);
         if (data === '') return;
-        setImages((before) =>
-          before.length >= MAX_IMAGES
-            ? before
-            : [...before, { mediaType: file.type as ImageType, data, url }],
+        const image: Attachment = { mediaType: file.type as ImageType, data, url };
+        // The connection it has now, with the images shown now and what it really holds.
+        const again = imageRefusal(
+          [...held.current.shown, image],
+          rules.current.declared,
+          rules.current.subject,
         );
+        if (again !== undefined) {
+          setProblem(`${name}: ${again}`);
+          return;
+        }
+        show([...held.current.shown, image]);
       };
       reader.readAsDataURL(file);
     }
@@ -413,7 +481,7 @@ export function Composer({
                   aria-label={`Remove image ${String(i + 1)}`}
                   title="Remove"
                   onClick={() => {
-                    setImages(images.filter((other) => other !== image));
+                    show(images.filter((other) => other !== image));
                   }}
                 />
               </li>
@@ -526,7 +594,7 @@ export function Composer({
               if (working) controls.stop();
               else {
                 setDraft('');
-                setImages([]);
+                clearImages();
               }
             }
           }}
