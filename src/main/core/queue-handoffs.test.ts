@@ -383,6 +383,82 @@ describe('a queue hand-off in the core (B19 C1)', () => {
     expect(sent).toEqual([]);
   });
 
+  it('is held for you, visibly, by its recipient’s usage rule that asks, never by its owner’s', async () => {
+    // Lead spends Claude Code; Worker spends Codex, over its rule's share.
+    await writeFile(
+      file,
+      JSON.stringify({
+        format: 'corrallm',
+        version: 2,
+        id: CANVAS,
+        nodes: [
+          {
+            id: 'lead',
+            kind: 'agent',
+            label: 'Lead',
+            adapter: 'claude-code',
+            connection: 'claude-code.terminal',
+            position: { x: 0, y: 0 },
+            queue: [{ id: 'hand', message: 'Review this', target: 'worker' }],
+          },
+          {
+            id: 'worker',
+            kind: 'agent',
+            label: 'Worker',
+            adapter: 'codex',
+            connection: 'codex.app-server',
+            position: { x: 200, y: 0 },
+            queue: [],
+          },
+        ],
+        links: [{ agents: ['lead', 'worker'] }],
+      }),
+    );
+    await keepCanvases(profile, { [CANVAS]: { file, project } });
+    const { connector, sent } = sessions();
+    const core = await start(connector);
+    const { engine, messages } = await opened(core);
+    const rule = { window: 'fiveHour', percent: 80, action: 'ask' };
+    expect(await core.call('usage.setRule', { backend: 'codex', rule }, CALLERS.you)).toMatchObject(
+      {
+        ok: true,
+      },
+    );
+    expect(
+      await core.call(
+        'usage.simulate',
+        {
+          backend: 'codex',
+          windows: { fiveHour: { usedPercent: 90, resetsAt: Date.now() + 3_600_000 } },
+        },
+        CALLERS.you,
+      ),
+    ).toMatchObject({ ok: true });
+    engine.run.start();
+    expect(engine.run.snapshot().agents.lead).toMatchObject({
+      status: 'asking',
+      current: 'hand',
+      usage: { backend: 'codex' },
+    });
+    expect(handoffs(messages())).toEqual([]);
+    const needs = await core.call('needs', { canvas: CANVAS }, CALLERS.you);
+    if (!needs.ok) throw new Error(needs.error.sentence);
+    const hold = needs.value.items.find((item) => item.id.startsWith('hold/lead/'));
+    expect(hold?.choices.map(({ value }) => value)).toContain('goOn');
+    // Go on: it is handed off, and delivered.
+    expect(
+      await core.call(
+        'reply',
+        { canvas: CANVAS, to: hold?.id ?? '', answer: { choice: 'goOn' } },
+        CALLERS.you,
+      ),
+    ).toMatchObject({ ok: true });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]).toMatchObject({ agent: 'worker' });
+  });
+
   it('is the run’s own: no party takes it or its evidence back', async () => {
     const { connector, sent, end } = sessions();
     const core = await start(connector);

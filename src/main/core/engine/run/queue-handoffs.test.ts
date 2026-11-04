@@ -208,6 +208,36 @@ describe('a queue hand-off (B19 C1)', () => {
     expect(run.where()).toEqual({ lead: 'running hand', worker: 'done' });
   });
 
+  it('is held for you by its recipient’s usage rule that asks, before it is recorded, as run work', () => {
+    const { run, box } = world();
+    // Worker spends Codex, over its rule's share, which asks.
+    run.rule({ window: 'fiveHour', percent: 80, action: 'ask' }, 'codex');
+    run.reading(fiveHour(90), 'codex');
+    run.store.start();
+    expect(box.recorded).toEqual([]);
+    expect(run.where()).toEqual({ lead: 'asking hand', worker: 'done' });
+    expect(run.store.snapshot().agents.lead?.usage).toMatchObject({ backend: 'codex' });
+    // Go on: the rule holds no one on that backend until its window resets, and it is handed off.
+    run.store.decide('lead', 'hand', { choice: 'goOn' });
+    expect(box.recorded).toHaveLength(1);
+    expect(run.where()).toEqual({ lead: 'running hand', worker: 'done' });
+  });
+
+  it('is admitted as run work against its recipient before it is recorded', () => {
+    const box = handOffs();
+    const admit = vi.fn(() => 'switching' as const);
+    const run = setup(
+      [agent('lead', QUEUE), agent('worker', [], 'codex.terminal')],
+      manual,
+      new Set(),
+      { handOffs: box.seam, tasks: box.tasks, admit },
+    );
+    run.store.start();
+    expect(admit).toHaveBeenCalledWith('worker', { run: true });
+    expect(box.recorded).toEqual([]);
+    expect(run.where()).toEqual({ lead: 'waiting hand', worker: 'done' });
+  });
+
   it('is taken back by Stop, its owner told nothing more of how it ends', () => {
     const { run, box, end } = world();
     run.store.start();

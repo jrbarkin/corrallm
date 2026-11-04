@@ -91,7 +91,7 @@ async function start(codex: Connector<SessionMode>): Promise<Core> {
 
 describe('the core runs each canvas’s engine', () => {
   it.each(['oversized', 'complex'] as const)(
-    'holds its next queue send when the checkpoint is %s while a token’s message still reaches the agent',
+    'holds its next queue send when the checkpoint is %s; a token’s message reaches the agent once the run no longer holds its task',
     async (limit) => {
       await keepCanvas();
       const codex = fakeConnector({ adapter: 'codex' });

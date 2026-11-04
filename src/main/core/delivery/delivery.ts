@@ -709,13 +709,17 @@ export class Delivery {
       (message) => this.#theirs(message) && (store.seqOf(message.id) ?? Infinity) <= cutoff,
     );
     if (prefix.length === 0) return false;
-    const held = this.#holdOf(node);
-    if (held !== undefined && held.kind !== 'busy') return false;
+    /** What holds a party's message, and a hand-off (the run's work), for good: read once each. */
+    const forGood = (hold: Hold | undefined) => hold !== undefined && hold.kind !== 'busy';
+    let party: boolean | undefined;
+    let handOff: boolean | undefined;
     const here = this.#here();
     const takes = prefix.some((message) => {
       const pair = this.#deps.loops.holding() ? this.#turnPair(message, here) : undefined;
       if (pair !== undefined && this.#deps.loops.held(...pair)) return false;
-      return !isQueueHandoff(message) || this.#runWorkHold(message) === undefined;
+      if (!isQueueHandoff(message)) return !(party ??= forGood(this.#holdOf(node)));
+      handOff ??= forGood(this.#holdOf(node, false, false));
+      return !handOff && this.#runWorkHold(message) === undefined;
     });
     if (!takes) return false;
     this.#slots.set(agent, { token });
@@ -1389,8 +1393,19 @@ export class Delivery {
         theirs: asking.has(agentParty(node.id))
           ? ({ kind: 'busy' } as const)
           : (directory ??
-            (waits.some((message) => !this.#yours(message) && !this.#request(message))
+            (waits.some(
+              (message) =>
+                !this.#yours(message) && !this.#request(message) && !isQueueHandoff(message),
+            )
               ? this.#holdOf(node)
+              : undefined)),
+        // B19 C1: a queue hand-off, the run's work, admitted and held on its recipient's usage
+        // rule by the run before it was recorded: what else holds a party's message holds it.
+        handOff: asking.has(agentParty(node.id))
+          ? ({ kind: 'busy' } as const)
+          : (directory ??
+            (waits.some((message) => isQueueHandoff(message))
+              ? this.#holdOf(node, false, false)
               : undefined)),
       };
       // B19 C2: where its queue is, for a party's message: read once, if one waits.
@@ -1414,7 +1429,7 @@ export class Delivery {
                 : isContinuation(message)
                   ? holds.continuation
                   : isQueueHandoff(message)
-                    ? (holds.theirs ??
+                    ? (holds.handOff ??
                       this.#runWorkHold(message) ??
                       (point && this.#atPoint(node, message, point)))
                     : (holds.theirs ?? (point && this.#atPoint(node, message, point)));
@@ -1507,7 +1522,8 @@ export class Delivery {
         if (token === undefined) continue;
         this.#slots.set(node.id, { token, message: next.id });
       }
-      if (!this.#yours(next) && next !== request && !isContinuation(next)) this.#warnUsage(node);
+      if (!this.#yours(next) && next !== request && !isContinuation(next) && !isQueueHandoff(next))
+        this.#warnUsage(node);
       this.#directories.delete(node.id);
       this.#deliver(node, next);
     }
@@ -1696,11 +1712,12 @@ export class Delivery {
    * What holds a message from a party (anyone but you) to agent `node` now, if anything; but a usage
    * rule, where not `usage` (a task's continuation).
    */
-  #holdOf(node: AgentNode, usage = true): Hold | undefined {
+  #holdOf(node: AgentNode, usage = true, admit = true): Hold | undefined {
     const { engine } = this.#deps;
     // B11a C3: admission first, never while the agent is paused (its pause holds the message): a
-    // switch of its backend holds what waits, which then goes to the new endpoint.
-    const admitted = this.#admit(node);
+    // switch of its backend holds what waits, which then goes to the new endpoint. (B19 C1: never
+    // for a queue hand-off, which the run admitted, as run work, before it recorded it.)
+    const admitted = admit ? this.#admit(node) : 'go';
     if (admitted === 'switching') return { kind: 'busy' };
     const limited = this.#limited(node);
     if (limited !== undefined) return limited;
@@ -2030,7 +2047,7 @@ export class Delivery {
                   : isContinuation(message)
                     ? this.#continuationHold(current)
                     : isQueueHandoff(message)
-                      ? (this.#holdOf(current) ??
+                      ? (this.#holdOf(current, false, false) ??
                         this.#runWorkHold(message) ??
                         this.#atPoint(current, message))
                       : (this.#holdOf(current) ??

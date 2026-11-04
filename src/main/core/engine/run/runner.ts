@@ -2023,17 +2023,19 @@ export class RunStore {
     outcomes: Record<string, Outcome>,
     now: number,
   ): AgentRun | undefined {
-    // B19 C1: a queue hand-off delivery delivers waits there, on its recipient's holds alone.
-    if (this.#io.handOffs !== undefined && isHandOff(agent, task)) return undefined;
+    // B19 C1: a queue hand-off delivery delivers is recorded pending while its recipient is paused
+    // or can't start (delivery holds it there, visibly); its admission and its recipient's usage
+    // rule are the run's, read below, as for any task's attempt.
+    const handedOff = this.#io.handOffs !== undefined && isHandOff(agent, task);
     const destination = isMessage(task) ? (task.target ?? agent) : agent;
-    if (this.#run.agents[destination]?.paused)
+    if (!handedOff && this.#run.agents[destination]?.paused)
       return { current: task.id, status: 'waiting', outcomes };
     // B11a C7: corrallm's handoff request to the recipient goes first, never triggering admission;
     // the task waits until its turn has ended, and a switch is admitted then.
     if (this.#io.handoff?.(destination) === true)
       return { current: task.id, status: 'waiting', outcomes };
     const to = this.#agents().find((n) => n.id === destination);
-    if (to && this.#catalog.connectionOf(to.data) === undefined)
+    if (!handedOff && to && this.#catalog.connectionOf(to.data) === undefined)
       return {
         current: task.id,
         status: 'asking',
@@ -2046,8 +2048,9 @@ export class RunStore {
             'Choose an agent in its settings.',
         },
       };
-    // B11a C3: admission, before the attempt goes to its recipient. A fallback rule is read
-    // against the recipient's backend; warn, ask and wait keep the owner's, as built (F3).
+    // B11a C3: admission, before the attempt goes to its recipient (a hand-off's too, as run work,
+    // so a switch it starts ends if the run stops). A fallback rule is read against the
+    // recipient's backend.
     const fallback = this.usageRule(destination, now);
     const rule = fallback?.action === 'fallback' ? { rule: fallback.hold } : {};
     const admitted =
