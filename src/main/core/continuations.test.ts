@@ -220,8 +220,9 @@ describe('an ask during a task (C7)', () => {
     await keepCanvas();
     const cli = driven();
     const core = await start(cli.connector);
-    // Before any run: Builder's ask is taskless.
-    const taskless = await ask(core, 'planner', BUILDER);
+    // Before any run: Builder's ask is taskless. (Asked of you: one to Planner, taking Planner's
+    // slot as it is delivered, would go before Planner's step, B19 C2.)
+    const taskless = await ask(core, { party: 'you' }, BUILDER);
     expect(messageOf(core, taskless)?.ask).not.toHaveProperty('task');
     await run(core, cli);
     const asked = await ask(core, { party: 'you' }, PLANNER);
