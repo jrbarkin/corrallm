@@ -7,6 +7,7 @@ import {
 } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { AskColumn } from '../../../shared/model/asks';
+import { Purpose } from '../../../shared/model/purpose';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
@@ -37,8 +38,9 @@ import { Sequence } from './sequence';
  * prompt's decision, what was decided (`settled`: B13 §9.2 C9, written with its row and never
  * changed after), or for an ask, how it ended (B21 C6: written once, as it ends, never after), and
  * an ask's questions or an answer's answers (`ask`: B21 C6, migration 9, written with its row and
- * never changed after), and a result's verdict (`verdict`: B21 C8, migration 10, written with its
- * row and never changed after). Their order (`seq`) is one every canvas's messages share, whose
+ * never changed after), a result's verdict (`verdict`: B21 C8, migration 10, written with its
+ * row and never changed after), and a queue hand-off's or its evidence's purpose (`purpose`: B19
+ * C1, migration 12, written with its row and never changed after). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -116,7 +118,8 @@ export class MessageTable {
     return this.#store
       .prepare(
         `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
-           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask, verdict
+           task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask, verdict,
+           purpose
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -150,16 +153,16 @@ export class MessageTable {
    * Within a write: a message's row, as kept (each column written by name, so that what a newer
    * corrallm keeps beside them stays). A record's settled decision is written with its row and
    * never after: no change writes it again; an ask's settlement is written once, as it ends (a
-   * row that has one keeps it). An ask's questions or an answer's answers, and a result's verdict,
-   * are written with its row and never after.
+   * row that has one keeps it). An ask's questions or an answer's answers, a result's verdict, and
+   * a queue hand-off's or its evidence's purpose (B19 C1), are written with its row and never after.
    */
   keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
     this.#store
       .prepare(
         `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
            reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
-           settled, ask, verdict)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           settled, ask, verdict, purpose)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
            task = excluded.task, turn = excluded.turn, state = excluded.state,
@@ -189,6 +192,7 @@ export class MessageTable {
         json(message.settled),
         json(message.ask),
         json(message.verdict),
+        json(message.purpose),
       );
   }
 
@@ -908,6 +912,12 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
       ? undefined
       : Verdict.safeParse(parsed(row.verdict));
   if (verdict?.success === false) return undefined;
+  // A purpose this code doesn't read (another version's): the row is left as it is too.
+  const purpose =
+    row.purpose === null || row.purpose === undefined
+      ? undefined
+      : Purpose.safeParse(parsed(row.purpose));
+  if (purpose?.success === false) return undefined;
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -929,6 +939,7 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     ...(decided === undefined ? {} : { settled: decided.data }),
     ...(asked === undefined ? {} : { ask: asked.data }),
     ...(verdict === undefined ? {} : { verdict: verdict.data }),
+    ...(purpose === undefined ? {} : { purpose: purpose.data }),
     at,
   } as unknown as Message;
   const kept: Kept = {

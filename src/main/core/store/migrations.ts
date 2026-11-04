@@ -679,6 +679,21 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    // B19's queue hand-offs (B19 Design §9 C1): what the core made a message for, typed and
+    // versioned, where it is a queue hand-off or its evidence. A corrallm without it would take a
+    // pending hand-off for the run's own send, which no delivery path owns, and a hand-off's
+    // evidence for a turn to deliver, so none older may open the database once this ran.
+    version: 12,
+    minReader: 12,
+    sql: `
+      -- On a queue hand-off (a queue's message to another agent, pending until its recipient's
+      -- delivery point) and on its evidence (the recipient's reply, kept for the queue's item as a
+      -- record): which of the two it is, typed and versioned. Never a party's words; none for
+      -- every other message.
+      ALTER TABLE message ADD COLUMN purpose TEXT CHECK (purpose IS NULL OR json_valid(purpose));
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */

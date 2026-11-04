@@ -9,6 +9,7 @@ import type { CanvasId } from '../../../shared/canvas';
 import { MESSAGE_KINDS, MESSAGE_STATES } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { AskColumn, AskSettlement } from '../../../shared/model/asks';
+import { Purpose } from '../../../shared/model/purpose';
 import { Verdict } from '../../../shared/model/results';
 import { SettledDecision } from '../../../shared/model/settled';
 import { CanvasMemory } from '../../memory';
@@ -573,6 +574,68 @@ describe('the message store', () => {
     await restart();
     const again = await store();
     expect(again.get(result.id)).toBeUndefined();
+  });
+
+  it('keeps a queue hand-off’s purpose and its evidence’s with their rows, never changing either after, and leaves one it can’t read as it is', async () => {
+    const messages = await store();
+    const task = {
+      agent: 'lead',
+      item: 'handoff',
+      attempt: '0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f',
+    };
+    const handoff = messages.add({
+      from: 'agent:lead',
+      to: 'agent:builder',
+      kind: 'text',
+      origin: 'run',
+      body: 'Build it',
+      task,
+      state: 'pending',
+      purpose: Purpose.parse({ v: 1, type: 'handoff' }),
+    });
+    await messages.durable();
+    messages.update(handoff.id, {
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    const evidence = messages.add({
+      from: 'agent:builder',
+      to: 'agent:lead',
+      kind: 'text',
+      origin: 'run',
+      body: 'Built.',
+      replyTo: handoff.id,
+      task,
+      turn: { status: 'completed', reason: 'completed' },
+      state: 'delivered',
+      purpose: Purpose.parse({ v: 1, type: 'evidence' }),
+    });
+    await messages.durable();
+    // A later change of the row never writes another purpose over it.
+    messages.update(handoff.id, { purpose: { v: 1, type: 'evidence' } });
+    await messages.durable();
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT purpose FROM message WHERE id = ?').get(handoff.id),
+      ),
+    ).toEqual({ purpose: JSON.stringify({ v: 1, type: 'handoff' }) });
+    await restart();
+    const again = await store();
+    expect(again.get(handoff.id)).toEqual({
+      ...handoff,
+      state: 'replied',
+      turn: { status: 'completed', reason: 'completed' },
+    });
+    expect(again.get(evidence.id)).toEqual(evidence);
+    // One a newer corrallm might keep: read as nothing, and left as it is.
+    writeOnDisk(
+      profile,
+      `UPDATE message SET purpose = '${JSON.stringify({ v: 2, type: 'copy' })}' WHERE id = '${evidence.id}'`,
+    );
+    await restart();
+    const later = await store();
+    expect(later.get(evidence.id)).toBeUndefined();
+    expect(later.get(handoff.id)).toBeDefined();
   });
 
   it('never drops an open ask, or your message waiting on you, past its party’s quota', async () => {

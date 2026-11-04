@@ -103,6 +103,7 @@ export async function dump(file: string, print: (line: string) => Promise<void>)
             'settled',
             'ask',
             'verdict',
+            'purpose',
           ]),
         }),
       );

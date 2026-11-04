@@ -255,6 +255,40 @@ describe('openStore', () => {
     }
   });
 
+  it('is refused, left as it is, by a corrallm of schema 11, which would misread a queue hand-off and its evidence', async () => {
+    const { store } = await open();
+    store.tx(() => store.prepare("INSERT INTO canvas (id, used_at) VALUES ('c', 1)").run());
+    await store.close();
+    const files = await readdir(profile);
+    const bytes = await readFile(file);
+    // The code as a corrallm of schema 11 had it: the same, with its migrations alone.
+    vi.resetModules();
+    const eleven = MIGRATIONS.slice(0, 11);
+    vi.doMock('./migrations', () => ({
+      ...migrations,
+      MIGRATIONS: eleven,
+      SCHEMA: 11,
+      migrate: (connection: Connection) => {
+        migrations.migrate(connection, eleven);
+      },
+    }));
+    try {
+      const older = await import('./open');
+
+      const refused = await older.openStore(profile);
+
+      expect(refused.store).toBeUndefined();
+      expect(refused.said).toEqual([
+        `The core’s database (${file}) was made by a newer corrallm, which this one can’t read, and was left as it is: open this profile with that corrallm, or a newer one.`,
+      ]);
+      expect(await readdir(profile)).toEqual(files);
+      expect(Buffer.compare(await readFile(file), bytes)).toBe(0);
+    } finally {
+      vi.doUnmock('./migrations');
+      vi.resetModules();
+    }
+  });
+
   it('opens a database a newer corrallm made that it may still read, keeping what it added', async () => {
     const { store } = await open();
     await store.close();

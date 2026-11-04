@@ -2,6 +2,7 @@ import type { CanvasId } from '../canvas';
 import type { TurnResult } from '../session';
 import { MAX_NODE_ID } from './canvas';
 import type { AskColumn } from './asks';
+import type { Purpose } from './purpose';
 import type { Verdict } from './results';
 import type { Settled } from './settled';
 
@@ -109,8 +110,9 @@ export interface MessageDisplay {
  * on its row and on the record its asker is sent. `ask`: an ask's questions and deadline, or an
  * answer's answers (./asks.ts), written with its row and never changed after. `verdict`: on a
  * `result` record (B21 C8), the outcome and summary its agent reported of its task's attempt with
- * `complete` (./results.ts), written with its row and never changed after. Images a message carried
- * are never kept.
+ * `complete` (./results.ts), written with its row and never changed after. `purpose` (B19 C1): a
+ * queue hand-off's, or its evidence's, core-minted (./purpose.ts). Images a message carried are
+ * never kept.
  */
 export interface Message {
   id: string;
@@ -130,6 +132,11 @@ export interface Message {
   settled?: Settled;
   ask?: AskColumn;
   verdict?: Verdict;
+  /**
+   * B19 C1: what the core made it for, where it is a queue hand-off or a hand-off's evidence
+   * (./purpose.ts), written with its row and never changed after; none for every other message.
+   */
+  purpose?: Purpose;
   /** When it was sent, in epoch ms. */
   at: number;
 }
