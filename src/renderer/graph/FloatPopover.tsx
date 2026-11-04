@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { fileAction } from './keys';
 
 /** A nonmodal float's popover: outside click and Escape dismiss it; drafts stay mounted. */
@@ -12,7 +12,7 @@ export function FloatPopover({
 }: {
   label: string;
   button: ReactNode;
-  children: (close: () => void) => ReactNode;
+  children: (close: () => void, trigger: RefObject<HTMLButtonElement | null>) => ReactNode;
   className?: string;
   /** Local navigation to a decision inside the popover, even after it was dismissed. */
   request?: object | undefined;
@@ -69,7 +69,7 @@ export function FloatPopover({
       <div id={id} role="dialog" aria-label={label} className="float-popover" hidden={!open}>
         {children(() => {
           setOpen(false);
-        })}
+        }, trigger)}
       </div>
     </div>
   );

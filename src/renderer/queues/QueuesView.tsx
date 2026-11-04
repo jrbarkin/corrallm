@@ -127,7 +127,8 @@ export function QueuesView({
   // a dropdown open in a lane closes itself first.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || document.querySelector('.agent-settings-sheet')) return;
+      if (event.key !== 'Escape' || document.querySelector('.agent-settings-sheet, .settings-page'))
+        return;
       // A dropdown, or a usage gauge's panel, closes itself first.
       if (
         event.target instanceof Element &&

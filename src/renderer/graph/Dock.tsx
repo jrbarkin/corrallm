@@ -22,6 +22,7 @@ export function Dock({
   onToggleQueues,
   onOpen,
   onStart,
+  onSettings,
 }: {
   nodes: readonly CanvasNode[];
   sessions: Readonly<Record<string, Session>>;
@@ -32,6 +33,7 @@ export function Dock({
   onToggleQueues: () => void;
   onOpen: (id: string) => void;
   onStart: () => void;
+  onSettings: (opener: HTMLElement) => void;
 }) {
   const root = useRef<HTMLElement>(null);
   const workspaces = useWorkspaces();
@@ -172,6 +174,18 @@ export function Dock({
           onClick={onStart}
         >
           +
+        </button>
+      </div>
+      <div className="dock-start dock-settings" data-dock-id="settings">
+        <button
+          type="button"
+          aria-label="Settings"
+          title="Settings"
+          onClick={(event) => {
+            onSettings(event.currentTarget);
+          }}
+        >
+          ⚙
         </button>
       </div>
     </nav>
