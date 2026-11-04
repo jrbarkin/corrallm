@@ -84,6 +84,7 @@ import { ExampleGallery } from './ExampleGallery';
 import type { TemplateChoices } from './ExampleGallery';
 import type { TemplateInfo } from '../../shared/templates';
 import { StartSession } from './StartSession';
+import { SettingsPage } from '../settings/SettingsPage';
 import { CanvasMenu } from './CanvasMenu';
 import { RunFloat, ZoomFloat } from './Floats';
 import { Dock } from './Dock';
@@ -331,6 +332,8 @@ function Editor({
     [preferredEndpoint],
   );
   const [gallery, setGallery] = useState<boolean | TemplateInfo>(false);
+  /** Settings, if shown: local navigation only; `opener` gets focus back when it closes. */
+  const [settingsPage, setSettingsPage] = useState<{ opener: HTMLElement | null }>();
   const [startChoice, setStartChoice] = useState<{ canvas: CanvasId; open: boolean }>();
   const showStart =
     canonical !== undefined &&
@@ -448,6 +451,7 @@ function Editor({
   const modal =
     adding !== undefined ||
     showStart ||
+    settingsPage !== undefined ||
     front !== undefined ||
     work !== undefined ||
     drawn !== undefined ||
@@ -1015,6 +1019,24 @@ function Editor({
     if (menuNode) act(controls.resumeGroup(menuNode.id));
   };
 
+  /** Opening and closing Settings flush drafts first and send no operation. */
+  const openSettingsPage = (opener: HTMLElement | null) => {
+    void flushDrafts(() => {
+      setSettingsPage({ opener });
+    }).catch((error: unknown) => {
+      setProblem(ipcErrorMessage(error));
+    });
+  };
+  const closeSettingsPage = () => {
+    const opener = settingsPage?.opener;
+    void flushDrafts(() => {
+      setSettingsPage(undefined);
+      opener?.focus();
+    }).catch((error: unknown) => {
+      setProblem(ipcErrorMessage(error));
+    });
+  };
+
   return (
     <GraphContext
       inert={restoring}
@@ -1087,7 +1109,9 @@ function Editor({
           </p>
         )}
         <ReactFlow
-          inert={showStart || front !== undefined || queues !== undefined}
+          inert={
+            showStart || settingsPage !== undefined || front !== undefined || queues !== undefined
+          }
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
@@ -1328,8 +1352,10 @@ function Editor({
               }}
               onExamples={() => {
                 setStartChoice({ canvas: canvasId, open: false });
+                setSettingsPage(undefined);
                 setGallery(true);
               }}
+              onSettings={openSettingsPage}
               onDismiss={() => {
                 setProblem(undefined);
                 setDismissed(
@@ -1365,6 +1391,7 @@ function Editor({
                 onReply={commands.reply}
                 nodes={model.nodes}
                 onOpen={(agentId) => {
+                  setSettingsPage(undefined);
                   setStartChoice({ canvas: canvasId, open: false });
                   selectOne(agentId);
                   setOpened({ ids: [agentId] });
@@ -1399,6 +1426,7 @@ function Editor({
             queues={queues !== undefined}
             onToggleQueues={() => {
               void flushDrafts(() => {
+                setSettingsPage(undefined);
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues((current) => (current ? undefined : front ? { from: front } : {}));
               }).catch((error: unknown) => {
@@ -1407,6 +1435,7 @@ function Editor({
             }}
             onOpen={(id) => {
               void flushDrafts(() => {
+                setSettingsPage(undefined);
                 setStartChoice({ canvas: canvasId, open: false });
                 setQueues(undefined);
                 selectOne(id);
@@ -1416,8 +1445,10 @@ function Editor({
               });
             }}
             onStart={() => {
+              setSettingsPage(undefined);
               setStartChoice({ canvas: canvasId, open: true });
             }}
+            onSettings={openSettingsPage}
           />
         </div>
         {openedNode && frontControls && !showStart && (
@@ -1614,6 +1645,7 @@ function Editor({
             }}
           />
         )}
+        {settingsPage && <SettingsPage client={api} mirror={mirror} onClose={closeSettingsPage} />}
         {gallery && (
           <ExampleGallery
             preferredEndpoint={preferredEndpoint}

@@ -70,6 +70,7 @@ const props = () => ({
   onToggleQueues: vi.fn(),
   onOpen: vi.fn(),
   onStart: vi.fn(),
+  onSettings: vi.fn(),
 });
 it('lists every agent once in its nested canvas group, with catalog image logos', () => {
   render(<Dock {...props()} />);
@@ -143,6 +144,9 @@ it('toggles queues, opens an agent and opens Start, one intent each', async () =
   expect(input.onOpen).toHaveBeenCalledExactlyOnceWith('b');
   await events.click(screen.getByRole('button', { name: 'Start a session' }));
   expect(input.onStart).toHaveBeenCalledOnce();
+  const settings = screen.getByRole('button', { name: 'Settings' });
+  await events.click(settings);
+  expect(input.onSettings).toHaveBeenCalledExactlyOnceWith(settings);
 });
 it('keeps completed queues done during a global pause and names a pause still taking effect', () => {
   render(

@@ -14,6 +14,7 @@ export function CanvasMenu({
   onSave,
   onSaveAs,
   onExamples,
+  onSettings,
   onDismiss,
   canvases,
 }: {
@@ -26,6 +27,8 @@ export function CanvasMenu({
   onSave: () => void;
   onSaveAs: () => void;
   onExamples: () => void;
+  /** Opens Settings; `opener` is where focus returns when it closes. */
+  onSettings: (opener: HTMLElement | null) => void;
   onDismiss: () => void;
   canvases?: ReactNode;
 }) {
@@ -46,7 +49,7 @@ export function CanvasMenu({
             </>
           }
         >
-          {(close) => (
+          {(close, trigger) => (
             <>
               {(
                 [
@@ -70,6 +73,17 @@ export function CanvasMenu({
                   <kbd>{shortcut}</kbd>
                 </button>
               ))}
+              <button
+                type="button"
+                aria-label="Settings…"
+                title="Settings for corrallm on this machine"
+                onClick={() => {
+                  close();
+                  onSettings(trigger.current);
+                }}
+              >
+                Settings…
+              </button>
               {canvases}
             </>
           )}
