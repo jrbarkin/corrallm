@@ -35,10 +35,13 @@ export function AgentChip({
   connection: AgentConnection | undefined;
   initiallyOpen?: boolean;
   onChange: (adapter: AdapterId, connection: AgentConnection) => void;
-  onContinue: () => void;
+  /** Continues there; `request` is this offer's id, the same for a retry of it. */
+  onContinue: (request: string) => void;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const button = useRef<HTMLButtonElement>(null);
+  /** The request id of the continuation offered while the picker is open. */
+  const request = useRef<string>(undefined);
   const label = agentLabel(adapter, connection);
   const continueIn =
     connection === undefined
@@ -72,6 +75,7 @@ export function AgentChip({
             : undefined
         }
         onClick={() => {
+          if (!open) request.current = crypto.randomUUID();
           setOpen(!open);
         }}
       >
@@ -99,7 +103,7 @@ export function AgentChip({
             choice.continues ? 'continue' : `${choice.adapter}/${choice.connection}`
           }
           onPick={(choice) => {
-            if (choice.continues) onContinue();
+            if (choice.continues) onContinue(request.current ?? crypto.randomUUID());
             else onChange(choice.adapter, choice.connection);
             setOpen(false);
             button.current?.focus();

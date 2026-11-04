@@ -22,6 +22,9 @@ vi.mock('../terminal/screen', async () => {
   return { createScreen: fakeScreens.create };
 });
 
+/** A request id the view minted. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -1953,6 +1956,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
       canvas: expect.any(String) as unknown,
       agent: 'a',
       connection: 'claude-code.terminal',
+      request: expect.stringMatching(UUID) as unknown,
       then: { text: input, images: [{ mediaType: 'image/png', data: 'aW1hZ2U=' }] },
     });
     expect(replies.send).toHaveBeenCalledOnce();
@@ -1994,6 +1998,7 @@ describe('an Agent SDK agent continued in Terminal', () => {
           canvas: expect.any(String) as unknown,
           agent: 'a',
           connection: 'claude-code.terminal',
+          request: expect.stringMatching(UUID) as unknown,
           then: { text: '/permissions' },
         },
       },

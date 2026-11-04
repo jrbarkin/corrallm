@@ -188,7 +188,7 @@ export function AgentView({
   /** Opens its Agent settings sheet (AgentSettings.tsx). */
   onOpenSettings: () => void;
   /** Switches it to its continuation connection, resuming its conversation, and runs `command` there if given. */
-  onContinue: (command?: string, images?: MessageImage[]) => void;
+  onContinue: (request: string, command?: string, images?: MessageImage[]) => void;
   /** What changes its queue, and the queue shown beside it. */
   edits: QueueEdits;
   /** How each agent's tasks are marked: links, and where the queues' run is (src/shared/model/queue-marks.ts). */
@@ -339,8 +339,12 @@ export function AgentView({
   const [offer, setOffer] = useState<{
     text: string;
     route: Extract<Route, { kind: 'continue' | 'shell' }>;
+    /** This offer's request id: kept for its confirm and any retry of it. */
+    request: string;
     images?: MessageImage[];
   }>();
+  /** The request id of the sign-in continuation the open /mcp panel offers. */
+  const signInRequest = useRef<string>(undefined);
   /** A panel its connection declares that can't open now, as the view said so. */
   const [unavailable, setUnavailable] = useState<string>();
   /** The view's own command whose panel is open above the composer (/resume). */
@@ -454,11 +458,17 @@ export function AgentView({
       controls.recordCommand?.(text);
       setRewindTo(undefined);
       setUnavailable(undefined);
+      if (route.panel === 'mcp') signInRequest.current = crypto.randomUUID();
       setOpened(route.panel);
       return;
     }
     if ((route.kind === 'continue' || route.kind === 'shell') && target !== undefined) {
-      setOffer({ text, route, ...(images?.length ? { images } : {}) });
+      setOffer({
+        text,
+        route,
+        request: crypto.randomUUID(),
+        ...(images?.length ? { images } : {}),
+      });
       return;
     }
     if (ask?.reply && !(connection !== undefined && isCommand(text, session.commands))) {
@@ -539,8 +549,8 @@ export function AgentView({
                 adapter={agent}
                 connection={connection}
                 onChange={onAgent}
-                onContinue={() => {
-                  onContinue();
+                onContinue={(request) => {
+                  onContinue(request);
                 }}
               />
               <ApiMark agent={node.id} />
@@ -698,7 +708,10 @@ export function AgentView({
                                     label: target.label,
                                     onSignIn: () => {
                                       setOpened(undefined);
-                                      onContinue('/mcp');
+                                      onContinue(
+                                        signInRequest.current ?? crypto.randomUUID(),
+                                        '/mcp',
+                                      );
                                     },
                                   },
                                 }
@@ -744,7 +757,7 @@ export function AgentView({
                             words={offerWords(offer.text, offer.route, target)}
                             onContinue={() => {
                               setOffer(undefined);
-                              onContinue(offer.text, offer.images);
+                              onContinue(offer.request, offer.text, offer.images);
                             }}
                             onCancel={() => {
                               setOffer(undefined);

@@ -11,6 +11,9 @@ vi.mock('../terminal/screen', async () => {
   return { createScreen: fakeScreens.create };
 });
 
+/** A request id the view minted. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -54,6 +57,7 @@ describe('an unfamiliar adapter’s continuation', () => {
       canvas: expect.any(String) as unknown,
       agent: 'a',
       connection: 'zed.terminal',
+      request: expect.stringMatching(UUID) as unknown,
       then: { text: input },
     });
   });
@@ -79,6 +83,7 @@ describe('an unfamiliar adapter’s continuation', () => {
       canvas: expect.any(String) as unknown,
       agent: 'a',
       connection: 'zed.terminal',
+      request: expect.stringMatching(UUID) as unknown,
       then: { text: input },
     });
   });
@@ -152,6 +157,7 @@ describe('an unfamiliar adapter’s continuation', () => {
       canvas: expect.any(String) as unknown,
       agent: 'a',
       connection: 'zed.acp',
+      request: expect.stringMatching(UUID) as unknown,
     });
     expect(replies.send).not.toHaveBeenCalled();
     await send('hello');
@@ -169,7 +175,39 @@ describe('an unfamiliar adapter’s continuation', () => {
       canvas: expect.any(String) as unknown,
       agent: 'a',
       connection: 'zed.acp',
+      request: expect.stringMatching(UUID) as unknown,
       then: { text: '/tune' },
+    });
+  });
+
+  it('mints a request id for the offer and sends it with the one confirm', async () => {
+    const { send, view, since } = await open('zed.acp', made());
+    await send('/settings');
+    const sent = since();
+    await events.click(view.getByRole('button', { name: 'Continue in Zed Shell' }));
+    await settle();
+    expectOneOp(sent, 'session.continueIn', {
+      canvas: expect.any(String) as unknown,
+      agent: 'a',
+      connection: 'zed.terminal',
+      request: expect.stringMatching(UUID) as unknown,
+      then: { text: '/settings' },
+    });
+  });
+
+  it('carries a request id from the chip’s continuation too', async () => {
+    const { view, since } = await open('zed.free', made());
+    await events.click(view.getByRole('button', { name: /^Agent: / }));
+    const first = view.getAllByRole('option')[0];
+    if (!first) throw new Error('no options');
+    const sent = since();
+    await events.click(first);
+    await settle();
+    expectOneOp(sent, 'session.continueIn', {
+      canvas: expect.any(String) as unknown,
+      agent: 'a',
+      connection: 'zed.acp',
+      request: expect.stringMatching(UUID) as unknown,
     });
   });
 });

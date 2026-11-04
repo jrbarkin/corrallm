@@ -1473,7 +1473,7 @@ function Editor({
             onOpenSettings={() => {
               setSettingsAgent(openedNode.id);
             }}
-            onContinue={(command, images) => {
+            onContinue={(request, command, images) => {
               const connection = continuesIn(connectionOf(openedNode.data));
               if (connection !== undefined)
                 act(
@@ -1481,6 +1481,7 @@ function Editor({
                     canvas: canvasId,
                     agent: openedNode.id,
                     connection,
+                    request,
                     ...(command === undefined
                       ? {}
                       : { then: { text: command, ...(images?.length ? { images } : {}) } }),

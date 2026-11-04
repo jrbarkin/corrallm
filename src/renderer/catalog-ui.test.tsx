@@ -15,6 +15,7 @@ import {
   connectionsOf,
 } from './graph/agents';
 import { cycledModes, modesOf } from './agent/modes';
+import { continuesIn } from './catalog';
 import { useCatalog } from './test-catalog';
 import { fakeCore } from './test-api';
 
@@ -126,4 +127,16 @@ it('uses the catalog accent for a newly declared adapter’s chip', async () => 
   expect(
     screen.getByRole('button', { name: 'Agent: Yak Agent · Free' }).getAttribute('data-accent'),
   ).toBe('1');
+});
+
+it('continues nowhere when the declared target is missing from the loaded catalog', async () => {
+  const made = structuredClone(TWO_MADE_UP);
+  const yak = made.adapters[1]?.connections[0];
+  if (!yak) throw new Error('No connection');
+  yak.continueIn = { connection: 'yak.terminal', commands: [], shell: false, mcpSignIn: false };
+  await useCatalog(made);
+  expect(continuesIn('yak.free')).toBe('yak.terminal');
+  yak.continueIn.connection = 'yak.gone';
+  await useCatalog(made);
+  expect(continuesIn('yak.free')).toBeUndefined();
 });

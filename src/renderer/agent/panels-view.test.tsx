@@ -13,6 +13,9 @@ vi.mock('../terminal/screen', async () => {
   return { createScreen: fakeScreens.create };
 });
 
+/** A request id the view minted. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -197,6 +200,7 @@ describe('an unfamiliar connection’s /mcp', () => {
       canvas: expect.any(String) as unknown,
       agent: 'a',
       connection: 'zed.terminal',
+      request: expect.stringMatching(UUID) as unknown,
       then: { text: '/mcp' },
     });
   });
