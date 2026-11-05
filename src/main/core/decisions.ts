@@ -58,6 +58,11 @@ export interface Decision {
   settled?: SettledDecision;
   /** B19 C3: the agent whose window shows it, as the core resolved it: none, your messages alone. */
   about?: RecordAbout;
+  /**
+   * B19 C3: made by a prompt's owner, whose entry shows it while this core runs (never the window),
+   * known in memory alone.
+   */
+  owned?: true;
 }
 
 /** Records a decision made now (its effect in the same write as the record). */
@@ -131,6 +136,7 @@ function draftOf(decision: Decision, state: 'delivered' | 'delivering') {
     by: decision.by,
     ...(decision.settled === undefined ? {} : { settled: decision.settled }),
     ...(decision.about === undefined ? {} : { about: decision.about }),
+    ...(decision.owned === undefined ? {} : { owned: decision.owned }),
   };
 }
 

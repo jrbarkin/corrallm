@@ -546,6 +546,93 @@ describe('the window shows each record its agent’s', () => {
     expect(records(await topicEntries(restarted, 'a')).map(({ id }) => id)).toEqual(ids);
   });
 
+  it('shows the Reviewer’s native decision after a clean restart, where its owner entry is gone, and never beside that entry', async () => {
+    const core = await start();
+    await ok(core, 'message', { to: 'b', body: 'Run the tests' });
+    const prompt = await waitingFor(core, isPrompt('b'));
+    const answered = await ok<{ id: string }>(core, 'reply', {
+      to: prompt.id,
+      answer: { choice: 'allow' },
+    });
+    await vi.waitFor(async () => {
+      const read = await transcript(core, 'b');
+      expect(read.filter(({ kind }) => kind === 'prompt')).toMatchObject([
+        { need: prompt.id, outcome: { by: 'you' } },
+      ]);
+    });
+    // While the core runs, its owner entry alone shows it: no record beside it.
+    expect(records(await transcript(core, 'b'))).toEqual([]);
+    expect(records(await topicEntries(core, 'b'))).toEqual([]);
+    await opened(core).messages.durable();
+    await core.close();
+    cores.splice(0);
+    // Its owner entry lived only while that core ran: its record shows it now, once.
+    const restarted = await start();
+    const read = await transcript(restarted, 'b');
+    expect(read.filter(({ kind }) => kind === 'prompt')).toEqual([]);
+    const shown = records(read);
+    expect(shown).toMatchObject([
+      {
+        id: `record/${answered.id}`,
+        need: prompt.id,
+        by: 'you',
+        state: 'settled',
+        record: { type: 'prompt', outcome: { type: 'choice', hint: 'allow_once' } },
+      },
+    ]);
+    const [entry] = shown;
+    if (entry === undefined) throw new Error('No record');
+    expect(recordWords(entry, NAMES)).toBe('Allowed once by you.');
+    expect(records(await topicEntries(restarted, 'b'))).toEqual(shown);
+    for (const caller of [ORCHESTRATOR, LINKER])
+      expect(JSON.stringify(await transcript(restarted, 'b', caller))).not.toContain(answered.id);
+  });
+
+  it('never brings back a native decision whose owner entry B13’s cap dropped while the core ran', async () => {
+    const core = await start();
+    await ok(core, 'message', { to: 'b', body: 'Run the tests' });
+    const prompt = await waitingFor(core, isPrompt('b'));
+    const answered = await ok<{ id: string }>(core, 'reply', {
+      to: prompt.id,
+      answer: { choice: 'allow' },
+    });
+    const owned = prompt.id.split('/').at(-1);
+    await vi.waitFor(async () => {
+      expect((await transcript(core, 'b')).find(({ id }) => id === owned)).toMatchObject({
+        outcome: { by: 'you' },
+      });
+    });
+    // A hundred more prompts end after it: B13's cap drops its entry, the oldest ended.
+    const { sessions } = opened(core).engine;
+    for (let n = 0; n < 100; n++) {
+      const id = crypto.randomUUID();
+      const prompted = { id, agent: 'b', raised: n, answerIn: 'api' as const, title: 'Later' };
+      sessions.promptEntry('b', {
+        type: 'raised',
+        entry: {
+          id,
+          kind: 'prompt',
+          need: `prompt/b/1/${id}`,
+          prompt: { ...prompted, kind: 'approval', choices: [] } as never,
+          name: 'Reviewer',
+        },
+      });
+      sessions.promptEntry('b', {
+        type: 'ended',
+        id,
+        prompt: { ...prompted, kind: 'approval' } as never,
+        outcome: { type: 'withdrawn' },
+      });
+    }
+    const read = await transcript(core, 'b');
+    expect(read.filter(({ kind }) => kind === 'prompt')).toHaveLength(100);
+    expect(read.find(({ id }) => id === owned)).toBeUndefined();
+    // Its record stays your message, and no entry of the window's: the cap is never undone.
+    expect(records(read)).toEqual([]);
+    expect(JSON.stringify(read)).not.toContain(answered.id);
+    expect(opened(core).messages.get(answered.id)).toMatchObject({ state: 'delivered' });
+  });
+
   it('shows the Reviewer’s native decision only once a crash cut it off: unresolved, never as applied', async () => {
     const core = await start();
     await ok(core, 'message', { to: 'b', body: 'Run the tests' });

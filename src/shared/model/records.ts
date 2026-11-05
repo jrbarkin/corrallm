@@ -23,9 +23,11 @@ import { SettledOutcome, SubjectType } from './settled';
  *   decision (with the choice it picked, by key, and whether words went with it, never the words),
  *   a native prompt's decision, and an ask's end, in its recipient agent's window. A record kept
  *   before migration 13 has none, so it stays in your messages alone.
- * - Deduplicated with B13's owner entries (`shownRecord`): a native prompt's decision is its owner
- *   entry's while the core runs (settled in place, or still open after a refusal), so its record is
- *   shown only once a crash cut it off (`unresolved`), when no owner entry is left to show it.
+ * - Deduplicated with B13's owner entries (`shownRecord`): a native prompt's decision its owner made
+ *   while this core runs is its owner entry's (settled in place, or still open after a refusal),
+ *   never the window's, however that entry ends; one kept from before (a restart, its canvas opened
+ *   again), when no owner entry is left, is the window's: one that took effect, or a crash cut off
+ *   (`unresolved`).
  * - Its id is its record's message id, namespaced (`record/<id>`), so a reload, a reconnect or a
  *   restart finds the same entry, never a second; its position is the core's: the window leads its
  *   agent's transcript, in the message store's order, so neither native history nor /clear moves it.
@@ -152,16 +154,23 @@ export interface RecordRow {
 
 /**
  * Whether a record shows in its agent's window: one with the core's association (none: your
- * messages alone), a record's kind; a native prompt's decision only once a crash cut it off (B13's
- * owner entry shows it otherwise, settled in place, or still open after its CLI refused it); a run
- * hold's decision, made in the write that kept it; an ask's end, however its asker is sent it.
+ * messages alone), a record's kind; a run hold's decision, made in the write that kept it; an ask's
+ * end, however its asker is sent it; and a native prompt's decision that took effect, or that a
+ * crash cut off, unless its prompt's owner made it while this core runs (`owned`): then B13's owner
+ * entry shows it (settled in place, or open again after its CLI refused it), and once B13's cap or a
+ * /clear drops that entry nothing brings it back. Owner entries live only while the core runs, so
+ * one kept from before (a restart, its canvas opened again) is shown here, once.
  */
-export function shownRecord(message: Message, about: RecordAbout | undefined): boolean {
+export function shownRecord(
+  message: Message,
+  about: RecordAbout | undefined,
+  owned = false,
+): boolean {
   if (about === undefined || message.kind !== 'settled') return false;
   const { settled } = message;
   if (settled === undefined) return message.state === 'delivered';
   if ('ask' in settled) return true;
-  return message.state === 'unresolved';
+  return !owned && (message.state === 'delivered' || message.state === 'unresolved');
 }
 
 /** A record kept with its association, as its window's entry. */

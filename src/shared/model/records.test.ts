@@ -122,11 +122,22 @@ describe('a settled record in the window', () => {
     expect(TranscriptEntry.parse(entry)).toEqual(entry);
   });
 
-  it('shows only what B13’s owner entries don’t: a native decision only once a crash cut it off', () => {
+  it('shows a native decision no owner entry of this core’s shows: never one its owner made while it runs, any other once it took effect or a crash cut it off', () => {
     const about = { v: 1 as const, agent: 'a', need: NATIVE.need };
-    for (const state of ['delivering', 'delivered', 'withdrawn'] as const)
+    // Its owner made it while this core runs: its owner entry shows it, settled in place, or open
+    // again after its CLI refused it; and B13's cap dropping that entry brings back nothing.
+    for (const state of ['delivering', 'delivered', 'withdrawn', 'unresolved'] as const)
+      expect(shownRecord(record({ state, settled: NATIVE }), about, true), state).toBe(false);
+    // Kept from before (a restart, its canvas opened again): no owner entry is left to show it.
+    for (const state of ['delivered', 'unresolved'] as const)
+      expect(shownRecord(record({ state, settled: NATIVE }), about), state).toBe(true);
+    // One that changed nothing is no way its prompt ended; one being made is no record yet.
+    for (const state of ['delivering', 'withdrawn'] as const)
       expect(shownRecord(record({ state, settled: NATIVE }), about), state).toBe(false);
-    expect(shownRecord(record({ state: 'unresolved', settled: NATIVE }), about)).toBe(true);
+    expect(recordEntryFor(record({ settled: NATIVE }), about).state).toBe('settled');
+    expect(recordWords(recordEntryFor(record({ settled: NATIVE }), about), (party) => party)).toBe(
+      'Allowed once by you.',
+    );
     // A hold's decision, made in the write that kept it; an ask's end, whatever its asker is sent.
     expect(shownRecord(record(), HOLD)).toBe(true);
     for (const state of ['pending', 'delivered', 'replied', 'withdrawn'] as const)

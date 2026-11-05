@@ -1253,22 +1253,27 @@ describe('the settled records each agent’s window shows (B19 C3)', () => {
     expect(messages.records('nobody')).toEqual([]);
   });
 
-  it('shows a native decision only once a crash cut it off: B13’s owner entry shows it until then', async () => {
+  it('never shows a native decision its owner made while the store runs; once loaded again, each that took effect or was cut off', async () => {
     const messages = await store();
-    const landed = messages.add(native());
-    const refused = messages.add(native());
-    const cut = messages.add(native());
-    expect(ids(messages)).toEqual([]);
+    // As the prompt owner makes them: its owner entry shows each while this store runs.
+    const landed = messages.add({ ...native(), owned: true });
+    const refused = messages.add({ ...native(), owned: true });
+    const cut = messages.add({ ...native(), owned: true });
     messages.update(landed.id, { state: 'delivered' });
     messages.update(refused.id, { state: 'withdrawn', by: 'corrallm' });
     expect(ids(messages)).toEqual([]);
     await messages.durable();
-    // As the canvas's messages load again, one being made is unresolved, never given again.
+    // Never on its row: a store loaded again (a restart) holds no owner entry of it.
     await restart();
     const again = await store();
+    expect(ids(again)).toEqual([landed.id]);
+    // As the canvas's messages load again, one being made is unresolved, never given again.
     again.update(cut.id, { state: 'unresolved' });
-    expect(ids(again)).toEqual([cut.id]);
-    expect(again.records('builder')[0]?.message.state).toBe('unresolved');
+    expect(ids(again)).toEqual([landed.id, cut.id]);
+    expect(again.records('builder').map(({ message }) => message.state)).toEqual([
+      'delivered',
+      'unresolved',
+    ]);
   });
 
   it('shows the newest MAX_RECORD_ENTRIES of an agent’s, its unresolved ones among them, while their rows stay kept', async () => {

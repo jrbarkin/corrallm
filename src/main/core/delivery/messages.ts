@@ -78,6 +78,12 @@ export interface Provenance {
    * settled (src/shared/model/records.ts), core-written with it and never changed after.
    */
   about?: RecordAbout;
+  /**
+   * B19 C3: a native decision its prompt's owner made while this store runs, which its owner entry
+   * shows, never the window: kept in memory alone, never written, so a store loaded again (a
+   * restart, its canvas opened again), with no owner entry left, shows it in the window.
+   */
+  owned?: true;
 }
 
 /** A message to add: the store gives it its id, its canvas and when it was sent. */
@@ -371,7 +377,7 @@ export class MessageStore {
    * Adds a message, written with the store's next write: as kept. `told`: for a notice, the key of
    * what it tells, kept with it.
    */
-  add({ origin, display, about, ...draft }: Draft, told?: string): Message {
+  add({ origin, display, about, owned, ...draft }: Draft, told?: string): Message {
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
     const seq = this.#unjournaled === undefined ? this.#table.place() : ++this.#seq;
     this.#keep({
@@ -381,6 +387,7 @@ export class MessageStore {
       origin,
       ...(display === undefined ? {} : { display }),
       ...(about === undefined ? {} : { about }),
+      ...(owned === undefined ? {} : { owned }),
       ...(told === undefined ? {} : { told }),
     });
     for (const listener of this.#listeners) listener(message);
@@ -395,7 +402,7 @@ export class MessageStore {
    * hear messages, once the write's commit returned, and `undo` forgets it, if the write failed.
    * Throws, adding nothing, if the store journals nothing.
    */
-  stageWithin({ origin, display, about, ...draft }: Draft): Staged & { message: Message } {
+  stageWithin({ origin, display, about, owned, ...draft }: Draft): Staged & { message: Message } {
     if (this.#unjournaled !== undefined) throw new Error(this.#unjournaled);
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
     const kept: Kept = {
@@ -405,6 +412,7 @@ export class MessageStore {
       origin,
       ...(display === undefined ? {} : { display }),
       ...(about === undefined ? {} : { about }),
+      ...(owned === undefined ? {} : { owned }),
     };
     this.#table.ensure(this.canvas);
     this.#table.keep(kept);
@@ -803,7 +811,7 @@ export class MessageStore {
     const { id } = at.message;
     const was = this.#recordOf.get(id);
     const now =
-      kept?.about !== undefined && shownRecord(kept.message, kept.about)
+      kept?.about !== undefined && shownRecord(kept.message, kept.about, kept.owned === true)
         ? kept.about.agent
         : undefined;
     if (was === undefined && now === undefined) return;
