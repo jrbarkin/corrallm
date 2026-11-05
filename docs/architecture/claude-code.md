@@ -36,6 +36,8 @@ The Agent SDK connection (see Agent SDK below): connector.ts starts a session (q
 
 The Agent SDK's `continueIn` names Claude Code's Terminal and the commands only its terminal runs; `/config` is the one marked `bare` (B16 C2): typed bare it opens the Terminal's settings screen, while `/config <key> <value>` is the SDK session's own command when the session offers it. The adapter contract test pins that, and the shared router reads it from the descriptor alone.
 
+Claude Code · Terminal declares `keys.shiftEnter` as Esc then Enter, the binding its own `/terminal-setup` makes; that is the one recorded native key. Per-connection keys are declared and carried in the catalog, but the terminal screen does not read them yet (B16 X2, see [Catalog](catalog.md)). The fake-only journeys in `e2e/connection-features.e2e.ts` run the SDK and Terminal fakes: they show corrallm's offer, hold and delivery behaviour, and certify nothing about the real CLI's panels, key handling or images.
+
 ## Tests and recordings
 
 The SDK fake also accepts `FAKE_CLAUDE_TURN_GATES`, a test-only JSON map from exact prompt text to release-file paths. A selected turn writes `<path>.waiting` after its initial thinking, then waits for `<path>` or an interrupt; other prompts proceed normally. This lets the Pause e2e assert Pausing and independent progress before releasing the native turn, instead of racing the UI against the fake's forty sequential 100 ms timers for a "slow" prompt. The connector test proves an unselected turn completes normally, a gated one emits no end before release and completes once after it, and an interrupt releases the gate with a cancelled end.
