@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import { UNRESOLVED_ANSWER } from '../../shared/model/records';
+import { SettledDecision } from '../../shared/model/settled';
 import { CanvasMemory } from '../memory';
 import {
   decided,
@@ -131,12 +132,12 @@ it('shows a native decision in its agent’s window once a crash cut it off, in 
   const store = await messages();
   const need = 'prompt/b/7/0f1e2d3c-4b5a-4968-8776-655443322110';
   const about = { v: 1 as const, agent: 'b', need };
-  const settled = {
-    v: 1 as const,
+  const settled = SettledDecision.parse({
+    v: 1,
     need,
-    prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval' as const },
-    outcome: { type: 'choice' as const, value: 'yes', hint: 'allow_once' as const },
-  };
+    prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval' },
+    outcome: { type: 'choice', value: 'yes', hint: 'allow_once' },
+  });
   const cut = deciding(store, { need, by: 'you', words: 'You allowed it, once.', settled, about });
   // While it is being made, its prompt's owner entry shows it, never its record.
   expect(store.records('b')).toEqual([]);

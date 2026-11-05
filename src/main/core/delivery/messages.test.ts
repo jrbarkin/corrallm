@@ -1243,7 +1243,9 @@ describe('the settled records each agent’s window shows (B19 C3)', () => {
     const first = messages.add(hold('builder'));
     const other = messages.add(hold('reviewer'));
     // A decision kept before migration 13 (no association), and a message that is no record.
-    messages.add({ ...hold('builder'), about: undefined });
+    const unassociated = hold('builder');
+    delete unassociated.about;
+    messages.add(unassociated);
     messages.add(draft('agent:builder', 'you', 'delivered'));
     const second = messages.add(hold('builder', 'stop'));
     expect(ids(messages)).toEqual([first.id, second.id]);

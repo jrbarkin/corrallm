@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { TranscriptEntry } from '../api/ops/session';
 import type { CanvasId } from '../canvas';
+import { AskSettlement } from './asks';
 import type { Message } from './messages';
 import {
   MAX_RECORD_ENTRIES,
@@ -14,6 +15,7 @@ import {
   UNRESOLVED_ANSWER,
 } from './records';
 import type { RecordEntryView } from './records';
+import { SettledDecision } from './settled';
 
 /*
  * B19 C3's shared contract: a settled record, with the association the core wrote with it, as the
@@ -45,17 +47,20 @@ const HOLD: RecordAbout = {
   need: 'hold/a/0a1b2c3d/ok',
   hold: { choice: 'approve' },
 };
-const NATIVE = {
-  v: 1 as const,
+const NATIVE = SettledDecision.parse({
+  v: 1,
   need: `prompt/a/1/${PROMPT}`,
-  prompt: { id: PROMPT, kind: 'approval' as const, subject: 'command' as const },
-  outcome: { type: 'choice' as const, value: 'yes', hint: 'allow_once' as const },
-};
-const ASKED = {
-  v: 1 as const,
-  ask: { questions: 2 },
-  outcome: { type: 'expired' as const },
-};
+  prompt: { id: PROMPT, kind: 'approval', subject: 'command' },
+  outcome: { type: 'choice', value: 'yes', hint: 'allow_once' },
+});
+const ASKED = AskSettlement.parse({ v: 1, ask: { questions: 2 }, outcome: { type: 'expired' } });
+
+/** A record no party decided: corrallm ended it (an ask's deadline). */
+function unsigned(fields: Partial<Message>): Message {
+  const message = record(fields);
+  delete message.by;
+  return message;
+}
 
 describe('a settled record in the window', () => {
   it('is a typed entry under its record’s id, namespaced, with what it settled and who decided, never its words', () => {
@@ -100,9 +105,8 @@ describe('a settled record in the window', () => {
 
   it('says how an ask ended, and whose it was, counting its questions alone', () => {
     const entry = recordEntryFor(
-      record({
+      unsigned({
         to: 'agent:p',
-        by: undefined,
         body: 'Your question private-ask-id expired',
         settled: ASKED,
       }),
