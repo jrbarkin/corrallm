@@ -5,6 +5,7 @@ import type { Answer as RunAnswer } from './engine/run/runner';
 import type { PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import type { PromptReader } from '../../shared/model/prompt-views';
+import { RecordAbout } from '../../shared/model/records';
 import type { PromptOwner } from './prompts/owner';
 import { OpFailure } from './call';
 import type { OpContext } from './call';
@@ -184,7 +185,7 @@ export function runReplies({ engines, prompts: owner, locale }: RunRepliesDeps):
       ) {
         throw new OpFailure('conflict', `${item.id} doesn’t take that answer now.`);
       }
-      return recorded(open, item, ctx.by, `${chose(item, answer)}.`);
+      return recorded(open, item, ctx.by, `${chose(item, answer)}.`, holdAbout(id, item, answer));
     },
   };
 
@@ -214,26 +215,43 @@ export function runReplies({ engines, prompts: owner, locale }: RunRepliesDeps):
     } catch (error) {
       // Switched, but its session didn't start: the switch is still yours, and recorded.
       if (switchedTo())
-        await recorded(open, item, ctx.by, switchWords(open, refused.agent, connection));
+        await recorded(
+          open,
+          item,
+          ctx.by,
+          switchWords(open, refused.agent, connection),
+          holdAbout(id, item, { choice: 'switch' }),
+        );
       throw error;
     }
-    return recorded(open, item, ctx.by, switchWords(open, refused.agent, connection));
+    return recorded(
+      open,
+      item,
+      ctx.by,
+      switchWords(open, refused.agent, connection),
+      holdAbout(id, item, { choice: 'switch' }),
+    );
   };
 
   const switchWords = (open: OpenCanvas, agent: string, connection: string): string =>
     `switched ${nameOf(open.document.nodes, agent)} to ${open.engine.catalog.connectionLabel(connection) ?? connection}: its held task goes on there.`;
 
-  /** Records who decided, in the write that holds what it changed: its record's id. */
+  /**
+   * Records who decided, in the write that holds what it changed: its record's id. `about`: the
+   * agent whose window shows it (B19 C3).
+   */
   const recorded = async (
     open: OpenCanvas,
     item: NeedsItem,
     by: PartyId,
     what: string,
+    about: RecordAbout | undefined,
   ): Promise<ReplyResult> => {
     const record = decided(open.messages, {
       need: item.id,
       by,
       words: `${who(open, by)} ${what.replace(/[.\s]+$/, '')}.`,
+      ...(about === undefined ? {} : { about }),
     });
     try {
       await open.messages.durable();
@@ -258,6 +276,25 @@ export function runReplies({ engines, prompts: owner, locale }: RunRepliesDeps):
   };
 
   return [holds, prompts];
+}
+
+/**
+ * A hold's answer's association (B19 C3): its agent's window shows it, by its Needs item, with the
+ * choice picked, by key (one the hold offered), and whether words went with it; never the words.
+ * None where what it names can't be one (the record stays in your messages alone).
+ */
+function holdAbout(id: HoldId, item: NeedsItem, answer: Answer): RecordAbout | undefined {
+  const choice = picked(answer);
+  const words = 'text' in answer && answer.text !== undefined;
+  const base = { v: 1, agent: id.agent, need: item.id };
+  const full = RecordAbout.safeParse({
+    ...base,
+    hold: {
+      ...(choice === undefined ? {} : { choice }),
+      ...(words ? { words: true } : {}),
+    },
+  });
+  return full.success ? full.data : RecordAbout.safeParse(base).data;
 }
 
 /** A hold's id read back (`hold/<agent>/<generation>/<item>`): none if it isn't one. */

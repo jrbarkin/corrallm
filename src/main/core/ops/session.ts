@@ -27,8 +27,8 @@ export function sessionOps({
     'session.transcript': ({ canvas, agent, after, limit = DEFAULT_PAGE }, { caller }) => {
       const open = openCanvas(engines, canvas);
       // The transcript as the caller sees it, whole (as its topic gives it), then paged.
-      const { entries, shown } = transcriptOf(open, agent, caller);
-      const start = after === undefined ? 0 : entries.findIndex((entry) => entry.id === after) + 1;
+      const { shown } = transcriptOf(open, agent, caller);
+      const start = after === undefined ? 0 : shown.findIndex((entry) => entry.id === after) + 1;
       if (start === 0 && after !== undefined) {
         throw new OpFailure('not-found', 'That entry isn’t in its transcript (any more).');
       }
@@ -73,9 +73,12 @@ function fitted(entry: TranscriptEntry, room: number): TranscriptEntry {
 
 /**
  * A cut entry with what names things whole again: a prompt the core's owner holds keeps its Needs
- * id (what `reply` names), and its prompt's id, kind and agent (B13 C9), whatever else was cut.
+ * id (what `reply` names), and its prompt's id, kind and agent (B13 C9); a settled record (B19 C3),
+ * its record's id and its Needs item; whatever else was cut.
  */
 function whole(entry: TranscriptEntry, cut: TranscriptEntry): TranscriptEntry {
+  if (entry.kind === 'record' && cut.kind === 'record')
+    return { ...cut, message: entry.message, need: entry.need };
   if (entry.kind !== 'prompt' || cut.kind !== 'prompt') return cut;
   const { id, kind, agent } = entry.prompt;
   return { ...cut, need: entry.need, prompt: { ...cut.prompt, id, kind, agent } };

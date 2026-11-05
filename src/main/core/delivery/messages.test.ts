@@ -18,6 +18,7 @@ import {
 import type { Message } from '../../../shared/model/messages';
 import { AskColumn, AskSettlement } from '../../../shared/model/asks';
 import { Purpose } from '../../../shared/model/purpose';
+import { MAX_RECORD_ENTRIES, RecordAbout } from '../../../shared/model/records';
 import { Verdict } from '../../../shared/model/results';
 import { SettledDecision } from '../../../shared/model/settled';
 import { CanvasMemory } from '../../memory';
@@ -1155,6 +1156,207 @@ describe('what delivery acts on', () => {
         expect(messages.active().length).toBeGreaterThan(0);
       }),
   );
+});
+
+describe('the settled records each agent’s window shows (B19 C3)', () => {
+  const PROMPT = '0f1e2d3c-4b5a-4968-8776-655443322110';
+  /** A run hold's decision for agent `agent`, kept with the core's association. */
+  const hold = (agent = 'builder', choice = 'approve'): Draft => ({
+    from: 'corrallm',
+    to: 'you',
+    kind: 'settled',
+    origin: 'party',
+    body: 'You answered “private-hold-title”: Approve.',
+    state: 'delivered',
+    by: 'you',
+    about: RecordAbout.parse({
+      v: 1,
+      agent,
+      need: `hold/${encodeURIComponent(agent)}/0a1b2c3d/ok`,
+      hold: { choice },
+    }),
+  });
+  /** A native prompt's decision for agent `agent`, being made, kept with the core's association. */
+  const native = (agent = 'builder'): Draft => {
+    const need = `prompt/${encodeURIComponent(agent)}/2/${PROMPT}`;
+    return {
+      from: 'corrallm',
+      to: 'you',
+      kind: 'settled',
+      origin: 'party',
+      body: 'You allowed Builder’s command once.',
+      state: 'delivering',
+      by: 'you',
+      settled: SettledDecision.parse({
+        v: 1,
+        need,
+        prompt: { id: PROMPT, kind: 'approval', subject: 'command' },
+        outcome: { type: 'choice', value: 'yes', hint: 'allow_once' },
+      }),
+      about: RecordAbout.parse({ v: 1, agent, need }),
+    };
+  };
+  const ids = (messages: MessageStore, agent = 'builder') =>
+    messages.records(agent).map(({ message }) => message.id);
+
+  it('keeps a record’s association with its row, never changing it after, across a restart', async () => {
+    const messages = await store();
+    const record = messages.add(hold());
+    await messages.durable();
+    messages.update(record.id, { body: 'Changed words' });
+    await messages.durable();
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT about FROM message WHERE id = ?').get(record.id),
+      ),
+    ).toEqual({ about: JSON.stringify(hold().about) });
+    await restart();
+    const again = await store();
+    expect(again.records('builder')).toEqual([
+      { message: { ...record, body: 'Changed words' }, about: hold().about },
+    ]);
+    // Never on the message itself: what the window shows is the core's, beside it.
+    expect(again.get(record.id)).not.toHaveProperty('about');
+  });
+
+  it('reads a row whose association it can’t read, showing nothing of it, and leaves the column as it is', async () => {
+    const messages = await store();
+    const record = messages.add(hold());
+    await messages.durable();
+    const newer = JSON.stringify({ v: 2, agent: 'builder', need: 'hold/builder/0a1b2c3d/ok' });
+    writeOnDisk(profile, `UPDATE message SET about = '${newer}' WHERE id = '${record.id}'`);
+    await restart();
+    const again = await store();
+    expect(again.get(record.id)).toEqual(record);
+    expect(again.records('builder')).toEqual([]);
+    again.update(record.id, { body: 'Changed' });
+    await again.durable();
+    expect(
+      readOnDisk(profile, (disk) =>
+        disk.prepare('SELECT about FROM message WHERE id = ?').get(record.id),
+      ),
+    ).toEqual({ about: newer });
+  });
+
+  it('shows each agent its own records, in the store’s order, and nothing without the core’s association', async () => {
+    const messages = await store();
+    const first = messages.add(hold('builder'));
+    const other = messages.add(hold('reviewer'));
+    // A decision kept before migration 13 (no association), and a message that is no record.
+    const unassociated = hold('builder');
+    delete unassociated.about;
+    messages.add(unassociated);
+    messages.add(draft('agent:builder', 'you', 'delivered'));
+    const second = messages.add(hold('builder', 'stop'));
+    expect(ids(messages)).toEqual([first.id, second.id]);
+    expect(ids(messages, 'reviewer')).toEqual([other.id]);
+    expect(messages.records('nobody')).toEqual([]);
+  });
+
+  it('never shows a native decision its owner made while the store runs; once loaded again, each that took effect or was cut off', async () => {
+    const messages = await store();
+    // As the prompt owner makes them: its owner entry shows each while this store runs.
+    const landed = messages.add({ ...native(), owned: true });
+    const refused = messages.add({ ...native(), owned: true });
+    const cut = messages.add({ ...native(), owned: true });
+    messages.update(landed.id, { state: 'delivered' });
+    messages.update(refused.id, { state: 'withdrawn', by: 'corrallm' });
+    expect(ids(messages)).toEqual([]);
+    await messages.durable();
+    // Never on its row: a store loaded again (a restart) holds no owner entry of it.
+    await restart();
+    const again = await store();
+    expect(ids(again)).toEqual([landed.id]);
+    // As the canvas's messages load again, one being made is unresolved, never given again.
+    again.update(cut.id, { state: 'unresolved' });
+    expect(ids(again)).toEqual([landed.id, cut.id]);
+    expect(again.records('builder').map(({ message }) => message.state)).toEqual([
+      'delivered',
+      'unresolved',
+    ]);
+  });
+
+  it('shows the newest MAX_RECORD_ENTRIES of an agent’s, its unresolved ones among them, while their rows stay kept', async () => {
+    const messages = await store();
+    const cut = Array.from({ length: MAX_RECORD_ENTRIES + 5 }, () => {
+      const record = messages.add(native());
+      messages.update(record.id, { state: 'unresolved' });
+      return record;
+    });
+    // An unresolved record is never pruned: every row stays, for you to inspect.
+    for (const { id } of cut) expect(messages.get(id)).toBeDefined();
+    expect(ids(messages)).toEqual(cut.slice(5).map(({ id }) => id));
+    const newest = messages.add(hold());
+    expect(ids(messages)).toEqual([...cut.slice(6).map(({ id }) => id), newest.id]);
+    expect(messages.records('builder')).toHaveLength(MAX_RECORD_ENTRIES);
+  });
+
+  it('shows nothing the store no longer keeps: its window lies within the store’s retention', async () => {
+    const messages = await store();
+    const records = Array.from({ length: STORE_SETTLED_PER_PARTY + 3 }, () => messages.add(hold()));
+    const kept = records.filter(({ id }) => messages.get(id) !== undefined).map(({ id }) => id);
+    expect(kept.length).toBeLessThanOrEqual(STORE_SETTLED_PER_PARTY);
+    expect(ids(messages)).toEqual(kept.slice(-MAX_RECORD_ENTRIES));
+    expect(ids(messages)).not.toContain(records[0]?.id);
+  });
+
+  it('keeps its ids and its order across a restart', async () => {
+    const messages = await store();
+    const kept = [
+      messages.add(hold()),
+      messages.add(hold('builder', 'more')),
+      messages.add(hold()),
+    ];
+    await messages.durable();
+    await restart();
+    expect(ids(await store())).toEqual(kept.map(({ id }) => id));
+  });
+
+  it('tells the agent whose window changed, once, as its record is kept, changed or dropped, and never for another message', async () => {
+    const messages = await store();
+    const heard: string[] = [];
+    messages.watchRecords((agent) => heard.push(agent));
+    const record = messages.add(hold());
+    expect(heard).toEqual(['builder']);
+    messages.add(draft('agent:builder', 'you', 'delivered'));
+    const party = messages.add(draft('outside:orchestrator', 'agent:builder'));
+    messages.update(party.id, { state: 'delivering' });
+    const being = messages.add(native('reviewer'));
+    expect(heard).toEqual(['builder']);
+    messages.update(being.id, { state: 'unresolved' });
+    expect(heard).toEqual(['builder', 'reviewer']);
+    messages.update(record.id, { body: 'Changed' });
+    expect(heard).toEqual(['builder', 'reviewer', 'builder']);
+  });
+
+  it('tells of a record staged within another write once that write returned, and again if it is undone', async () => {
+    const messages = await store();
+    const heard: string[] = [];
+    messages.watchRecords((agent) => heard.push(agent));
+    const staged = await table.write(() => messages.stageWithin(hold()));
+    // Kept in its place at once, as every message is: told once the write returned.
+    expect(ids(messages)).toEqual([staged.message.id]);
+    expect(heard).toEqual([]);
+    staged.reveal();
+    expect(heard).toEqual(['builder']);
+    staged.undo();
+    expect(ids(messages)).toEqual([]);
+    expect(heard).toEqual(['builder', 'builder']);
+  });
+
+  it('reads an agent’s window again only once it changed', async () => {
+    const messages = await store();
+    messages.add(hold());
+    const window = messages.records('builder');
+    // A burst of other messages changes nothing the window holds.
+    for (let n = 0; n < 50; n++) {
+      const message = messages.add(draft('outside:orchestrator', 'agent:builder'));
+      messages.update(message.id, { state: 'withdrawn' });
+    }
+    expect(messages.records('builder')).toBe(window);
+    messages.add(hold());
+    expect(messages.records('builder')).not.toBe(window);
+  });
 });
 
 describe('what a message’s purpose makes it (B19 C1)', () => {

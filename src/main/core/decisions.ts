@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Message, PartyId } from '../../shared/model/messages';
+import { UNRESOLVED_ANSWER } from '../../shared/model/records';
+import type { RecordAbout } from '../../shared/model/records';
 import type { SettledDecision, SettledOutcome, SubjectType } from '../../shared/model/settled';
 import type { MessageStore } from './delivery/messages';
 
@@ -30,6 +32,11 @@ import type { MessageStore } from './delivery/messages';
  *
  * Each is kept under the told key `decided:<need>#<uuid>`, so the latest for a Needs item is found
  * by its id alone (`decidedOf`).
+ *
+ * - Where the core settles it for an agent (a run hold's answer, a native prompt's: B19 C3), it is
+ *   kept with the association the core resolved (`about`: the agent whose window shows it, the
+ *   Needs item, a hold's choice by key), beside it and never in its words, so the agent's window
+ *   shows it (src/shared/model/records.ts) without reading its words or its told key.
  */
 
 const PREFIX = 'decided:';
@@ -49,6 +56,13 @@ export interface Decision {
   to?: PartyId;
   /** A native prompt's decision, typed and value-free, kept with its record. */
   settled?: SettledDecision;
+  /** B19 C3: the agent whose window shows it, as the core resolved it: none, your messages alone. */
+  about?: RecordAbout;
+  /**
+   * B19 C3: made by a prompt's owner, whose entry shows it while this core runs (never the window),
+   * known in memory alone.
+   */
+  owned?: true;
 }
 
 /** Records a decision made now (its effect in the same write as the record). */
@@ -103,7 +117,7 @@ export function recoverDecisions(messages: MessageStore): boolean {
     if (message.state !== 'delivering') continue;
     messages.update(message.id, {
       state: 'unresolved',
-      body: `${message.body.replace(/[.\s]+$/, '')}: corrallm stopped as it was answering, so it may not have reached the agent’s CLI. It isn’t sent again: look at the agent’s session.`,
+      body: `${message.body.replace(/[.\s]+$/, '')}: ${UNRESOLVED_ANSWER}`,
     });
     any = true;
   }
@@ -121,6 +135,8 @@ function draftOf(decision: Decision, state: 'delivered' | 'delivering') {
     state,
     by: decision.by,
     ...(decision.settled === undefined ? {} : { settled: decision.settled }),
+    ...(decision.about === undefined ? {} : { about: decision.about }),
+    ...(decision.owned === undefined ? {} : { owned: decision.owned }),
   };
 }
 

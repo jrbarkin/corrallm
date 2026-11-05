@@ -694,6 +694,22 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE message ADD COLUMN purpose TEXT CHECK (purpose IS NULL OR json_valid(purpose));
     `,
   },
+  {
+    // B19's settled records in the window (B19 Design §9 C3): which agent's window shows a record
+    // the core settled, and the Needs item it settled. It only says where a record is shown, so
+    // a column alone keeps the oldest schema that may read the database as migration 12 left it: a
+    // corrallm of schema 12 still reads and writes its own columns (each by name), leaving this one
+    // as it is, and misreads nothing.
+    version: 13,
+    minReader: 12,
+    sql: `
+      -- On a record the core settled (a run hold's decision, a native prompt's, an ask's end): the
+      -- agent whose window shows it and the Needs item it settled, and for a hold's decision the
+      -- choice it picked, by key, and whether words went with it. Never a title, a label, words, an
+      -- answer or a value; none for every other message, and none for a record kept before it.
+      ALTER TABLE message ADD COLUMN about TEXT CHECK (about IS NULL OR json_valid(about));
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */

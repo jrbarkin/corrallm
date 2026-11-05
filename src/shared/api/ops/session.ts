@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { HandoffSchema } from '../../model/handoff';
 import { PARTY_PATTERN } from '../../model/messages';
 import { AnswerIn, ChoiceHint, PromptId, PromptKind, PromptSubject } from '../../model/prompts';
+import { RecordEntry } from '../../model/records';
 import { MAX_CONVERSATIONS, MAX_CONVERSATION_LABEL } from '../../session';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -208,6 +209,11 @@ export const TranscriptEntry = z.discriminatedUnion('kind', [
     outcome: LiveOutcome.optional(),
     cut,
   }),
+  /**
+   * B19 C3: a settled record its agent's window shows (src/shared/model/records.ts), yours alone:
+   * under its record's id, namespaced, ahead of the native transcript, in the store's order.
+   */
+  RecordEntry,
   z.strictObject({
     id: z.string(),
     kind: z.literal('cleared'),

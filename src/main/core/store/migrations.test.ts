@@ -1818,3 +1818,45 @@ describe('migration 12', () => {
     expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
   });
 });
+
+/** A record's association, as B19 C3 keeps it on its message (the `about` column). */
+const ABOUT = JSON.stringify({
+  v: 1,
+  agent: 'a',
+  need: 'hold/a/0a1b2c3d/ok',
+  hold: { choice: 'approve' },
+});
+
+describe('migration 13', () => {
+  it('adds an association to every message of a schema-12 database, keeping every row, which a schema-12 corrallm may still open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 12));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 13));
+
+    expect(schemaOf(connection)).toBe(13);
+    // A column only, which says where the window shows a record: a corrallm of schema 12 still
+    // reads and writes its own columns by name, leaving this one as it is, and misreads nothing.
+    expect(minReaderOf(connection)).toBe(12);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(
+      before.map((row) => ({ ...row, about: null })),
+    );
+  });
+
+  it('keeps a record’s association as valid JSON, or none', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    const seq = addMessage('record');
+    const keep = connection.prepare('UPDATE message SET about = ? WHERE seq = ?');
+    keep.run(ABOUT, seq);
+    expect(connection.prepare('SELECT about FROM message WHERE seq = ?').get(seq)).toEqual({
+      about: ABOUT,
+    });
+    keep.run(null, seq);
+    expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});

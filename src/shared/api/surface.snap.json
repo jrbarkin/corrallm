@@ -313,7 +313,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "53fc28b0a7c3ae2d"
+      "output": "e435673d006d713b"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -529,7 +529,7 @@
     },
     "session.transcript": {
       "input": "b0a50f8eb22508f9",
-      "output": "56548bebad317de1"
+      "output": "1cc45d56871b7bb7"
     },
     "session.handoff": {
       "input": "c804536f3eb2a39b",

@@ -628,6 +628,7 @@ export class Asks {
     const settled = settlement(column, outcome);
     store.update(ask.id, { state: askStateOf(outcome), by, settled });
     if (send === 'none') return undefined;
+    const recipient = agentOf(ask.to);
     // An agent is sent it as a turn; an outside party keeps it as a record.
     const state = agentOf(ask.from) === undefined ? 'delivered' : 'pending';
     // B21 C7: an ask of a task's attempt continues that task, carrying it.
@@ -659,6 +660,10 @@ export class Asks {
             state,
             ...carried,
             settled,
+            // B19 C3: its recipient agent's window shows how it ended (its asker is sent it).
+            ...(recipient === undefined
+              ? {}
+              : { about: { v: 1 as const, agent: recipient, need: `ask/${ask.id}` } }),
           });
     if (state === 'pending') this.#deps.schedule();
     return row;
