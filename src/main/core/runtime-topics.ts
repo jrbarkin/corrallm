@@ -202,7 +202,7 @@ interface SessionBase {
  * An agent's window of settled records as last published (B19 C3): the message store's rows (the
  * same list until the window changes), and your entries of them, each by id, in the store's order.
  */
-interface RecordsBase {
+export interface RecordsBase {
   readonly rows: readonly RecordRow[];
   readonly views: readonly RecordEntryView[];
   readonly ids: readonly string[];
@@ -959,7 +959,7 @@ function sessionState(base: SessionBase, yours: boolean): SessionView {
  * An agent's window of settled records as your entries (B19 C3: the one selector's), each the one
  * published before where it is the same, so that what didn't change is said again nowhere.
  */
-function recordsBase(rows: readonly RecordRow[], previous?: RecordsBase): RecordsBase {
+export function recordsBase(rows: readonly RecordRow[], previous?: RecordsBase): RecordsBase {
   const views = recordsFor(rows, 'you').map((view) =>
     projectData<RecordEntryView>(view, previous?.byId.get(view.id)),
   );
@@ -974,16 +974,22 @@ function recordsBase(rows: readonly RecordRow[], previous?: RecordsBase): Record
 /**
  * A session's change with its window's (B19 C3): the records new or changed, upserted ahead of the
  * rest; no native entry under a record's id; and the whole order, the window first, wherever the
- * window's records came or went, or the native entries' order was said. The change as it was where
- * the window has no record and didn't change.
+ * window's records came or went, or the native entries' order was said. The change as it was,
+ * reading nothing of the window but its upserts' ids, where the window didn't change and the change
+ * says no order and no entry under a record's id: what most changes of a session are (a turn's).
  */
-function withRecords(
+export function withRecords(
   change: SessionBody['entries'] | undefined,
   before: RecordsBase,
   now: RecordsBase,
   order: readonly string[],
 ): SessionBody['entries'] | undefined {
-  if (before === now && now.ids.length === 0) return change;
+  if (
+    before === now &&
+    change?.order === undefined &&
+    !(change?.upsert ?? []).some(({ id }) => now.byId.has(id))
+  )
+    return change;
   const ids = new Set(now.ids);
   const records = now.views.filter((view) => before.byId.get(view.id) !== view);
   const native = (change?.upsert ?? []).filter(({ id }) => !ids.has(id));

@@ -18,6 +18,7 @@ import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
 import { expectRestorable, liveRunOf } from './engine/run/test-restore';
+import { recordsBase, withRecords } from './runtime-topics';
 import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
@@ -809,5 +810,49 @@ describe('the window at the topic, as your copy was read before', () => {
     expect(records(await topicEntries(core, 'a'))).toEqual(records(followed.entries()));
     expect(await topicEntries(core, 'a')).toEqual(await transcript(core, 'a'));
     followed.copy.stop();
+  });
+});
+
+describe('a window unchanged at the topic', () => {
+  const rows = (count: number) =>
+    Array.from({ length: count }, (_, n) => ({
+      message: {
+        id: `11111111-2222-4333-8444-${String(n).padStart(12, '0')}`,
+        canvas: CANVAS,
+        from: 'corrallm' as const,
+        to: 'you' as const,
+        kind: 'settled' as const,
+        body: 'You answered it.',
+        state: 'delivered' as const,
+        by: 'you' as const,
+        at: n,
+      },
+      about: { v: 1 as const, agent: 'a', need: 'hold/a/0a1b2c3d/ok', hold: { choice: 'approve' } },
+    }));
+
+  it('leaves a session’s change as it was, unread, where it says no order and no record’s id', () => {
+    const window = recordsBase(rows(MAX_RECORD_ENTRIES));
+    const change = {
+      upsert: [{ id: 'native-1', kind: 'text' as const, text: 'Hello' }],
+      append: [{ id: 'native-0', text: ' more' }],
+    };
+    expect(withRecords(change, window, window, ['native-0', 'native-1'])).toBe(change);
+    expect(withRecords(undefined, window, window, [])).toBeUndefined();
+  });
+
+  it('still says the window first in an order, and never a native entry under a record’s id', () => {
+    const window = recordsBase(rows(2));
+    const [first, second] = window.ids;
+    expect(withRecords({ order: ['n1', 'n2'] }, window, window, ['n1', 'n2'])).toEqual({
+      order: [first, second, 'n1', 'n2'],
+    });
+    expect(
+      withRecords(
+        { upsert: [{ id: first ?? '', kind: 'text', text: 'Forged' }] },
+        window,
+        window,
+        [],
+      ),
+    ).toBeUndefined();
   });
 });
