@@ -8,6 +8,8 @@ import {
 import type { CanvasId } from '../../../shared/canvas';
 import { AskColumn } from '../../../shared/model/asks';
 import { Purpose } from '../../../shared/model/purpose';
+import { MAX_RECORD_ENTRIES, RecordAbout, shownRecord } from '../../../shared/model/records';
+import type { RecordRow } from '../../../shared/model/records';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
@@ -41,7 +43,9 @@ import { Sequence } from './sequence';
  * an ask's questions or an answer's answers (`ask`: B21 C6, migration 9, written with its row and
  * never changed after), a result's verdict (`verdict`: B21 C8, migration 10, written with its
  * row and never changed after), and a queue hand-off's or its evidence's purpose (`purpose`: B19
- * C1, migration 12, written with its row and never changed after). Their order (`seq`) is one every canvas's messages share, whose
+ * C1, migration 12, written with its row and never changed after), and beside a record the core
+ * settled, the agent whose window shows it (`about`: B19 C3, migration 13, written with its row and
+ * never changed after, read through `records`). Their order (`seq`) is one every canvas's messages share, whose
  * places are never given again (MessageTable), so a cursor into it survives pruning, restarts and
  * restores. It keeps the newest STORE_SETTLED_PER_PARTY settled messages of each party within
  * STORE_BYTES, and every pending and unresolved one, deleting the oldest settled first (delivery
@@ -69,6 +73,11 @@ import { Sequence } from './sequence';
 export interface Provenance {
   origin: MessageOrigin;
   display?: MessageDisplay;
+  /**
+   * B19 C3: for a record the core settled, the agent whose window shows it and the Needs item it
+   * settled (src/shared/model/records.ts), core-written with it and never changed after.
+   */
+  about?: RecordAbout;
 }
 
 /** A message to add: the store gives it its id, its canvas and when it was sent. */
@@ -120,7 +129,7 @@ export class MessageTable {
       .prepare(
         `SELECT seq, id, from_party, to_party, kind, origin, body, display, reply_to, resend_of,
            task, turn, state, delivery, by_party, sent_at, told, withdrawal, settled, ask, verdict,
-           purpose
+           purpose, about
          FROM message WHERE canvas_id = ? ORDER BY seq`,
       )
       .all(canvas);
@@ -155,15 +164,16 @@ export class MessageTable {
    * corrallm keeps beside them stays). A record's settled decision is written with its row and
    * never after: no change writes it again; an ask's settlement is written once, as it ends (a
    * row that has one keeps it). An ask's questions or an answer's answers, a result's verdict, and
-   * a queue hand-off's or its evidence's purpose (B19 C1), are written with its row and never after.
+   * a queue hand-off's or its evidence's purpose (B19 C1), and a record's association (B19 C3), are
+   * written with its row and never after.
    */
-  keep({ seq, message, origin, display, told, withdrawal }: Kept): void {
+  keep({ seq, message, origin, display, told, withdrawal, about }: Kept): void {
     this.#store
       .prepare(
         `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
            reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
-           settled, ask, verdict, purpose)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           settled, ask, verdict, purpose, about)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            body = excluded.body, display = excluded.display, reply_to = excluded.reply_to,
            task = excluded.task, turn = excluded.turn, state = excluded.state,
@@ -194,6 +204,7 @@ export class MessageTable {
         json(message.ask),
         json(message.verdict),
         json(message.purpose),
+        json(about),
       );
   }
 
@@ -226,6 +237,17 @@ export class MessageStore {
   readonly #candidates = new Set<string>();
   /** Results by the native turn they report: its unsettled turn keeps its fixed verdict. */
   readonly #results = new Map<string, Set<string>>();
+  /**
+   * B19 C3: the records each agent's window may show (shownRecord), by agent, in the store's
+   * order; the agent each is shown to, by id; each agent's window (its newest MAX_RECORD_ENTRIES)
+   * as last read, until it changes; and the agents whose window a message's change changed, told
+   * as that change is (its id heard).
+   */
+  readonly #records = new Map<string, Sequence>();
+  readonly #recordOf = new Map<string, string>();
+  readonly #windows = new Map<string, readonly RecordRow[]>();
+  readonly #windowsChanged = new Map<string, Set<string>>();
+  readonly #recordWatchers = new Set<(agent: string) => void>();
   /** Settling a turn and judging its report are one synchronous action. */
   readonly #judging = new Set<string>();
   #bytes = 0;
@@ -349,7 +371,7 @@ export class MessageStore {
    * Adds a message, written with the store's next write: as kept. `told`: for a notice, the key of
    * what it tells, kept with it.
    */
-  add({ origin, display, ...draft }: Draft, told?: string): Message {
+  add({ origin, display, about, ...draft }: Draft, told?: string): Message {
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
     const seq = this.#unjournaled === undefined ? this.#table.place() : ++this.#seq;
     this.#keep({
@@ -358,6 +380,7 @@ export class MessageStore {
       bytes: 0,
       origin,
       ...(display === undefined ? {} : { display }),
+      ...(about === undefined ? {} : { about }),
       ...(told === undefined ? {} : { told }),
     });
     for (const listener of this.#listeners) listener(message);
@@ -372,7 +395,7 @@ export class MessageStore {
    * hear messages, once the write's commit returned, and `undo` forgets it, if the write failed.
    * Throws, adding nothing, if the store journals nothing.
    */
-  stageWithin({ origin, display, ...draft }: Draft): Staged & { message: Message } {
+  stageWithin({ origin, display, about, ...draft }: Draft): Staged & { message: Message } {
     if (this.#unjournaled !== undefined) throw new Error(this.#unjournaled);
     const message: Message = { id: randomUUID(), canvas: this.canvas, ...draft, at: this.#now() };
     const kept: Kept = {
@@ -381,6 +404,7 @@ export class MessageStore {
       bytes: 0,
       origin,
       ...(display === undefined ? {} : { display }),
+      ...(about === undefined ? {} : { about }),
     };
     this.#table.ensure(this.canvas);
     this.#table.keep(kept);
@@ -396,6 +420,40 @@ export class MessageStore {
         this.#delete(message.id);
         this.#changedId(message.id);
       },
+    };
+  }
+
+  /**
+   * B19 C3: agent `agent`'s window, the settled records it shows (shownRecord), the newest
+   * MAX_RECORD_ENTRIES of those kept, in the store's order, each with its association: the same
+   * list until it changes, read only then, never by a walk of the rest.
+   */
+  records(agent: string): readonly RecordRow[] {
+    const cached = this.#windows.get(agent);
+    if (cached !== undefined) return cached;
+    const sequence = this.#records.get(agent);
+    if (sequence === undefined) return NO_RECORDS;
+    const rows: RecordRow[] = [];
+    for (let offset = Math.min(sequence.weight, MAX_RECORD_ENTRIES) - 1; offset >= 0; offset--) {
+      const id = sequence.newest(offset);
+      const kept = id === undefined ? undefined : this.#kept.get(id);
+      if (kept?.about !== undefined)
+        rows.push(Object.freeze({ message: kept.message, about: kept.about }));
+    }
+    const window = Object.freeze(rows);
+    this.#windows.set(agent, window);
+    return window;
+  }
+
+  /**
+   * Hears, by agent, each change of its window (B19 C3), as the message that changed it is heard
+   * (`watch`): a record kept, changed or dropped where the window shows it, or moved into or out of
+   * it; never another message's change. What the session topic publishes its records from.
+   */
+  watchRecords(watcher: (agent: string) => void): () => void {
+    this.#recordWatchers.add(watcher);
+    return () => {
+      this.#recordWatchers.delete(watcher);
     };
   }
 
@@ -665,6 +723,7 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexRecord(before, kept);
     this.#indexResult(before, false);
     this.#indexResult(kept, true);
     if (now && !same) this.#settle(kept);
@@ -697,6 +756,7 @@ export class MessageStore {
       this.#bytes -= kept.bytes;
       if (this.#prunable(kept)) this.#unsettle(kept);
       this.#indexResult(kept, false);
+      this.#indexRecord(kept, undefined);
     }
     this.#kept.delete(id);
     this.#active.delete(id);
@@ -731,6 +791,48 @@ export class MessageStore {
       line.line.set(id, kept);
       line.line = new Map([...line.line].sort(([, a], [, b]) => a.seq - b.seq));
     }
+  }
+
+  /**
+   * B19 C3: keeps a record's place in its agent's window (`#records`) as it is now (`kept`, none:
+   * gone), and notes each agent whose window that changed, told as its id is heard.
+   */
+  #indexRecord(before: Kept | undefined, kept: Kept | undefined): void {
+    const at = kept ?? before;
+    if (at === undefined) return;
+    const { id } = at.message;
+    const was = this.#recordOf.get(id);
+    const now =
+      kept?.about !== undefined && shownRecord(kept.message, kept.about)
+        ? kept.about.agent
+        : undefined;
+    if (was === undefined && now === undefined) return;
+    const shown = (agent: string) =>
+      (this.#records.get(agent)?.newer(at.seq) ?? MAX_RECORD_ENTRIES) < MAX_RECORD_ENTRIES;
+    if (was !== undefined && was !== now) {
+      if (shown(was)) this.#windowChanged(was, id);
+      const sequence = this.#records.get(was);
+      sequence?.delete(at.seq);
+      if (sequence?.weight === 0) this.#records.delete(was);
+      this.#recordOf.delete(id);
+    }
+    if (now === undefined) return;
+    if (was !== now) {
+      let sequence = this.#records.get(now);
+      if (sequence === undefined) this.#records.set(now, (sequence = new Sequence()));
+      sequence.set(at.seq, id);
+      this.#recordOf.set(id, now);
+    }
+    if (shown(now)) this.#windowChanged(now, id);
+  }
+
+  /** Agent `agent`'s window changed with message `id`'s change: read again, told as it is heard. */
+  #windowChanged(agent: string, id: string): void {
+    this.#windows.delete(agent);
+    if (this.#recordWatchers.size === 0) return;
+    const agents = this.#windowsChanged.get(id) ?? new Set<string>();
+    agents.add(agent);
+    this.#windowsChanged.set(id, agents);
   }
 
   #settle({ seq, message: { id, from, to } }: Kept): void {
@@ -835,6 +937,10 @@ export class MessageStore {
 
   #changedId(id: string): void {
     for (const watcher of this.#watchers) watcher(id);
+    const agents = this.#windowsChanged.get(id);
+    if (agents === undefined) return;
+    this.#windowsChanged.delete(id);
+    for (const agent of agents) for (const watcher of this.#recordWatchers) watcher(agent);
   }
 }
 
@@ -935,9 +1041,14 @@ export function readCursor(
   }
 }
 
+/** No agent's window holds a record. */
+const NO_RECORDS: readonly RecordRow[] = Object.freeze([]);
+
 /** How big a message's record is: what its byte budget counts. */
-function sizeOf({ seq, message, origin, display, told, withdrawal }: Kept): number {
-  return Buffer.byteLength(JSON.stringify({ seq, message, origin, display, told, withdrawal }));
+function sizeOf({ seq, message, origin, display, told, withdrawal, about }: Kept): number {
+  return Buffer.byteLength(
+    JSON.stringify({ seq, message, origin, display, told, withdrawal, about }),
+  );
 }
 
 /** A row of `message`, read: undefined if it isn't one of the canvas's messages this code reads. */
@@ -985,6 +1096,12 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
       ? undefined
       : Purpose.safeParse(parsed(row.purpose));
   if (purpose?.success === false) return undefined;
+  // B19 C3: an association this code doesn't read (another version's) shows the record in no
+  // window here; the row is read, and its column left as it is (no write changes it).
+  const about =
+    row.about === null || row.about === undefined
+      ? undefined
+      : RecordAbout.safeParse(parsed(row.about));
   const task = parsed(row.task);
   const turn = parsed(row.turn);
   const delivery = parsed(row.delivery);
@@ -1015,6 +1132,7 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
     bytes: 0,
     origin: origin as MessageOrigin,
     ...(display === undefined ? {} : { display }),
+    ...(about?.success === true ? { about: about.data } : {}),
     ...(typeof row.told === 'string' ? { told: row.told } : {}),
     ...(withdrawal !== undefined && typeof withdrawal.text === 'string'
       ? {

@@ -459,6 +459,26 @@ it('dumps a message’s purpose decoded, as other JSON columns are', async () =>
   });
 });
 
+it('dumps a record’s association decoded, as other JSON columns are (B19 C3)', async () => {
+  const record = messages.all()[0];
+  if (record === undefined) throw new Error('No message');
+  const about = { v: 1, agent: 'a', need: 'hold/a/0a1b2c3d/ok', hold: { choice: 'approve' } };
+  await store.write(() => {
+    store
+      .prepare('UPDATE message SET about = ? WHERE id = ?')
+      .run(JSON.stringify(about), record.id);
+  });
+  const lines: string[] = [];
+  await dump(store.file, (line) => {
+    lines.push(line);
+    return Promise.resolve();
+  });
+  expect(lines.map((line) => JSON.parse(line) as unknown).at(-1)).toMatchObject({
+    type: 'message',
+    data: { id: record.id, about },
+  });
+});
+
 it('dumps a schema-3 database without migrating it: its runs and messages as schema 3 kept them', async () => {
   const older = await mkdtemp(path.join(tmpdir(), 'corrallm-dump-3-'));
   try {

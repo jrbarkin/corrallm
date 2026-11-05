@@ -209,6 +209,7 @@ function classified(): Row[] {
       ask: null,
       verdict: null,
       purpose: null,
+      about: null,
     };
   });
 }
