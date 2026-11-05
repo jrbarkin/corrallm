@@ -1402,3 +1402,49 @@ describe('what an attempt keeps of its session (B16 C4)', () => {
     });
   });
 });
+
+describe('what B16 leaves yours alone (X6)', () => {
+  const IMAGE = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' };
+  const READER: OutsideCaller = { ...ORCHESTRATOR, token: 'read-token', access: 'read' };
+  const AGENT = (agent: string) =>
+    ({ kind: 'agent', canvas: CANVAS, agent, generation: 1, session: `${agent}-session` }) as const;
+  const connectionOf = (core: Core, agent: string) =>
+    (
+      core.engines.canvas(CANVAS)?.document.nodes.find((node) => node.id === agent) as
+        { data: { connection?: string } } | undefined
+    )?.data.connection;
+
+  it('refuses every token and agent session.continueIn and session.viewCommand, changing no endpoint and sending nothing', async () => {
+    const { core, sdk, terminal } = await start();
+    await ok(core, 'session.open', { agent: 'a' });
+    const open = core.engines.canvas(CANVAS);
+    const before = open?.messages.all().length;
+    for (const caller of [ORCHESTRATOR, READER, AGENT('a'), AGENT('b')]) {
+      for (const args of [
+        { agent: 'a', connection: 'claude-code.terminal' },
+        { agent: 'a', connection: 'claude-code.terminal', then: { text: 'Run it' } },
+        {
+          agent: 'a',
+          connection: 'claude-code.terminal',
+          then: { text: 'Run it', images: [IMAGE] },
+          request: crypto.randomUUID(),
+        },
+      ]) {
+        expect(await fails(core, 'session.continueIn', args, caller)).toMatchObject({
+          code: 'human-only',
+        });
+      }
+      expect(
+        await fails(core, 'session.viewCommand', { agent: 'a', text: '/mcp' }, caller),
+      ).toMatchObject({ code: 'human-only' });
+      expect(
+        await fails(core, 'session.viewCommand', { agent: 'a', text: '/resume' }, caller),
+      ).toMatchObject({ code: 'human-only' });
+    }
+    // No endpoint changed, no session switched, no message recorded or sent.
+    expect(connectionOf(core, 'a')).toBe('claude-code.sdk');
+    expect(open?.messages.all().length).toBe(before);
+    expect(terminal.started).toEqual([]);
+    expect(sdk.sessions[0]?.sent ?? []).toEqual([]);
+  });
+});

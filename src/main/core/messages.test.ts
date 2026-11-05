@@ -2635,9 +2635,14 @@ describe('telling an agent of a withdrawal after receipt', () => {
       expect(sent(terminal)).toHaveLength(2);
     });
     const later = await send('shell', 'After the shell command', YOU);
-    await vi.waitFor(async () => {
-      expect((await find(next, YOU))?.state).toBe('replied');
-    });
+    // A Terminal fake's turn takes about 760 ms here (its keys, then its settle): as long a wait
+    // as the next one's, not the default second a slow host can overrun.
+    await vi.waitFor(
+      async () => {
+        expect((await find(next, YOU))?.state).toBe('replied');
+      },
+      { timeout: 3000 },
+    );
     await vi.waitFor(
       async () => {
         expect((await find(later, YOU))?.state).toBe('replied');
