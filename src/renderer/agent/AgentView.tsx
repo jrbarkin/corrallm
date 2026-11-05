@@ -44,6 +44,7 @@ import type { ViewCommand } from './commands';
 import type { Route } from '../../shared/routing';
 import { routeRefusal } from '../../shared/routing';
 import { imageRefusal } from '../../shared/images';
+import type { SessionFeatures } from '../../shared/features';
 import { Composer } from './Composer';
 import { isCommand } from './completion';
 import { queueLinks } from './links';
@@ -61,7 +62,7 @@ import { BranchControls } from '../workspaces/BranchReview';
 import { AgentSettingsSummary } from './AgentSettings';
 import type { Relation, StackedAgent } from './Rail';
 import type { ComposerControls } from './Composer';
-import { chatStart, rewindPoints, threadTitle } from '../../shared/model/session';
+import { chatStart, rewindPointsOf, threadTitle } from '../../shared/model/session';
 import type { MessageImage, Session } from '../../shared/model/session';
 import { Transcript } from './Transcript';
 import './AgentView.css';
@@ -87,6 +88,23 @@ export interface SessionControls extends ComposerControls {
   /** Its session's MCP servers (/mcp), and a change to one (resolving with them all then). */
   mcpServers: () => Promise<McpServer[]>;
   changeMcpServer: (server: string, change: McpChange) => Promise<McpServer[]>;
+}
+
+/**
+ * `controls` with the live ones its ready generation can't use left out (B16 C1): effort and task
+ * Stop are offered only where `features` says its connection declares them and its session has the
+ * method, so nothing that would only be refused is shown. None while no generation is ready.
+ */
+function liveControlsOf(
+  controls: SessionControls,
+  features: SessionFeatures | null,
+): SessionControls {
+  const { setEffort, stopTask, ...rest } = controls;
+  return {
+    ...rest,
+    ...(features?.live.effort && setEffort ? { setEffort } : {}),
+    ...(features?.live.stopTask && stopTask ? { stopTask } : {}),
+  };
 }
 
 /**
@@ -326,16 +344,22 @@ export function AgentView({
   };
 
   const working = session.status !== 'idle';
-  /** The user's messages it can rewind to (since the last /clear), oldest first. */
-  const points = rewindPoints(session.entries);
   /** Whether its connection offers rewind now: idle, with a message of the user's. */
-  const declared = connectionIn(catalog(), connection)?.connection;
+  const found = connectionIn(catalog(), connection);
+  /**
+   * The user's messages it can rewind to, oldest first: its actual conversation's (its connection's
+   * adapter's), since its last clear, as the core proves them (`rewindPointsOf`).
+   */
+  const points = found === undefined ? [] : rewindPointsOf(session.entries, found.adapter.id);
+  const declared = found?.connection;
   /** What its ready session can do now: none while no generation is ready. */
   const features = session.features ?? null;
   /** The connection it continues in, if it declares one this build has. */
   const target = continuationOf(connection);
   const rewindable = panelOpens('rewind', features) && !working && points.length > 0;
   const { stop } = controls;
+  /** The controls its composer and transcript get: a live one (effort, task Stop) only where `features` says. */
+  const offered = liveControlsOf(controls, features);
   const composer = useRef<HTMLTextAreaElement>(null);
   const body = useRef<HTMLDivElement>(null);
   /** The agent whose queue is shown beside this one. */
@@ -464,12 +488,40 @@ export function AgentView({
    * offered there instead; while the run asks (`ask.reply`), the answer, unless it is a command
    * the session runs.
    */
-  /** Why text it would offer to continue elsewhere can't go with its images, if so. */
+  /** The limits of this agent's own connection: one the catalog lacks takes none. */
+  const ownRules = {
+    declared: declared?.images ?? null,
+    subject: found ? `${found.adapter.name} · ${found.connection.label}` : 'This connection',
+  };
+  /**
+   * While the run asks for words about a failed task, they go to the agent whose task it was
+   * (src/main/core/run-replies.ts), so its connection's limits hold their images.
+   */
+  const holdTo =
+    ask?.reply && ask.problem && ask.problem.agent !== node.id ? ask.problem.agent : undefined;
+  const holdNode = holdTo === undefined ? undefined : nodes.find((one) => one.id === holdTo);
+  const holdRules =
+    holdNode?.type === 'agent'
+      ? {
+          declared: connectionIn(catalog(), connectionOf(holdNode.data))?.connection.images ?? null,
+          subject: `${holdNode.data.label || 'Unnamed agent'}’s connection`,
+        }
+      : undefined;
+  /** What its composer's images are held to at a paste: where the text would go, if it answers a hold. */
+  const imageRules = holdRules ?? ownRules;
+  /** Whether text is a command its session runs (never a hold's answer), as `send` decides it. */
+  const runsAsCommand = (text: string) =>
+    routeText(text, connection, session.commands).kind === 'command' ||
+    (connection !== undefined &&
+      session.commands === undefined &&
+      isCommand(text.trimStart(), undefined));
+  /** Why this text can't go with its images, by whoever it goes to: none when it can. */
   const refuses = (text: string, images: MessageImage[]) => {
     const route = routeText(text, connection, session.commands);
-    return (route.kind === 'continue' || route.kind === 'shell') && target
-      ? imageRefusal(images, target.images, target.label)
-      : undefined;
+    if ((route.kind === 'continue' || route.kind === 'shell') && target)
+      return imageRefusal(images, target.images, target.label);
+    const rules = holdRules && !runsAsCommand(text) ? holdRules : ownRules;
+    return imageRefusal(images, rules.declared, rules.subject);
   };
   const send = (text: string, images?: MessageImage[]) => {
     const route = routeText(text, connection, session.commands);
@@ -512,11 +564,7 @@ export function AgentView({
       return;
     }
     // A command the session offers runs as a command; unknown commands: any /name does.
-    const command =
-      route.kind === 'command' ||
-      (connection !== undefined &&
-        session.commands === undefined &&
-        isCommand(text.trimStart(), undefined));
+    const command = runsAsCommand(text);
     if (ask?.reply && !command) {
       own.onDecide(ask.item.id, {
         reply: text,
@@ -587,6 +635,7 @@ export function AgentView({
               <AgentSettingsSummary
                 node={node}
                 options={controls.settingsOptions}
+                features={features}
                 onOpen={onOpenSettings}
               />
               <AgentChip
@@ -709,9 +758,10 @@ export function AgentView({
                               setRewindTo(messageId);
                               setOpened('rewind');
                             },
+                            rewindPoints: points.map((point) => point.id),
                           }
                         : {}),
-                      ...(controls.stopTask ? { onStopTask: controls.stopTask } : {}),
+                      ...(offered.stopTask ? { onStopTask: offered.stopTask } : {}),
                     }}
                   />
                   <Composer
@@ -722,7 +772,8 @@ export function AgentView({
                     agent={agent}
                     session={session}
                     commands={commands}
-                    controls={{ ...controls, send, refuses }}
+                    imageRules={imageRules}
+                    controls={{ ...offered, send, refuses }}
                     field={composer}
                     {...(ask?.reply ? { placeholder: ask.reply.label } : {})}
                     above={

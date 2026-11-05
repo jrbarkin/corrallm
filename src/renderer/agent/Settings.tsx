@@ -34,6 +34,8 @@ export function SettingsMenu({
   working,
   onChange,
   onRestart,
+  resumes = true,
+  onFresh,
   inline = false,
   onOpen,
   label,
@@ -51,6 +53,9 @@ export function SettingsMenu({
   working: boolean;
   onChange?: (settings: AgentSettings) => void;
   onRestart?: () => void;
+  /** Whether its conversation continues in a restart: if not, a new conversation is offered instead. */
+  resumes?: boolean;
+  onFresh?: () => void;
   /** The shared agent settings sheet embeds the choices, without another popover. */
   inline?: boolean;
   onOpen?: () => void;
@@ -281,11 +286,13 @@ export function SettingsMenu({
                 title={
                   working
                     ? 'Once it is done working'
-                    : `Starts ${words.name} again with these, resuming this conversation`
+                    : resumes
+                      ? `Starts ${words.name} again with these, resuming this conversation`
+                      : `Starts ${words.name} on a new conversation with these; it can’t continue this one`
                 }
-                onClick={onRestart}
+                onClick={resumes ? onRestart : onFresh}
               >
-                Restart with these
+                {resumes ? 'Restart with these' : 'Start new conversation'}
               </button>
             </p>
           )}

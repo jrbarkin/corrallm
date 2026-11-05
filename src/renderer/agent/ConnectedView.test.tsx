@@ -1504,7 +1504,7 @@ describe('a connected agent', () => {
     await events.paste(composer, { clipboardData: { files, getData: () => '' } });
     expect(
       await view.findByText(
-        'shot-5.png would take the images past 20 MB: a message’s images can be up to 20 MB together.',
+        'shot-5.png: Claude Code · Agent SDK takes at most 20 MB of images in a message.',
       ),
     ).toBeTruthy();
     await view.findByRole('img', { name: 'Image 4' });
@@ -1776,6 +1776,16 @@ describe('a connected agent', () => {
       connection: 'claude-code.sdk',
     });
     await send('Start the dev server, and survey the code meanwhile');
+    // Stop is offered once its generation is ready (B16 C1).
+    emit({
+      type: 'started',
+      role: 'append',
+      resume: true,
+      list: true,
+      model: 'opus',
+      mode: 'manual',
+      models: [],
+    });
     emit(
       { type: 'tool', id: 'toolu_dev', tool: 'Bash', summary: 'npm run dev', status: 'running' },
       {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { chatStart, rewindPoints, rewindPointsOf, threadTitle } from './session';
+import { chatStart, rewindPointsOf, threadTitle } from './session';
 import type { Conversation, Entry } from './session';
 
 describe('threadTitle', () => {
@@ -39,7 +39,10 @@ describe('the conversations a transcript holds', () => {
   });
 
   it('rewinds only within Claude Code’s conversation now', () => {
-    expect(rewindPoints(entries).map((point) => point.text)).toEqual(['Document it', 'Ship it']);
+    expect(rewindPointsOf(entries, 'claude-code').map((point) => point.text)).toEqual([
+      'Document it',
+      'Ship it',
+    ]);
   });
 });
 

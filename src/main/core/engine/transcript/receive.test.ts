@@ -4,7 +4,7 @@ import type { ConnectionId } from '../../../../shared/adapter';
 import type { SessionEvent } from '../../../../shared/session';
 import { fakeBackend } from '../test-backend';
 import { MADE_UP } from '../../../../shared/test-made-up';
-import { rewindPoints } from '../../../../shared/model/session';
+import { rewindPointsOf } from '../../../../shared/model/session';
 import type { Refusal } from '../../../../shared/model/session';
 import { SessionStore } from '../delivery/mailbox';
 import { engineCatalog } from '../../../../shared/model/catalog';
@@ -1082,14 +1082,16 @@ describe('a connected session that would not start', () => {
     store.send('a', 'claude-code', 'Edit the notes');
     await settle();
     // Not yet: main has not said it went to the CLI.
-    expect(rewindPoints(store.of('a').entries)).toEqual([]);
+    expect(rewindPointsOf(store.of('a').entries, 'claude-code')).toEqual([]);
     emit(
       'a',
       'claude-code.sdk',
       { type: 'user', id: sent(), text: 'Edit the notes' },
       end([sent()]),
     );
-    expect(rewindPoints(store.of('a').entries)).toEqual([{ id: sent(), text: 'Edit the notes' }]);
+    expect(rewindPointsOf(store.of('a').entries, 'claude-code')).toEqual([
+      { id: sent(), text: 'Edit the notes' },
+    ]);
   });
 });
 

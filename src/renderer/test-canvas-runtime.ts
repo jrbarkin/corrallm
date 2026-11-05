@@ -13,7 +13,12 @@ import type { ConnectionId } from '../shared/adapter';
 import { connectionIn } from '../shared/adapter';
 import { imageRefusal } from '../shared/images';
 import { routeOf, routeRefusal } from '../shared/routing';
-import { declaredFeatures, effectiveFeatures, usableFeatures } from '../shared/features';
+import {
+  declaredFeatures,
+  effectiveFeatures,
+  NO_FEATURES,
+  usableFeatures,
+} from '../shared/features';
 import type { SessionFeatures } from '../shared/features';
 import { OPS } from '../shared/api/registry';
 import { AgentId, MessageId } from '../shared/api/ids';
@@ -65,7 +70,9 @@ export function canvasRuntime(
    */
   const featuresOf = (connection: string, report: unknown): SessionFeatures | null => {
     const found = connectionIn(catalog(), connection);
-    const effective = found && effectiveFeatures(report, declaredFeatures(found.adapter));
+    // As the manager: a report that can't be read leaves the generation with NO_FEATURES.
+    const effective =
+      found && (effectiveFeatures(report, declaredFeatures(found.adapter)) ?? NO_FEATURES);
     return found && effective
       ? usableFeatures(effective, found.connection, {
           setEffort: true,
@@ -93,6 +100,20 @@ export function canvasRuntime(
     const named = target === undefined ? '' : `${target.adapter.name} · ${target.connection.label}`;
     return routeRefusal(route, agent, named);
   };
+  /** Why `images` can't go to `agent`, by its connection (the core's words), if so. */
+  const imageRefusalFor = (agent: string, images: readonly MessageImage[]): string | undefined => {
+    const found = connectionIn(catalog(), connectionOf(agent));
+    const label = nodes.find((n) => n.id === agent)?.data.label ?? '';
+    return imageRefusal(
+      images,
+      found?.connection.images ?? null,
+      `${label === '' ? agent : label}’s connection`,
+    );
+  };
+  const refuseWith = (code: 'refused' | 'invalid' | 'not-found', sentence: string) => ({
+    ok: false as const,
+    error: { code, sentence },
+  });
   const input = () => ({ canvas, nodes, run, sessions, catalog: lookups });
   function publish() {
     const projected = { ...run, agents: { ...run.agents } };
@@ -536,6 +557,10 @@ export function canvasRuntime(
       const refusal = routeRefusalFor(args.to, args.body);
       if (refusal !== undefined)
         return { ok: false as const, error: { code: 'refused', sentence: refusal } };
+      // As the core: images only of the kinds, number and size its connection takes.
+      const pasted = imageRefusalFor(args.to, args.images ?? []);
+      if (pasted !== undefined)
+        return { ok: false as const, error: { code: 'refused', sentence: pasted } };
       return send(args.to, args.body, args.images);
     });
     core.reply('session.viewCommand', async (raw) => {
@@ -551,6 +576,21 @@ export function canvasRuntime(
       core.reply(op, async (raw) => {
         const args = OPS[op].input.parse(raw);
         const agent = args.agent;
+        if ('effort' in args) {
+          // As the core: a connection that sets none from here refuses, and so does a model
+          // that doesn't offer the effort.
+          const name = nodes.find((n) => n.id === agent)?.data.label ?? agent;
+          if (connectionIn(catalog(), connectionOf(agent))?.connection.live.effort !== true)
+            return refuseWith('refused', `${name}’s effort is set in its terminal while it runs.`);
+          const session = of(agent);
+          const efforts = session.models?.find((one) => one.value === session.model)?.efforts;
+          if (
+            args.effort !== null &&
+            efforts !== undefined &&
+            !efforts.some((one) => one.value === args.effort)
+          )
+            return refuseWith('invalid', `${name}’s model offers no ${args.effort} effort.`);
+        }
         if ('mode' in args) await replies.setMode(agent, args.mode as SessionMode);
         if ('model' in args) await replies.setModel(agent, args.model);
         if ('effort' in args) await replies.setEffort(agent, args.effort);
@@ -575,6 +615,12 @@ export function canvasRuntime(
     });
     core.reply('session.stopTask', async (raw) => {
       const { agent, task } = OPS['session.stopTask'].input.parse(raw);
+      // As the core: only a connection that stops one, and a task the session runs now.
+      const name = nodes.find((n) => n.id === agent)?.data.label ?? agent;
+      if (connectionIn(catalog(), connectionOf(agent))?.connection.live.stopTask !== true)
+        return refuseWith('refused', `${name}’s background tasks are stopped in its terminal.`);
+      if (!(of(agent).tasks ?? []).some((one) => one.id === task))
+        return refuseWith('not-found', `${name}’s session runs no task ${task} now.`);
       await replies.stopTask(agent, task);
       return result();
     });
@@ -617,6 +663,31 @@ export function canvasRuntime(
     for (const op of ['session.restart', 'session.newConversation'] as const)
       core.reply(op, async (raw) => {
         const { agent } = OPS[op].input.parse(raw);
+        // As the core: a restart keeps the conversation, so a connection that can't continue it
+        // is refused (and pointed to a new one); either waits for an idle session with nothing queued.
+        const found = connectionIn(catalog(), connectionOf(agent));
+        const session = of(agent);
+        const label = nodes.find((n) => n.id === agent)?.data.label ?? '';
+        const name = label === '' ? agent : label;
+        const refuse = (sentence: string) => ({
+          ok: false as const,
+          error: { code: 'refused' as const, sentence },
+        });
+        if (
+          op === 'session.restart' &&
+          !(found?.adapter.resume === true && session.features?.resume !== false)
+        )
+          return refuse(
+            `${name}’s connection can’t continue its conversation, so it can’t restart on it: start a new conversation instead.`,
+          );
+        const what = op === 'session.restart' ? 'restart it' : 'start a new conversation';
+        if (session.status !== 'idle')
+          return refuse(`${name} has a turn going on: ${what} once it is idle.`);
+        const waiting = [...messages.values()].some(
+          (message) => message.to === `agent:${agent}` && message.state === 'pending',
+        );
+        if (waiting)
+          return refuse(`${name} has messages waiting to go: ${what} once they have gone.`);
         if (op === 'session.newConversation') {
           await replies.fresh(agent, chosenAdapter(agent));
           setSession(agent, { ...NEW_SESSION, entries: [], queued: [] });
@@ -654,6 +725,16 @@ export function canvasRuntime(
     });
     core.reply('reply', async (raw) => {
       const { to, answer } = OPS.reply.input.parse(raw);
+      // As the core: a problem hold's words go to the agent whose task failed, and their images
+      // only if its connection takes them.
+      if (to.startsWith('hold/') && 'text' in answer) {
+        const held = decodeURIComponent(to.split('/')[1] ?? '');
+        const goes = run.agents[held]?.problem?.agent ?? held;
+        const refusal = imageRefusalFor(goes, answer.images ?? []);
+        if (refusal !== undefined)
+          return { ok: false as const, error: { code: 'refused', sentence: refusal } };
+        return result({ outcome: 'answered' });
+      }
       for (const [agent, session] of Object.entries(sessions)) {
         const entry = session.entries.find((entry) => entry.kind === 'prompt' && entry.need === to);
         if (entry?.kind !== 'prompt' || entry.outcome !== undefined) continue;

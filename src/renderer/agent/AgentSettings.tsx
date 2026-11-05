@@ -6,6 +6,7 @@ import { useDraft, useLabel } from '../useDraft';
 import { adapterIn } from '../../shared/adapter';
 import type { AdapterId } from '../../shared/adapter';
 import { parseRole } from '../../shared/role';
+import type { RoleSupport, SessionFeatures } from '../../shared/features';
 import { MAX_ROLE_LENGTH } from '../../shared/session';
 import type { AgentSettings, SettingsOptions } from '../../shared/session';
 import { catalog, continuesIn } from '../catalog';
@@ -21,14 +22,29 @@ import { WorkspaceDetails } from '../workspaces/Workspace';
 
 type Options = (adapter: AdapterId) => Promise<SettingsOptions>;
 
+/**
+ * What an agent's connection does with its role: its ready generation's own report when there is
+ * one, else its adapter's maximum (undefined for an adapter the catalog lacks). The one rule the
+ * summary and the sheet share.
+ */
+function roleSupport(
+  adapter: AdapterId | undefined,
+  features: SessionFeatures | null,
+): RoleSupport | undefined {
+  return features?.role ?? adapterIn(catalog(), adapter)?.role;
+}
+
 /** The same saved settings summary in a session header and in its queue's heading. */
 export function AgentSettingsSummary({
   node,
   options,
+  features = null,
   onOpen,
 }: {
   node: AgentNode;
   options: Options;
+  /** What its ready generation can do, when there is one (else its adapter's maxima apply). */
+  features?: SessionFeatures | null;
   onOpen: () => void;
 }) {
   const name = node.data.label || 'Unnamed agent';
@@ -39,7 +55,9 @@ export function AgentSettingsSummary({
       ? 'Choose an agent'
       : `${adapterName(adapter)} · ${connectionInfo(connection).label}`;
   const role = node.data.role?.split(/\r?\n/)[0];
-  const suffix = ` · ${role ?? 'No role'}`;
+  // A role its adapter does nothing with is kept, but not shown as if it applied.
+  const unused = role !== undefined && roleSupport(adapter, features) === 'none';
+  const suffix = ` · ${unused ? 'Role not used' : (role ?? 'No role')}`;
   return (
     <div className="agent-settings-summary" title={node.data.role}>
       {connection === undefined || adapter === undefined ? (
@@ -108,14 +126,24 @@ export function AgentSettingsPanel({
   const settings =
     connection === undefined || adapter === undefined ? {} : (node.data.settings?.[adapter] ?? {});
   const running = session.running;
+  // What the connection can do: its running generation's own report, else its adapter's maxima
+  // (B16 C1/C4). A restart is refused for one that cannot resume, as the core decides it (a
+  // generation that has not reported does not refuse it).
+  const maxima = adapterIn(catalog(), adapter);
+  const effective = session.features ?? null;
+  const roleKind = roleSupport(adapter, effective);
+  const resumes = maxima?.resume === true && effective?.resume !== false;
+  // A role it does nothing with is kept in the canvas, never edited here or called applied.
+  const unusedRole = roleKind === 'none';
   // A resumed conversation keeps the role it started with: a changed role needs a new one.
-  const keepsRole = adapterIn(catalog(), adapter)?.role === 'append-new';
-  const changedRole = running !== undefined && running.role !== node.data.role;
+  const keepsRole = roleKind === 'append-new' && resumes;
+  const changedRole = !unusedRole && running !== undefined && running.role !== node.data.role;
+  const idle = session.status === 'idle';
   const pending =
     connection !== undefined &&
     adapter !== undefined &&
     running !== undefined &&
-    (running.role !== node.data.role ||
+    (changedRole ||
       running.model !== settings.model ||
       running.effort !== settings.effort ||
       running.mode !== settings.mode);
@@ -221,6 +249,7 @@ export function AgentSettingsPanel({
             aria-label="Role"
             aria-describedby="agent-role-help"
             {...role}
+            disabled={unusedRole}
             aria-invalid={problem !== undefined}
             maxLength={MAX_ROLE_LENGTH}
             rows={6}
@@ -228,8 +257,9 @@ export function AgentSettingsPanel({
           />
         </label>
         <p id="agent-role-help" className="agent-settings-help">
-          Standing instructions for this agent, saved with the workflow. Applied when its session
-          starts or restarts.
+          {unusedRole
+            ? `${adapterName(adapter)} doesn’t apply a role through this connection, so this text is kept in this canvas and not applied.`
+            : 'Standing instructions for this agent, saved with the workflow. Applied when its session starts or restarts.'}
         </p>
         {problem && (
           <p className="agent-settings-problem" role="alert">
@@ -244,20 +274,36 @@ export function AgentSettingsPanel({
             settings={settings}
             options={options}
             running={undefined}
-            working={session.status !== 'idle'}
+            working={!idle}
+            resumes={resumes}
             onChange={(next) => {
               onSettings(adapter, next);
             }}
             onRestart={onRestart}
+            onFresh={onFresh}
           />
         )}
         {pending && !(keepsRole && changedRole) && (
           <div className="agent-settings-pending" role="status">
-            <p>Changes saved. Restart this session to apply them, keeping its conversation.</p>
-            <button type="button" disabled={session.status !== 'idle'} onClick={onRestart}>
-              Restart with these
-            </button>
-            {session.status !== 'idle' && <p>Available when the current turn finishes.</p>}
+            {resumes ? (
+              <>
+                <p>Changes saved. Restart this session to apply them, keeping its conversation.</p>
+                <button type="button" disabled={!idle} onClick={onRestart}>
+                  Restart with these
+                </button>
+              </>
+            ) : (
+              <>
+                <p>
+                  Changes saved. {adapterName(adapter)} can’t continue its earlier conversation, so
+                  a new conversation applies them; the earlier one stays in its history.
+                </p>
+                <button type="button" disabled={!idle} onClick={onFresh}>
+                  Start new conversation
+                </button>
+              </>
+            )}
+            {!idle && <p>Available when the current turn finishes.</p>}
           </div>
         )}
         {keepsRole && (
@@ -267,10 +313,10 @@ export function AgentSettingsPanel({
               new conversation to apply a changed role; the earlier conversation stays in{' '}
               {adapterName(adapter)}’s history.
             </p>
-            <button type="button" disabled={session.status !== 'idle'} onClick={onFresh}>
+            <button type="button" disabled={!idle} onClick={onFresh}>
               {node.data.role ? 'Start new conversation with this role' : 'Start new conversation'}
             </button>
-            {session.status !== 'idle' && <p>Available when the current turn finishes.</p>}
+            {!idle && <p>Available when the current turn finishes.</p>}
           </div>
         )}
       </div>

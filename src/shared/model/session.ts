@@ -212,7 +212,7 @@ export interface Session {
 
 /**
  * The user's messages of `conversation` since its last /clear (what came before it is another
- * conversation, as in Claude Code), oldest first. A message not marked with its conversation is
+ * conversation), oldest first. A message not marked with its conversation is
  * taken to be of any.
  */
 function messagesOf(
@@ -237,17 +237,6 @@ export function chatStart(
   conversation: Conversation | undefined,
 ): Extract<Entry, { kind: 'user' }> | undefined {
   return messagesOf(entries, conversation)[0];
-}
-
-/**
- * The user's messages a rewind can go back to, oldest first: those Claude Code has (`reached`), of
- * its conversation now, since the last /clear (what came before it is another conversation, as in
- * Claude Code). Only an Agent SDK agent rewinds.
- */
-export function rewindPoints(entries: readonly Entry[]): { id: string; text: string }[] {
-  return messagesOf(entries, 'claude-code').flatMap((entry) =>
-    entry.reached === true ? [{ id: entry.id, text: entry.text }] : [],
-  );
 }
 
 /**

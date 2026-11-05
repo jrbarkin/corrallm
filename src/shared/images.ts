@@ -56,6 +56,12 @@ function kinds(types: readonly ImageType[]): string {
     : `${names.slice(0, -1).join(', ')} and ${names.at(-1) ?? ''}`;
 }
 
+/** An image as a draft knows it before its bytes are read: its kind and its decoded byte count. */
+export interface ImageFacts {
+  mediaType: string;
+  bytes: number;
+}
+
 /**
  * Why `images` can't go in one message to a connection that takes `declared`, in words naming the
  * limit that applies (`subject` says whose: an agent's connection, as a sentence names it); none
@@ -63,6 +69,19 @@ function kinds(types: readonly ImageType[]): string {
  */
 export function imageRefusal(
   images: readonly Pick<MessageImage, 'mediaType' | 'data'>[],
+  declared: ConnectionDescriptor['images'] | undefined,
+  subject: string,
+): string | undefined {
+  return imageFactsRefusal(
+    images.map(({ mediaType, data }) => ({ mediaType, bytes: imageBytes(data) })),
+    declared,
+    subject,
+  );
+}
+
+/** The same check for images known by their kind and decoded size (a file, before it is read). */
+export function imageFactsRefusal(
+  images: readonly ImageFacts[],
   declared: ConnectionDescriptor['images'] | undefined,
   subject: string,
 ): string | undefined {
@@ -75,7 +94,7 @@ export function imageRefusal(
   if (images.some(({ mediaType }) => !(limits.types as readonly string[]).includes(mediaType))) {
     return `${subject} takes only ${kinds(limits.types)} images.`;
   }
-  const sizes = images.map(({ data }) => imageBytes(data));
+  const sizes = images.map(({ bytes }) => bytes);
   if (sizes.some((size) => size > limits.maxBytes)) {
     return `${subject} takes images of at most ${bytesText(limits.maxBytes)} each.`;
   }
