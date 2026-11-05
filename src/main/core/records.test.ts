@@ -468,8 +468,15 @@ describe('the window shows each record its agent’s', () => {
         agents: await ok(core, 'agents', {}, caller),
         needs: await ok(core, 'needs', {}, caller),
         messages: await ok(core, 'messages', {}, caller),
-        ...(caller.kind === 'outside' ? { status: await ok(core, 'status', {}, caller) } : {}),
+        ...(caller.kind === 'outside'
+          ? {
+              status: await ok(core, 'status', {}, caller),
+              // Across its canvases: `wait` names none.
+              wait: await core.call('wait', { timeoutSeconds: 0 }, caller),
+            }
+          : {}),
       };
+      if ('wait' in boundaries) expect(boundaries.wait.ok, who).toBe(true);
       const text = JSON.stringify(boundaries);
       for (const id of sentinels) expect.soft(text, `${who}: ${id}`).not.toContain(id);
       expect.soft(text, who).not.toContain('"kind":"record"');
