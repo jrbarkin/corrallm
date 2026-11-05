@@ -773,3 +773,41 @@ describe('the window’s bound at the topic', () => {
     followed.copy.stop();
   });
 });
+
+describe('the window at the topic, as your copy was read before', () => {
+  it('reads a record that came after your view was read: the view read before is never given again', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+    const core = await start();
+    await ok(core, 'run.pause', { target: { agent: 'a' } });
+    // Your view of the Builder's session, read (and kept by the topic) before any record.
+    expect(records(await topicEntries(core, 'a'))).toEqual([]);
+    const followed = await follow(core, 'a');
+    await ok(
+      core,
+      'ask',
+      {
+        to: 'a',
+        questions: [
+          {
+            id: 'scope',
+            header: 'Scope',
+            text: 'How much of it?',
+            options: [{ label: 'All' }, { label: 'Some' }],
+            multiple: false,
+            other: false,
+          },
+        ],
+        deadlineSeconds: 60,
+      },
+      ORCHESTRATOR,
+    );
+    await vi.advanceTimersByTimeAsync(60_001);
+    // Once the topic has said the record, its state says it too.
+    await vi.waitFor(() => {
+      expect(records(followed.entries())).toHaveLength(1);
+    });
+    expect(records(await topicEntries(core, 'a'))).toEqual(records(followed.entries()));
+    expect(await topicEntries(core, 'a')).toEqual(await transcript(core, 'a'));
+    followed.copy.stop();
+  });
+});
