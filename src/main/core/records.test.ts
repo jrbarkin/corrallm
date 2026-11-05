@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TopicUpdate } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
 import type { NeedsItem } from '../../shared/model/needs';
-import { recordWords, UNRESOLVED_ANSWER } from '../../shared/model/records';
+import { MAX_RECORD_ENTRIES, recordWords, UNRESOLVED_ANSWER } from '../../shared/model/records';
+import { SettledDecision } from '../../shared/model/settled';
 import type { RecordEntryView } from '../../shared/model/records';
 import type { EntryView } from '../../shared/model/views';
 import type { SessionMode } from '../../shared/session';
@@ -630,5 +631,51 @@ describe('the window shows each record its agent’s', () => {
     expect(read.mock.calls.filter(([one]) => one === 'a')).toEqual([]);
     followed.copy.stop();
     reviewer.copy.stop();
+  });
+});
+
+describe('the window’s bound at the topic', () => {
+  it('keeps the newest MAX_RECORD_ENTRIES, sending a full window only its new record and its order', async () => {
+    const core = await start();
+    const { messages } = opened(core);
+    /** A native decision of the Builder's corrallm was cut off answering: never pruned. */
+    const cut = () => {
+      const id = crypto.randomUUID();
+      const need = `prompt/a/1/${id}`;
+      const record = messages.add({
+        from: 'corrallm',
+        to: 'you',
+        kind: 'settled',
+        origin: 'party',
+        body: 'You allowed Builder’s command once.',
+        state: 'unresolved',
+        by: 'you',
+        settled: SettledDecision.parse({
+          v: 1,
+          need,
+          prompt: { id, kind: 'approval', subject: 'command' },
+          outcome: { type: 'choice', value: 'yes', hint: 'allow_once' },
+        }),
+        about: { v: 1, agent: 'a', need },
+      });
+      return `record/${record.id}`;
+    };
+    const kept = Array.from({ length: MAX_RECORD_ENTRIES }, cut);
+    const followed = await follow(core, 'a');
+    expect(records(followed.entries()).map(({ id }) => id)).toEqual(kept);
+    const newest = cut();
+    await vi.waitFor(() => {
+      expect(records(followed.entries()).map(({ id }) => id)).toEqual([...kept.slice(1), newest]);
+    });
+    expect(followed.entries()).toEqual(await transcript(core, 'a'));
+    // Its change says the one new record, never the window again.
+    const [change] = followed.copy.sent.slice(-1) as {
+      entries: { upsert?: EntryView[]; order?: string[] };
+    }[];
+    expect(change?.entries.upsert?.map(({ id }) => id)).toEqual([newest]);
+    expect(change?.entries.order?.slice(0, MAX_RECORD_ENTRIES)).toEqual([...kept.slice(1), newest]);
+    // Every row stays, for you to inspect in your messages.
+    for (const id of kept) expect(messages.get(id.slice('record/'.length))).toBeDefined();
+    followed.copy.stop();
   });
 });

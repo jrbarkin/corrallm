@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { TranscriptEntry } from '../api/ops/session';
 import type { CanvasId } from '../canvas';
+import type { SessionEvent } from '../session';
 import { AskSettlement } from './asks';
 import type { Message } from './messages';
+import type { Entry } from './session';
 import {
   MAX_RECORD_ENTRIES,
   RecordAbout,
@@ -184,6 +186,11 @@ describe('a record’s association', () => {
       { v: 1, agent: '', need: HOLD.need },
     ])
       expect(RecordAbout.safeParse(wrong).success, JSON.stringify(wrong)).toBe(false);
+  });
+
+  it('is never a session’s event or a native entry: only the core projects one, from its record', () => {
+    expectTypeOf<Extract<SessionEvent['type'], 'settled' | 'record'>>().toBeNever();
+    expectTypeOf<Extract<Entry['kind'], 'settled' | 'record'>>().toBeNever();
   });
 
   it('keeps an entry no reader can mistake for a native one', () => {
