@@ -197,7 +197,7 @@ export function recordEntryFor(message: Message, about: RecordAbout): RecordEntr
     need: about.need,
     at: message.at,
     ...(message.by === undefined ? {} : { by: message.by }),
-    state: message.state === 'unresolved' ? 'unresolved' : 'settled',
+    state: record.type === 'prompt' && message.state === 'unresolved' ? 'unresolved' : 'settled',
     record,
   };
 }
@@ -216,22 +216,32 @@ export function recordsFor(
 }
 
 /**
- * A record entry in the core's words: what was decided and by whom, never a value; one corrallm was
- * cut off answering says so (UNRESOLVED_ANSWER), never that it was applied. `name`: a party's name
- * as the reader's view shows it ("you" for you).
+ * A record entry in the core's words: what was decided and by whom, never a value. Only a native
+ * prompt's decision can be one corrallm was cut off answering, and says so (UNRESOLVED_ANSWER),
+ * never that it was applied: a hold's was decided in the write that kept it, and an ask ended
+ * whatever became of its asker's turn of it, so either is always settled. `name`: a party's name as
+ * the reader's view shows it ("you" for you).
  */
 export function recordWords(entry: RecordEntryView, name: (party: PartyId) => string): string {
   const who = name(entry.by ?? 'you');
-  const ended = (verb: string) =>
-    entry.state === 'unresolved'
-      ? `${verb} by ${who}, but ${UNRESOLVED_ANSWER}`
-      : `${verb} by ${who}.`;
   const { record } = entry;
   switch (record.type) {
-    case 'hold':
-      return ended(record.words === true ? 'Answered in words' : 'Answered');
-    case 'prompt':
-      return ended(decided(record));
+    case 'hold': {
+      const verb =
+        record.choice === undefined
+          ? record.words === true
+            ? 'Changes asked for'
+            : 'Answered'
+          : (HELD[record.choice] ?? 'Answered');
+      const words = record.choice !== undefined && record.words === true ? ', with words' : '';
+      return `${verb} by ${who}${words}.`;
+    }
+    case 'prompt': {
+      const verb = decided(record);
+      return entry.state === 'unresolved'
+        ? `${verb} by ${who}, but ${UNRESOLVED_ANSWER}`
+        : `${verb} by ${who}.`;
+    }
     case 'ask': {
       const asker = `${name(record.asker as PartyId)}’s question`;
       switch (record.outcome.type) {
@@ -241,6 +251,8 @@ export function recordWords(entry: RecordEntryView, name: (party: PartyId) => st
           return `${asker} was dismissed, unanswered.`;
         case 'withdrawn':
           return `${asker} was withdrawn, unanswered.`;
+        // Never a record's today (an ask answered sends its asker the answer, not a record), but
+        // an ask's settlement may say so, and a row another version kept may: worded truly too.
         case 'answers':
         case 'text':
           return `${asker} was answered.`;
@@ -248,6 +260,26 @@ export function recordWords(entry: RecordEntryView, name: (party: PartyId) => st
     }
   }
 }
+
+/**
+ * What each of a run hold's fixed choices did (their keys: src/shared/model/run-words.ts), as a
+ * verb: the core's own words, never a choice's label (a Switch's names an agent and a connection).
+ * A key not here is answered in general words.
+ */
+const HELD: Readonly<Record<string, string>> = {
+  approve: 'Approved',
+  stop: 'Stopped here',
+  more: 'Given one more round',
+  goOn: 'Told to go on',
+  retry: 'Retried',
+  yes: 'Judged to hold',
+  no: 'Judged not to hold',
+  wait: 'Told to wait for the reset',
+  resolve: 'Marked resolved',
+  continue: 'Continued',
+  skip: 'Skipped',
+  switch: 'Switched',
+};
 
 /** What a native prompt's decision did, as a verb: never a label or a value. */
 function decided(record: Extract<RecordView, { type: 'prompt' }>): string {

@@ -151,13 +151,13 @@ describe('a settled record in the window', () => {
   it('is worded in the core’s words, never as applied where corrallm can’t tell', () => {
     const name = (party: string) =>
       party === 'you' ? 'you' : party === 'agent:p' ? 'Planner' : party;
-    expect(recordWords(recordEntryFor(record(), HOLD), name)).toBe('Answered by you.');
+    expect(recordWords(recordEntryFor(record(), HOLD), name)).toBe('Approved by you.');
     expect(
       recordWords(
         recordEntryFor(record(), { ...HOLD, hold: { choice: 'retry', words: true } }),
         name,
       ),
-    ).toBe('Answered in words by you.');
+    ).toBe('Retried by you, with words.');
     const cut = recordEntryFor(record({ state: 'unresolved', settled: NATIVE }), {
       v: 1,
       agent: 'a',
@@ -170,6 +170,78 @@ describe('a settled record in the window', () => {
       need: 'ask/x',
     });
     expect(recordWords(asked, name)).toBe('Planner’s question expired unanswered.');
+  });
+});
+
+describe('a run hold’s record', () => {
+  const name = (party: string) => (party === 'you' ? 'you' : party);
+  const words = (hold: RecordAbout['hold']) =>
+    recordWords(
+      recordEntryFor(record(), {
+        v: 1,
+        agent: HOLD.agent,
+        need: HOLD.need,
+        ...(hold === undefined ? {} : { hold }),
+      }),
+      name,
+    );
+
+  it('says what each of the run’s fixed choices did, by its key, in the core’s fixed words', () => {
+    expect(
+      Object.fromEntries(
+        [
+          'approve',
+          'stop',
+          'more',
+          'goOn',
+          'retry',
+          'yes',
+          'no',
+          'wait',
+          'resolve',
+          'continue',
+          'skip',
+          'switch',
+        ].map((choice) => [choice, words({ choice })]),
+      ),
+    ).toEqual({
+      approve: 'Approved by you.',
+      stop: 'Stopped here by you.',
+      more: 'Given one more round by you.',
+      goOn: 'Told to go on by you.',
+      retry: 'Retried by you.',
+      yes: 'Judged to hold by you.',
+      no: 'Judged not to hold by you.',
+      wait: 'Told to wait for the reset by you.',
+      resolve: 'Marked resolved by you.',
+      continue: 'Continued by you.',
+      skip: 'Skipped by you.',
+      switch: 'Switched by you.',
+    });
+  });
+
+  it('says words went with it, never which, and answers a key it doesn’t know in general words', () => {
+    expect(words({ words: true })).toBe('Changes asked for by you.');
+    expect(words({ choice: 'more', words: true })).toBe('Given one more round by you, with words.');
+    expect(words({ choice: 'somethingNew' })).toBe('Answered by you.');
+    expect(words(undefined)).toBe('Answered by you.');
+  });
+});
+
+describe('an ask’s record', () => {
+  it('is settled whatever became of its own row: the ask ended, as its words say', () => {
+    // Its asker's turn of it was cut off by a restart: the ask had ended all the same.
+    const entry = recordEntryFor(record({ to: 'agent:p', state: 'unresolved', settled: ASKED }), {
+      v: 1,
+      agent: 'b',
+      need: 'ask/x',
+    });
+    expect(entry.state).toBe('settled');
+    expect(recordWords(entry, (party) => (party === 'agent:p' ? 'Planner' : party))).toBe(
+      'Planner’s question expired unanswered.',
+    );
+    // So is a hold's: decided in the write that kept it.
+    expect(recordEntryFor(record({ state: 'unresolved' }), HOLD).state).toBe('settled');
   });
 });
 

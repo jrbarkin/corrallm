@@ -443,8 +443,8 @@ describe('the window shows each record its agent’s', () => {
     expect(JSON.stringify(read.slice(0, 2))).not.toMatch(/private-change-words|Your OK|answered “/);
     const [first, second] = records(read);
     if (first === undefined || second === undefined) throw new Error('No records');
-    expect(recordWords(first, NAMES)).toBe('Answered in words by you.');
-    expect(recordWords(second, NAMES)).toBe('Answered by you.');
+    expect(recordWords(first, NAMES)).toBe('Changes asked for by you.');
+    expect(recordWords(second, NAMES)).toBe('Approved by you.');
   });
 
   it('gives a token that reaches the Builder none of it, at the read, the topic, the counts or an error, while you see each', async () => {
