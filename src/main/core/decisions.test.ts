@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
+import { UNRESOLVED_ANSWER } from '../../shared/model/records';
 import { CanvasMemory } from '../memory';
 import {
   decided,
@@ -103,4 +104,46 @@ it('leaves a decision cut off as it was made unresolved, saying so, never made a
   // Still who decided, as far as anyone can tell: a second answer is told of it.
   expect(decidedOf(settled, NEED)?.id).toBe(cut.id);
   expect(recoverDecisions(settled)).toBe(false);
+});
+
+it('keeps the association the core gives a decision, which its agent’s window shows (B19 C3)', async () => {
+  const store = await messages();
+  const about = {
+    v: 1 as const,
+    agent: 'a',
+    need: 'hold/a/0a1b2c3d/ok',
+    hold: { choice: 'approve' },
+  };
+  const made = decided(store, {
+    need: about.need,
+    by: 'you',
+    words: 'You answered it: Approve.',
+    about,
+  });
+  // Kept beside the record, never on it, and never in the words.
+  expect(made).not.toHaveProperty('about');
+  expect(store.records('a')).toEqual([{ message: made, about }]);
+  await store.durable();
+  expect((await restart()).records('a')).toEqual([{ message: made, about }]);
+});
+
+it('shows a native decision in its agent’s window once a crash cut it off, in words that say so (B19 C3)', async () => {
+  const store = await messages();
+  const need = 'prompt/b/7/0f1e2d3c-4b5a-4968-8776-655443322110';
+  const about = { v: 1 as const, agent: 'b', need };
+  const settled = {
+    v: 1 as const,
+    need,
+    prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'approval' as const },
+    outcome: { type: 'choice' as const, value: 'yes', hint: 'allow_once' as const },
+  };
+  const cut = deciding(store, { need, by: 'you', words: 'You allowed it, once.', settled, about });
+  // While it is being made, its prompt's owner entry shows it, never its record.
+  expect(store.records('b')).toEqual([]);
+  await store.durable();
+  const again = await restart();
+  expect(again.records('b')).toEqual([]);
+  expect(recoverDecisions(again)).toBe(true);
+  expect(again.records('b').map(({ message }) => message.id)).toEqual([cut.id]);
+  expect(again.get(cut.id)?.body).toBe(`You allowed it, once: ${UNRESOLVED_ANSWER}`);
 });

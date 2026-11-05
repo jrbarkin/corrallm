@@ -452,6 +452,8 @@ export class PromptOwner implements PromptSink {
       by: ctx.by,
       words: `${who(open.nodes, ctx.by)} ${decisionWords(name, settled, link)}.`,
       settled,
+      // B19 C3: its agent's window shows it once a crash cut it off (its owner entry until then).
+      about: { v: 1, agent: occurrence.agent, need: to },
     });
     // Recorded as being made, on disk, before its session is told anything.
     try {
