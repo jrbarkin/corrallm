@@ -38,7 +38,7 @@ describe('registrations', () => {
     for (const { text } of [...byVariable, ...byFile]) expect(text).not.toMatch(/codex mcp add/);
   });
 
-  it('registers a CLI with a headers helper by the token’s file, and the others by its variable', () => {
+  it('registers a CLI with a headers helper by the token’s file, Codex as text for its folder’s file', () => {
     const file = '/home/me/My Tokens/corrallm';
     expect(registrations({ 'claude-code': true, codex: true }, URL, file)).toEqual({
       byFile: [
@@ -47,8 +47,14 @@ describe('registrations', () => {
           text: `claude mcp add-json corrallm-server '{"type":"http","url":"${URL}","headersHelper":"corrallm token header --from \\"${file}\\""}'`,
           renews: true,
         },
+        {
+          name: 'Codex',
+          text: `[mcp_servers.corrallm-server]\nurl = "${URL}"\nhttp_headers_helper = "corrallm token header --from \\"${file}\\""`,
+          in: '.codex/config.toml',
+          renews: true,
+        },
       ],
-      byVariable: [{ name: 'Codex', text: SNIPPET, in: '.codex/config.toml', renews: false }],
+      byVariable: [],
     });
   });
 

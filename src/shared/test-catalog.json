@@ -552,6 +552,8 @@
       ],
       "registerMcpIn": ".codex/config.toml",
       "registerMcp": "[mcp_servers.{server}]\nurl = \"{url}\"\nbearer_token_env_var = \"{var}\"",
+      "registerMcpHelper": "[mcp_servers.{server}]\nurl = \"{url}\"\nhttp_headers_helper = \"{helper}\"",
+      "registerMcpRenews": true,
       "consents": [
         {
           "key": "plan",

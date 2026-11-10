@@ -143,7 +143,7 @@ describe.skipIf(process.platform === 'win32')('corrallm token in a corrallm agen
 });
 
 describe.skipIf(process.platform === 'win32')('what corrallm token says to register', () => {
-  it('puts Codex in the orchestrator’s folder as text, never as a command, and says it must start again', async () => {
+  it('puts Codex in the orchestrator’s folder as text by the token’s file, never as a command, and says no client must start again', async () => {
     const into = path.join(dir, 'orchestrator.token');
     const code = await tokenCommand(command({ into }), io({}, { loginEnv: await login(dir) }));
     expect(code).toBe(0);
@@ -152,12 +152,11 @@ describe.skipIf(process.platform === 'win32')('what corrallm token says to regis
       'Codex: in your orchestrator’s folder, add this to .codex/config.toml (corrallm doesn’t write it):',
     );
     expect(said).toContain('[mcp_servers.corrallm-server]');
-    expect(said).toContain('bearer_token_env_var = "CORRALLM_OUTSIDE_TOKEN"');
-    // Claude Code's helper runs again after a renewal; Codex's registration is by variable.
+    expect(said).toContain(`http_headers_helper = "corrallm token header --from \\"${into}\\""`);
+    expect(said).not.toContain('bearer_token_env_var');
+    // Both helpers run again after a renewal (Codex's recorded in B30 E1): nothing must start again.
     expect(said).toContain('claude mcp add-json corrallm-server');
-    expect(said).toContain('and must start again after a renewal');
-    // Claude Code renews: nothing says it must start again.
-    expect(said).not.toContain('Claude Code must start again');
+    expect(said).not.toContain('must start again');
     expect(said).toContain('a renewal into the same file then needs no restart');
   });
 
