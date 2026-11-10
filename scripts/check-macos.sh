@@ -58,6 +58,7 @@ if [ -z "$configured_id" ]; then
   printf 'FAILED: forge.config.mts names no appBundleId\n' >&2
   exit 1
 fi
+source scripts/lib/notices-check.sh
 version=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' package.json)
 
 plist_value() { plutil -extract "$2" raw -o - "$1/Contents/Info.plist"; }
@@ -172,6 +173,7 @@ step 'Verify macOS bundle signature' codesign --verify --deep --strict "$app"
 step 'Check bundle id against forge.config.mts' check_identity "$app"
 step 'Check node-pty spawn-helper is executable' \
   test -x "$app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-$arch/spawn-helper"
+step 'Check the shipped notices' check_shipped_notices "$app/Contents/Resources"
 step 'Packaged app native self-test (main, core and shipped Node)' \
   env CORRALLM_NATIVE_SELFTEST=1 "$binary"
 

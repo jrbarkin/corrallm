@@ -51,7 +51,6 @@ if [ "${#positional[@]}" -ne 2 ]; then usage; fi
 version=${positional[0]}
 cd "$(dirname "$0")/.."
 repo=$PWD
-repository=jrbarkin/corrallm
 SIGNING_VARIABLES=(APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER
   APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID)
 
@@ -79,13 +78,21 @@ trap cleanup EXIT
 in_clone() { (cd "$clone" && "$@"); }
 
 decide() { node "$repo/scripts/release-decide.mjs" "$@"; }
+repository=$(decide repository)
 
 gather_facts() {
   # $1 = the audit's advisory count, or empty before the clone exists.
   local on_main=false tag_exists=false docker_runs=false
   if git merge-base --is-ancestor "$commit" origin/main; then on_main=true; fi
   if [ "$dry_run" -eq 0 ]; then
-    if gh release view "v$version" >/dev/null 2>&1 ||
+    # A draft has no tag, so the tag is looked up in the release list, which holds drafts too. A
+    # failed call is a refusal, never "no release".
+    if ! gh api "repos/$repository/releases?per_page=100" --paginate --jq '.[].tag_name' \
+      >"$scratch/releases.txt"; then
+      printf 'Could not list the releases of %s: not assuming there is none.\n' "$repository" >&2
+      return 1
+    fi
+    if grep -Fxq "v$version" "$scratch/releases.txt" ||
       git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
       tag_exists=true
     fi
@@ -112,6 +119,9 @@ run_preflight() {
     return 1
   fi
 }
+
+# The CI facts, the tag check, the clone and the draft all name this one repository.
+check_origin() { decide origin "$(git remote get-url origin)"; }
 
 resolve_commit() {
   git fetch --quiet origin
@@ -226,19 +236,20 @@ write_sums() {
 
 draft() {
   local flags=(--draft --target "$commit" --title "corrallm $version")
-  case "$version" in *-beta.*) flags+=(--prerelease) ;; esac
+  if [ "$(decide prerelease "$version")" = true ]; then flags+=(--prerelease); fi
   if [ -n "$notes" ]; then flags+=(--notes-file "$notes"); else flags+=(--generate-notes); fi
-  gh release create "v$version" "${flags[@]}" "$assets"/*
+  gh release create "v$version" --repo "$repository" "${flags[@]}" "$assets"/*
 }
 
 show_dry_run() {
   printf '\nDry run: nothing was uploaded and no `gh` command ran.\n'
   printf 'Would draft v%s at %s (%s) with:\n' "$version" "$commit" \
-    "$(case "$version" in *-beta.*) printf prerelease ;; *) printf release ;; esac)"
+    "$(if [ "$(decide prerelease "$version")" = true ]; then printf prerelease; else printf release; fi)"
   (cd "$assets" && ls -l)
   printf 'The assets are kept in %s\n' "$assets"
 }
 
+step 'Check that origin is the release repository' check_origin
 step 'Resolve the commit' resolve_commit
 gather_facts
 step 'Preflight (what can be known before building)' run_preflight
@@ -248,6 +259,7 @@ step 'Build the macOS app, dmg and zip' build_macos
 if [ "$dry_run" -eq 0 ]; then step 'Sign, notarize and staple the dmg' notarize_dmg; fi
 cp "$zip" "$dmg" "$assets/"
 build_linux
+step 'Name the files as GitHub will store them' decide rename "$assets"
 if [ "$dry_run" -eq 0 ]; then
   step 'Check the macOS artifacts (release mode)' \
     in_clone bash scripts/check-macos.sh --release --zip "$assets/${zip##*/}" \

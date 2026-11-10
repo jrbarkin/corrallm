@@ -38,7 +38,9 @@ describe('scripts/release.sh, read as text', () => {
     const gh = [...code.matchAll(/\bgh (\w+)(?: (\w+))?/g)].map((match) =>
       [match[1], match[2]].filter(Boolean).join(' '),
     );
-    expect(new Set(gh)).toEqual(new Set(['release view', 'api', 'release create']));
+    expect(new Set(gh)).toEqual(new Set(['api', 'release create']));
+    expect(code).toMatch(/gh release create "v\$version" --repo "\$repository"/);
+    expect(code).not.toMatch(/jrbarkin\/corrallm/);
     expect(code.match(/gh release create/g)).toHaveLength(1);
     expect(code).toMatch(/local flags=\(--draft /);
   });
@@ -83,7 +85,8 @@ const out = (text) => process.stdout.write(text + '\\n');
 const extra = env.LISTING_EXTRA ? env.LISTING_EXTRA.split(',') : [];
 const listing = [
   './Resources/NOTICE', './Resources/LICENSE', './Resources/THIRD-PARTY-NOTICES.txt',
-  './Resources/claude-agent-sdk-LICENSE.md', ...extra,
+  './Resources/claude-agent-sdk-LICENSE.md', './Resources/electron-LICENSE',
+  './Resources/LICENSES.chromium.html', ...extra,
 ].filter((entry) => !(env.LISTING_DROP && entry.endsWith(env.LISTING_DROP)));
 switch (tool) {
   case 'git':
@@ -91,7 +94,7 @@ switch (tool) {
     if (args[0] === 'rev-parse') out('${COMMIT}');
     else if (args[0] === 'show') out(JSON.stringify({ version: env.PACKAGE_VERSION ?? '0.1.0' }));
     else if (args[0] === 'merge-base') process.exit(env.OFF_MAIN ? 1 : 0);
-    else if (args[0] === 'remote') out('file:///nowhere');
+    else if (args[0] === 'remote') out(env.ORIGIN_URL ?? 'git@github.com:jrbarkin/corrallm.git');
     else if (args[0] === 'ls-remote') process.exit(2);
     else if (args[0] === 'clone') {
       const clone = args.at(-1);
@@ -103,8 +106,11 @@ switch (tool) {
     }
     break;
   case 'gh':
-    if (args[0] === 'release' && args[1] === 'view') process.exit(env.RELEASE_EXISTS ? 0 : 1);
-    if (args[0] === 'api') {
+    if (args[0] === 'api' && args[1].includes('/releases')) {
+      if (env.GH_RELEASES_FAIL) process.exit(1);
+      if (env.RELEASE_EXISTS) out('v' + (env.PACKAGE_VERSION ?? '0.1.0'));
+      out('v0.0.1');
+    } else if (args[0] === 'api') {
       const names = ['macos-latest', 'ubuntu-24.04', 'ubuntu-24.04-arm', 'e2e macos-latest (1/2)',
         'e2e macos-latest (2/2)', 'e2e ubuntu-24.04 (1/2)', 'e2e ubuntu-24.04 (2/2)'];
       for (const name of names)
@@ -235,6 +241,21 @@ describe('a dry run', { timeout: 60_000 }, () => {
     });
   });
 
+  it('publishes a beta’s Linux packages under names GitHub stores as they are', async () => {
+    const { folder, run } = await fixture({ PACKAGE_VERSION: '0.1.0-beta.1' });
+    await run(['--dry-run', '0.1.0-beta.1', 'HEAD'], blankSigning);
+    const probes = path.join(folder, 'node_modules/.cache/probes');
+    const [kept] = (await readdir(probes)).filter((name) => name.startsWith('release-dry-run-'));
+    const assets = path.join(probes, kept ?? '', 'assets');
+    const names = (await readdir(assets)).sort();
+    expect(names).toEqual(assetNames('0.1.0-beta.1'));
+    for (const name of names) expect(name).toMatch(/^[A-Za-z0-9._-]+$/);
+    // SHA256SUMS names the files as they are stored.
+    const sums = await readFile(path.join(assets, 'SHA256SUMS'), 'utf8');
+    expect(sums).toContain('  corrallm_0.1.0.beta.1_amd64.deb');
+    expect(sums).not.toContain('~');
+  });
+
   it('allows a commit off main', async () => {
     const { run } = await fixture();
     await run(['--dry-run', '0.1.0', 'HEAD'], { ...blankSigning, OFF_MAIN: '1' });
@@ -290,6 +311,37 @@ describe('a dry run', { timeout: 60_000 }, () => {
   });
 });
 
+describe('the origin', { timeout: 60_000 }, () => {
+  it.each(['https://github.com/someone/corrallm.git', 'git@github.com:someone/corrallm.git'])(
+    'refuses a fork (%s), before fetching, cloning or building',
+    async (url) => {
+      for (const dry of [[], ['--dry-run']]) {
+        const { run, calls } = await fixture();
+        await expect(
+          run([...dry, '0.1.0', 'HEAD'], { ...blankSigning, ...SIGNING, ORIGIN_URL: url }),
+        ).rejects.toMatchObject({ stderr: expect.stringContaining('origin is not') as string });
+        const made = await calls();
+        expect(
+          made.some(
+            ({ tool, args }) => tool === 'git' && ['fetch', 'clone'].includes(args[0] ?? ''),
+          ),
+        ).toBe(false);
+        expect(made.some(({ tool }) => tool === 'gh')).toBe(false);
+      }
+    },
+  );
+
+  it('refuses when the releases cannot be listed, rather than assuming there is none', async () => {
+    const { run, calls } = await fixture();
+    await expect(
+      run(['0.1.0', 'HEAD'], { ...blankSigning, ...SIGNING, GH_RELEASES_FAIL: '1' }),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining('Could not list') as string });
+    expect((await calls()).some(({ tool, args }) => tool === 'git' && args[0] === 'clone')).toBe(
+      false,
+    );
+  });
+});
+
 describe('a real run', { timeout: 60_000 }, () => {
   it('refuses, before building, without the signing and notarization variables', async () => {
     const { run, calls } = await fixture();
@@ -332,9 +384,15 @@ describe('a real run', { timeout: 60_000 }, () => {
     const gh = made.filter(({ tool }) => tool === 'gh');
     // The facts are read before the build and again after the audit; the draft comes last, once.
     const kinds = gh.map(({ args }) => (args[0] === 'api' ? 'api' : args.slice(0, 2).join(' ')));
-    expect(kinds.slice(0, -1).every((kind) => kind === 'api' || kind === 'release view')).toBe(
-      true,
-    );
+    expect(kinds.slice(0, -1).every((kind) => kind === 'api')).toBe(true);
+    // Every gh call names the one repository: by --repo, or in the path of an API call.
+    for (const { args } of gh) {
+      const named =
+        args[0] === 'api'
+          ? (args[1] ?? '').startsWith('repos/jrbarkin/corrallm/')
+          : args.join(' ').includes('--repo jrbarkin/corrallm');
+      expect(named, args.join(' ')).toBe(true);
+    }
     expect(kinds.at(-1)).toBe('release create');
     expect(kinds.filter((kind) => kind === 'release create')).toHaveLength(1);
     const create = gh.at(-1)?.args ?? [];

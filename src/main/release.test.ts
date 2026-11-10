@@ -7,9 +7,11 @@ import {
   credentialLike,
   debVersion,
   isPrerelease,
+  isReleaseOrigin,
   isReleaseVersion,
   missingNotices,
   preflight,
+  publishedName,
   sha256sums,
   zipNameProblems,
   type PreflightFacts,
@@ -61,6 +63,28 @@ describe('versions', () => {
   it('calls only a beta a prerelease', () => {
     expect(isPrerelease('0.1.0-beta.1')).toBe(true);
     expect(isPrerelease('0.1.0')).toBe(false);
+  });
+});
+
+describe('isReleaseOrigin', () => {
+  it.each([
+    'https://github.com/jrbarkin/corrallm',
+    'https://github.com/jrbarkin/corrallm.git',
+    'git@github.com:jrbarkin/corrallm.git',
+    'ssh://git@github.com/jrbarkin/corrallm.git',
+  ])('accepts %s', (url) => {
+    expect(isReleaseOrigin(url)).toBe(true);
+  });
+
+  it.each([
+    'https://github.com/someone/corrallm.git',
+    'git@github.com:someone/corrallm.git',
+    'https://github.com/jrbarkin/corrallm-fork',
+    'https://evil.example/github.com/jrbarkin/corrallm',
+    'file:///nowhere',
+    '',
+  ])('refuses %s', (url) => {
+    expect(isReleaseOrigin(url)).toBe(false);
   });
 });
 
@@ -214,10 +238,20 @@ describe('assetNames', () => {
     ]);
   });
 
-  it('names a beta’s packages with the tilde that sorts them first', () => {
+  it.each(['0.1.0', '0.1.0-beta.1'])(
+    'names only characters GitHub stores as they are (%s)',
+    (v) => {
+      for (const name of assetNames(v)) expect(name).toMatch(/^[A-Za-z0-9._-]+$/);
+    },
+  );
+
+  it('publishes a beta’s packages with a dot where the installers put a tilde', () => {
     const names = assetNames('0.1.0-beta.1');
-    expect(names).toContain('corrallm_0.1.0~beta.1_amd64.deb');
-    expect(names).toContain('corrallm-0.1.0~beta.1-1.arm64.rpm');
+    expect(names).toContain('corrallm_0.1.0.beta.1_amd64.deb');
+    expect(names).toContain('corrallm-0.1.0.beta.1-1.arm64.rpm');
+    expect(publishedName('corrallm_0.1.0~beta.1_arm64.deb')).toBe(
+      'corrallm_0.1.0.beta.1_arm64.deb',
+    );
     expect(names).toContain('corrallm-darwin-arm64-0.1.0-beta.1.zip');
     expect(names).toContain('corrallm-0.1.0-beta.1-arm64.dmg');
   });
@@ -308,9 +342,11 @@ describe('missingNotices', () => {
     'corrallm.app/Contents/Resources/LICENSE',
     'corrallm.app/Contents/Resources/THIRD-PARTY-NOTICES.txt',
     'corrallm.app/Contents/Resources/claude-agent-sdk-LICENSE.md',
+    'corrallm.app/Contents/Resources/electron-LICENSE',
+    'corrallm.app/Contents/Resources/LICENSES.chromium.html',
   ];
 
-  it('finds nothing missing when the four are in the resources', () => {
+  it('finds nothing missing when all six are in the resources', () => {
     expect(missingNotices(listing(...all))).toEqual([]);
   });
 
@@ -318,7 +354,13 @@ describe('missingNotices', () => {
     expect(missingNotices(listing(all[0] ?? '', all[1] ?? ''))).toEqual([
       'THIRD-PARTY-NOTICES.txt',
       'claude-agent-sdk-LICENSE.md',
+      'electron-LICENSE',
+      'LICENSES.chromium.html',
     ]);
+  });
+
+  it('requires Electron’s license files beside corrallm’s', () => {
+    expect(missingNotices(all.slice(0, 4))).toEqual(['electron-LICENSE', 'LICENSES.chromium.html']);
   });
 
   it('does not take Electron’s LICENSE beside the app for corrallm’s', () => {

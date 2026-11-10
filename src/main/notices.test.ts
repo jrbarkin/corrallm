@@ -73,12 +73,18 @@ describe('packageOfModule', () => {
       '/p/node_modules/.pnpm/x/node_modules/@xterm/xterm',
     ],
     ['/p/node_modules/zod/v4/core.js', 'zod', '/p/node_modules/zod'],
+    [
+      '/r/node_modules/.cache/probes/release-dry-run-x/clone/node_modules/.pnpm/react@19/node_modules/react/index.js',
+      'react',
+      '/r/node_modules/.cache/probes/release-dry-run-x/clone/node_modules/.pnpm/react@19/node_modules/react',
+    ],
   ])('names the package of %s', (id, name, dir) => {
     expect(packageOfModule(id)).toEqual({ name, dir });
   });
 
   it.each([
     '/p/src/renderer/App.tsx',
+    '/r/node_modules/.cache/probes/release-dry-run-x/clone/src/main/index.ts',
     '\0commonjsHelpers.js',
     '\0vite/preload-helper.js',
     'virtual:x',
@@ -200,6 +206,8 @@ describe('joinNotices', () => {
   it.each([
     ['GPL-3.0-only', 'GPL-3.0-only'],
     ['an AND with one disallowed side', '(MIT AND GPL-3.0-only)'],
+    ['a grouped OR joined by AND to a disallowed one', '(MIT OR Apache-2.0) AND GPL-3.0-only'],
+    ['an unbalanced group', '(MIT OR ISC'],
     ['no license field', undefined],
     ['an unknown license', 'SEE LICENSE IN LICENSE'],
   ])('refuses %s, naming the package and its license', async (_name, license) => {
@@ -211,15 +219,20 @@ describe('joinNotices', () => {
     await expect(joinNotices(notices)).rejects.toThrow(/odd 1\.2\.3.*license/);
   });
 
-  it.each(['(MIT OR GPL-3.0-only)', '(MIT AND ISC)', 'BSD-3-Clause', 'BlueOak-1.0.0', '0BSD'])(
-    'accepts %s',
-    async (license) => {
-      const { folder, notices } = await project();
-      const fine = await install(folder, 'fine', { license }, { LICENSE: 'text' });
-      await bundles(notices, [fine]);
-      await expect(joinNotices(notices)).resolves.toContain('fine 1.2.3');
-    },
-  );
+  it.each([
+    '(MIT OR GPL-3.0-only)',
+    '(MIT AND ISC)',
+    '(MIT OR Apache-2.0) AND ISC',
+    'MIT AND GPL-3.0-only OR ISC',
+    'BSD-3-Clause',
+    'BlueOak-1.0.0',
+    '0BSD',
+  ])('accepts %s', async (license) => {
+    const { folder, notices } = await project();
+    const fine = await install(folder, 'fine', { license }, { LICENSE: 'text' });
+    await bundles(notices, [fine]);
+    await expect(joinNotices(notices)).resolves.toContain('fine 1.2.3');
+  });
 
   it('reports every problem together, not only the first', async () => {
     const { folder, notices } = await project();

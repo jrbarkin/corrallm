@@ -3,6 +3,11 @@
 source /checks/linux-steps.sh
 distro=${1:?distribution required}
 arch=${2:?architecture required}
+semver=${3:?version required}
+deb_version=${4:?deb version required}
+rpm_version=${5:?rpm version required}
+source /checks/linux-versions.sh
+source /checks/notices-check.sh
 
 linked_libraries() {
   local file listing
@@ -41,27 +46,11 @@ case "$distro" in
   *) die "Unknown distribution: $distro" ;;
 esac
 
+step 'Check the shipped notices' check_shipped_notices /usr/lib/corrallm/resources
 step 'Check the hicolor icon is installed' test -s /usr/share/icons/hicolor/512x512/apps/corrallm.png
-# A prerelease's package must sort before its release's, or an update would skip the release.
-check_prerelease_order() {
-  local version base
-  case "$distro" in
-    fedora:44)
-      version=$(rpm -q --qf '%{VERSION}' corrallm)
-      base=${version%%~*}
-      [ "$version" = "$base" ] ||
-        [ "$(rpm --eval "%{lua: print(rpm.vercmp('$version', '$base'))}")" = -1 ] ||
-        die "rpm version $version does not sort before $base"
-      ;;
-    *)
-      version=$(dpkg-query -W -f='${Version}' corrallm)
-      base=${version%%~*}
-      [ "$version" = "$base" ] || dpkg --compare-versions "$version" lt "$base" ||
-        die "deb version $version does not sort before $base"
-      ;;
-  esac
-}
-step 'Check a prerelease sorts before its release' check_prerelease_order
+step "Check the installed version is the release's ($semver)" \
+  check_installed_version "$distro" "$deb_version" "$rpm_version"
+step 'Check a prerelease sorts before its release' check_prerelease_tools "$distro"
 step 'Check launcher symlink' test "$(readlink -f /usr/bin/corrallm)" = /usr/lib/corrallm/resources/bin/corrallm
 step 'Validate desktop entry' desktop-file-validate /usr/share/applications/corrallm.desktop
 step 'Check desktop opens GUI' grep -Fx 'Exec=/usr/lib/corrallm/corrallm %U' /usr/share/applications/corrallm.desktop

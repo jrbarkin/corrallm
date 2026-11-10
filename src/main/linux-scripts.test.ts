@@ -238,6 +238,20 @@ it.each(['arm64', 'x64'])(
   },
 );
 
+it('passes the package.json version and its deb and rpm conversions to every installed check', async () => {
+  const { env, commands } = await fixture();
+  await exec('bash', ['scripts/check-linux-packages.sh', 'arm64'], { cwd: root, env });
+  const version = (
+    JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as {
+      version: string;
+    }
+  ).version;
+  const converted = version.replace('-', '~');
+  const installs = (await commands()).filter((args) => args.includes('/checks/linux-installed.sh'));
+  expect(installs).toHaveLength(3);
+  for (const args of installs) expect(args.slice(-3)).toEqual([version, converted, converted]);
+});
+
 it('releases the artifact volume when an installed package check fails', async () => {
   const { env, commands } = await fixture();
   await expect(

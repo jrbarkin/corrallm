@@ -12,6 +12,14 @@ export function isReleaseVersion(version: string): boolean {
   return VERSION.test(version);
 }
 
+/** Whether a git remote URL (https or ssh form) names the release repository on GitHub. */
+export function isReleaseOrigin(url: string): boolean {
+  const slug = REPOSITORY.replace('/', '\\/');
+  return new RegExp(
+    `^(https://github\\.com/|ssh://git@github\\.com/|git@github\\.com:)${slug}(\\.git)?/?$`,
+  ).test(url.trim());
+}
+
 export function isPrerelease(version: string): boolean {
   return version.includes('-beta.');
 }
@@ -139,6 +147,15 @@ export function debVersion(version: string): string {
   return version.replace(/(\d)[_.+-]?((RC|rc|pre|dev|beta|alpha)[_.+-]?\d*)$/, '$1~$2');
 }
 
+/**
+ * The name a Linux installer is published under. GitHub rewrites a `~` in an asset's name to `.` on
+ * upload, so SHA256SUMS and the README must name the file as it will be stored. The package's own
+ * version inside the file keeps its `~`, so it still sorts before its release.
+ */
+export function publishedName(name: string): string {
+  return name.replaceAll('~', '.');
+}
+
 /** Exactly the files a release has, sorted: macOS for Apple silicon, Linux for both, the sums. */
 export function assetNames(version: string): string[] {
   const deb = debVersion(version);
@@ -151,7 +168,9 @@ export function assetNames(version: string): string[] {
     `corrallm-${rpm}-1.x86_64.rpm`,
     `corrallm-${rpm}-1.arm64.rpm`,
     'SHA256SUMS',
-  ].sort();
+  ]
+    .map(publishedName)
+    .sort();
 }
 
 /**
@@ -197,6 +216,8 @@ export const REQUIRED_NOTICES: readonly string[] = [
   'LICENSE',
   'THIRD-PARTY-NOTICES.txt',
   'claude-agent-sdk-LICENSE.md',
+  'electron-LICENSE',
+  'LICENSES.chromium.html',
 ];
 
 /** The required notices an asset's listing lacks (Electron's own LICENSE beside the app is not ours). */

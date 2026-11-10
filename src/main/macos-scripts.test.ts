@@ -58,6 +58,27 @@ if (kind === 'xcrun' && has('NOT_STAPLED')) process.exit(65);
 if (kind === 'ditto') mkdirSync(path.join(args.at(-1), 'corrallm.app/Contents'), { recursive: true });
 `;
 
+const NOTICED = ['react', '@xterm/xterm', '@xyflow/react', 'zod', '@modelcontextprotocol/sdk'];
+
+/** The resources a built app holds of its notices; the options damage them. */
+async function writeNotices(
+  resources: string,
+  { drop, extra, skip }: { drop?: string; extra?: string; skip?: string } = {},
+) {
+  const rule = '='.repeat(78);
+  const entries = [...NOTICED.filter((name) => name !== drop), ...(extra ? [extra] : [])].map(
+    (name) => `${rule}\n${name} 1.2.3\nLicense: MIT\n\nthe license text\n`,
+  );
+  await mkdir(resources, { recursive: true });
+  await writeFile(
+    path.join(resources, 'THIRD-PARTY-NOTICES.txt'),
+    `corrallm bundles the packages below.\n\n${entries.join('\n')}${rule}\n`,
+  );
+  for (const name of ['electron-LICENSE', 'LICENSES.chromium.html'])
+    if (name === skip) await rm(path.join(resources, name), { force: true });
+    else await writeFile(path.join(resources, name), 'text');
+}
+
 async function fixture(arch = 'arm64') {
   const cache = path.join(root, 'node_modules/.cache/probes');
   await mkdir(cache, { recursive: true });
@@ -67,6 +88,10 @@ async function fixture(arch = 'arm64') {
   await mkdir(path.join(folder, 'scripts/lib'), { recursive: true });
   await mkdir(path.join(folder, 'build'));
   await copyFile(path.join(root, 'scripts/check-macos.sh'), script);
+  await copyFile(
+    path.join(root, 'scripts/lib/notices-check.sh'),
+    path.join(folder, 'scripts/lib/notices-check.sh'),
+  );
   await copyFile(
     path.join(root, 'scripts/lib/entitlements-equal.mjs'),
     path.join(folder, 'scripts/lib/entitlements-equal.mjs'),
@@ -100,6 +125,7 @@ async function fixture(arch = 'arm64') {
     await writeFile(file, program, { mode: 0o755 });
   }
   await mkdir(path.join(app, 'Contents/Frameworks/corrallm Helper.app'), { recursive: true });
+  await writeNotices(path.join(app, 'Contents/Resources'));
   const env = {
     ...process.env,
     PATH: `${folder}:${process.env.PATH ?? ''}`,
@@ -146,6 +172,32 @@ it.each(['arm64', 'x64'])(
     expect(command[1]?.selfTest).toBeUndefined();
   },
 );
+
+describe('the shipped notices', () => {
+  it.each([
+    ['a missing package', { drop: 'zod' }, /no entry with a license for zod/],
+    ['a build tool', { extra: 'vite' }, /vite/],
+    ['a Forge package', { extra: '@electron-forge/shared-types' }, /@electron-forge/],
+    ['no Electron license', { skip: 'electron-LICENSE' }, /No electron-LICENSE/],
+    ['no Chromium licenses', { skip: 'LICENSES.chromium.html' }, /No LICENSES\.chromium\.html/],
+  ])('refuses %s, before running the app', async (_name, damage, message) => {
+    const { script, app, env, commands } = await fixture();
+    await writeNotices(path.join(app, 'Contents/Resources'), damage);
+    await expect(exec('bash', [script, 'arm64'], { env })).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringMatching(message) as string,
+    });
+    expect((await commands()).some(({ kind }) => kind === 'app')).toBe(false);
+  });
+
+  it('refuses a notices file that is empty', async () => {
+    const { script, app, env } = await fixture();
+    await writeFile(path.join(app, 'Contents/Resources/THIRD-PARTY-NOTICES.txt'), '');
+    await expect(exec('bash', [script, 'arm64'], { env })).rejects.toMatchObject({
+      stderr: expect.stringContaining('THIRD-PARTY-NOTICES.txt') as string,
+    });
+  });
+});
 
 it('fails on a damaged bundle before running any executable from it', async () => {
   const { script, env, commands } = await fixture();

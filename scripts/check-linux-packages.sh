@@ -24,6 +24,9 @@ if [ -n "$out" ]; then
   out=$(cd -- "$out" && pwd -P)
 fi
 linux_build_image
+# The version every installed package must carry, as the installers convert it (build/release.ts).
+semver=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+read -r deb_version rpm_version < <(node scripts/release-decide.mjs versions "$semver")
 artifacts=$linux_image-packages-$$
 cleanup() {
   local code=$?
@@ -41,7 +44,7 @@ step "Build Linux $linux_arch installers" linux_workspace packages "$artifacts"
 for distro in debian:bookworm ubuntu:24.04 fedora:44; do
   step "Installed package checks ($distro, $linux_arch)" docker run --rm "${linux_docker[@]}" \
     --env CORRALLM_NO_UPDATE_CHECK=1 --volume "$artifacts:/checks:ro" \
-    "$distro" bash /checks/linux-installed.sh "$distro" "$linux_arch"
+    "$distro" bash /checks/linux-installed.sh "$distro" "$linux_arch" "$semver" "$deb_version" "$rpm_version"
 done
 if [ -n "$out" ]; then
   step "Keep the checked installers in $out" docker run --rm --platform "$linux_platform" \

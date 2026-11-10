@@ -51,7 +51,7 @@ export function packageOfModule(id: string): { name: string; dir: string } | und
   if (at < 0) return undefined;
   const parts = file.slice(at + marker.length).split(/[\\/]/);
   const name = parts[0]?.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
-  if (!name || name === '.pnpm' || name === '.bin') return undefined;
+  if (!name || name.startsWith('.')) return undefined;
   const dir = file.slice(0, at + marker.length) + name.split('/').join(path.sep);
   return { name, dir };
 }
@@ -115,18 +115,54 @@ function licenseOf(manifest: Manifest): string | undefined {
   return types.length > 0 ? types.join(' OR ') : undefined;
 }
 
-/** Whether an SPDX expression is covered by the allowlist: OR needs one side, AND needs both. */
+/**
+ * Whether an SPDX expression is covered by the allowlist: OR needs one side, AND needs both, AND
+ * binds tighter than OR, and parentheses group. An expression that does not parse is refused.
+ */
 function allowed(expression: string): boolean {
-  const tokens = expression.replace(/[()]/g, ' ').trim().split(/\s+/);
-  if (tokens.length === 0 || tokens[0] === '') return false;
-  const alternatives: string[][] = [[]];
-  for (const token of tokens) {
-    if (token.toUpperCase() === 'OR') alternatives.push([]);
-    else if (token.toUpperCase() !== 'AND') alternatives.at(-1)?.push(token);
+  const tokens = expression.match(/\(|\)|[^\s()]+/g) ?? [];
+  let at = 0;
+  const peek = (): string | undefined => tokens[at];
+  const isWord = (token: string | undefined, word: string): boolean =>
+    token?.toUpperCase() === word;
+  function or(): boolean {
+    let result = and();
+    while (isWord(peek(), 'OR')) {
+      at += 1;
+      const right = and();
+      result = result || right;
+    }
+    return result;
   }
-  return alternatives.some(
-    (all) => all.length > 0 && all.every((license) => ALLOWED_LICENSES.has(license)),
-  );
+  function and(): boolean {
+    let result = primary();
+    while (isWord(peek(), 'AND')) {
+      at += 1;
+      const right = primary();
+      result = result && right;
+    }
+    return result;
+  }
+  function primary(): boolean {
+    const token = peek();
+    at += 1;
+    if (token === '(') {
+      const inner = or();
+      if (peek() !== ')') throw new SyntaxError('unbalanced');
+      at += 1;
+      return inner;
+    }
+    if (token === undefined || token === ')' || isWord(token, 'AND') || isWord(token, 'OR')) {
+      throw new SyntaxError('unexpected token');
+    }
+    return ALLOWED_LICENSES.has(token);
+  }
+  try {
+    const result = or();
+    return at === tokens.length && result;
+  } catch {
+    return false;
+  }
 }
 
 async function textsOf(dir: string, kind: RegExp): Promise<string[]> {

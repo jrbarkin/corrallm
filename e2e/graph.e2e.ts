@@ -1413,19 +1413,11 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await addAgentAt('Agent 2', 650, 380);
   const logo = (label: string) => card(label).getByRole('img');
 
-  // Every card shows the catalog's logo as an isolated image; its panel changes the adapter.
+  // Every card shows its adapter's first letter (no shipped adapter has a mark); its panel changes the adapter.
   await expect(card('Agent 1')).toHaveAttribute('data-agent', 'claude-code');
-  await expect(logo('Agent 1')).toHaveAttribute('alt', 'Claude Code');
-  await expect(logo('Agent 1')).toHaveAttribute('src', /^data:image\/svg\+xml,/);
-  const claude = await logo('Agent 1').getAttribute('src');
-  await expect
-    .poll(() =>
-      logo('Agent 1').evaluate(
-        (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
-      ),
-    )
-    .toBe(true);
-  await expect(card('Agent 1').locator('svg')).toHaveCount(0);
+  await expect(logo('Agent 1')).toHaveAttribute('aria-label', 'Claude Code');
+  await expect(logo('Agent 1')).toHaveText('C');
+  await expect(card('Agent 1').locator('img, svg')).toHaveCount(0);
   await a.dblclick();
   const panel = page.getByRole('dialog', { name: 'Agent 1' });
   await panel
@@ -1440,17 +1432,9 @@ test('agents show their type and ask questions, which a sidebar lists until answ
   await page.keyboard.type('codex app server');
   await panel.getByRole('option', { name: /^Codex · App Server/ }).click();
   await expect(card('Agent 1')).toHaveAttribute('data-agent', 'codex');
-  await expect(logo('Agent 1')).toHaveAttribute('alt', 'Codex');
-  await expect(logo('Agent 1')).not.toHaveAttribute('src', claude ?? '');
-  // Each catalog logo is a data: image the production CSP lets decode.
-  await expect(logo('Agent 1')).toHaveAttribute('src', /^data:image\/svg\+xml,/);
-  await expect
-    .poll(() =>
-      logo('Agent 1').evaluate(
-        (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
-      ),
-    )
-    .toBe(true);
+  await expect(logo('Agent 1')).toHaveAttribute('aria-label', 'Codex');
+  await expect(logo('Agent 1')).toHaveText('C');
+  await expect(card('Agent 1').locator('img, svg')).toHaveCount(0);
 
   // A connector's native question glows and appears on the canvas until answered.
   const composer = panel.getByRole('textbox', { name: 'Message Agent 1', exact: true });
@@ -1629,7 +1613,7 @@ test('double-click works inside the rectangle a marquee leaves around the select
   await expect(node('Agent 3')).toBeVisible();
 });
 
-test('the dock toggles All queues and flies to the taskbar to switch agents, with catalog logos as images', async () => {
+test('the dock toggles All queues and flies to the taskbar to switch agents, with first-letter marks', async () => {
   await addAgentAt('Agent 1', 300, 200);
   await addAgentAt('Agent 2', 750, 400);
   const dock = page.getByRole('navigation', { name: 'Canvas agents' });
@@ -1641,14 +1625,9 @@ test('the dock toggles All queues and flies to the taskbar to switch agents, wit
   ).toHaveCount(0);
   const first = dock.getByRole('button', { name: /^Agent 1,/ });
   const image = first.getByRole('img', { name: 'Claude Code' });
-  await expect(image).toHaveAttribute('src', /^data:image\/svg\+xml,/);
-  expect(await image.evaluate((element) => element.tagName)).toBe('IMG');
-  await expect
-    .poll(() =>
-      image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0),
-    )
-    .toBe(true);
-  await expect(first.locator('svg')).toHaveCount(0);
+  await expect(image).toHaveText('C');
+  expect(await image.evaluate((element) => element.tagName)).toBe('SPAN');
+  await expect(first.locator('img, svg')).toHaveCount(0);
   await queues.click();
   await expect(page.getByRole('dialog', { name: 'All queues' })).toBeVisible();
   await expect(queues).toHaveAttribute('aria-pressed', 'true');

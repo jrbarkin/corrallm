@@ -16,7 +16,8 @@ collect_installers() {
   # The same bytes under the names Forge gave them, for a release (linux-keep.sh).
   mkdir -p "$artifacts/release"
   cp "${debs[0]}" "${rpms[0]}" "$artifacts/release/"
-  cp "$(dirname "$0")"/linux-{steps,smoke,installed,keep}.sh "$artifacts/"
+  cp "$(dirname "$0")"/linux-{steps,smoke,installed,versions,keep}.sh \
+    "$(dirname "$0")/notices-check.sh" "$artifacts/"
   chmod -R a+rX "$artifacts"
 }
 
