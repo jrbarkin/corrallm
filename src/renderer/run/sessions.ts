@@ -12,8 +12,11 @@ import type { MirrorStates } from '../api/topic-wire';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { CanvasId } from '../../shared/canvas';
 import type { GuiApi } from '../../shared/gui-link';
+import { isQueueHandoff } from '../../shared/model/messages';
 import { NEW_SESSION } from '../../shared/model/session';
 import type { Entry, Session } from '../../shared/model/session';
+import type { NodeLike } from '../../shared/model/canvas';
+import { agentName } from '../../shared/model/queries';
 import type { EntryView, MessageView, SessionSummary, SessionView } from '../../shared/model/views';
 import { submissionOf } from '../queues/messages';
 import { orderedEntries } from '../api/runtime';
@@ -64,6 +67,8 @@ function subscribePreviews(listener: () => void): () => void {
  */
 export interface Presentation {
   images?: ReadonlyMap<string, readonly MessageImage[]>;
+  /** An agent's name, for a hand-off's sender (B19 X2). */
+  agentName?: (agent: string) => string;
 }
 
 type Mutable<T> = T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> } : T;
@@ -152,6 +157,10 @@ export function sessionDisplay(
     queued: queued.map((message) => ({
       id: message.id,
       text: message.display?.text ?? message.body,
+      // A queue hand-off is the run's: its sender is shown, and it is not yours to take back.
+      ...(isQueueHandoff(message) && message.task !== undefined
+        ? { from: presentation?.agentName?.(message.task.agent) ?? message.task.agent }
+        : {}),
     })),
   };
 }
@@ -294,6 +303,7 @@ export function useDisplayedSession(
   mirror: TopicMirror,
   summaries: Readonly<Record<string, SessionSummary>> | undefined,
   messages: MirrorStates[`messages:${CanvasId}`] | undefined,
+  nodes: readonly NodeLike[] = [],
 ): Session {
   const pasted = useSyncExternalStore(subscribePreviews, imagePreviews);
   const topic =
@@ -311,8 +321,8 @@ export function useDisplayedSession(
         view?.summary ?? (agent === undefined ? undefined : summaries?.[agent]),
         view,
         agent === undefined ? [] : Object.values(messages?.items ?? {}),
-        { images: pasted },
+        { images: pasted, agentName: (id) => agentName(nodes, id) },
       ),
-    [agent, summaries, view, messages, pasted],
+    [agent, summaries, view, messages, pasted, nodes],
   );
 }
