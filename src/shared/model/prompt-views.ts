@@ -337,7 +337,13 @@ export function promptEntryFor(
       kind: 'prompt',
       need,
       prompt: promptFor(
-        { need, prompt: entry.prompt, name: entry.name, standIn: entry.standIn === true },
+        {
+          need,
+          prompt: entry.prompt,
+          name: entry.name,
+          standIn: entry.standIn === true,
+          releasable: entry.releasable === true,
+        },
         reader,
       ),
     };

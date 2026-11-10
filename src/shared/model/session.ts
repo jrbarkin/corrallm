@@ -130,6 +130,8 @@ export interface OpenPromptEntry {
   prompt: CorePrompt;
   name: string;
   standIn?: true;
+  /** Its session can release it to its terminal (B23 C7): Answer in terminal is offered. */
+  releasable?: true;
   outcome?: never;
 }
 

@@ -661,6 +661,7 @@ export class PromptOwner implements PromptSink {
         prompt: built,
         name: this.#name(at.canvas, at.agent),
         ...(standIn ? { standIn: true as const } : {}),
+        ...(at.answers.release === undefined ? {} : { releasable: true as const }),
       },
     });
     this.#deps.changed(at.canvas, at.agent);
