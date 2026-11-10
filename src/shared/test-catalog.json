@@ -186,8 +186,8 @@
           "description": "Claude Code itself, in a terminal in its view: works with your Claude login",
           "view": "terminal",
           "prompts": {
-            "approval": "seen",
-            "question": "seen",
+            "approval": "answerable",
+            "question": "answerable",
             "plan": "seen",
             "form": "none"
           },
@@ -488,7 +488,7 @@
           "description": "Codex itself, in a terminal in its view",
           "view": "terminal",
           "prompts": {
-            "approval": "seen",
+            "approval": "answerable",
             "question": "none",
             "plan": "none",
             "form": "none"

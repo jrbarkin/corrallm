@@ -11,7 +11,9 @@ import {
   screens,
 } from '../../terminal/hook-recorded';
 import type { HoldRecord } from '../../terminal/hook-recorded';
-import { sessionHookKey } from './hooks';
+import { computedTrust, sessionHookKey } from './hooks';
+import { CodexTui } from './tui';
+import type { PromptAnswer } from '../../../../shared/model/prompts';
 
 /*
  * What Codex 0.162.1 did when its command hooks were held, answered or ignored (B23),
@@ -197,5 +199,149 @@ describe('questions and forms', () => {
     expect(screenText('form-perm-allow').at(-1)).toContain('Which deploy target?');
     const events = holdRecords(records, 'hook-req').map(({ data }) => data.body.hook_event_name);
     expect(events).not.toContain('Elicitation');
+  });
+});
+
+/*
+ * B23 C2 and C4: what Codex · Terminal holds, and what its hook is told, read from the recorded
+ * requests. Held, Codex hides its approval ("Running hook"), so only corrallm answers it
+ * (`answerIn: 'api'`), with Answer in terminal to hand it back.
+ */
+describe('what Codex · Terminal holds (B23 C2)', () => {
+  const tui = (options: { permission?: boolean } = {}) =>
+    new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      platform: 'darwin',
+      ...options,
+    });
+  const bash = () =>
+    first(hookRequests(recorded('answer-allow'), 'PermissionRequest', 'Bash')).data.body;
+  const mcp = () =>
+    first(hookRequests(recorded('form-perm-allow'), 'PermissionRequest', 'mcp__form__ask')).data
+      .body;
+  const choice = (value: string, feedback?: string): PromptAnswer => ({
+    kind: 'choice',
+    value,
+    ...(feedback === undefined ? {} : { feedback }),
+  });
+  const decision = (body: unknown) =>
+    (body as { hookSpecificOutput: { hookEventName: string; decision: Record<string, unknown> } })
+      .hookSpecificOutput;
+
+  it('holds a command as an api approval with its command and folder, and what the dialog also offers said', () => {
+    const held = tui().hold(bash());
+    expect(held?.prompt).toEqual({
+      kind: 'approval',
+      title: 'Codex wants to run a command',
+      reason: 'write hi.txt',
+      subject: { type: 'command', command: 'echo hi > hi.txt', cwd: '/tmp/rec/work' },
+      answerIn: 'api',
+      omitted: true,
+      choices: [
+        {
+          value: 'accept',
+          label: 'Yes, proceed',
+          hint: 'allow_once',
+          effects: {},
+          feedback: 'none',
+          endsTurn: false,
+        },
+        {
+          value: 'decline',
+          label: 'No, continue without running it',
+          hint: 'reject_once',
+          effects: {},
+          feedback: 'none',
+          endsTurn: false,
+        },
+        {
+          value: 'decline-feedback',
+          label: 'No, and tell Codex what to do differently',
+          hint: 'reject_once',
+          effects: {},
+          feedback: 'required',
+          endsTurn: false,
+        },
+      ],
+    });
+  });
+
+  it('holds an MCP tool’s approval as an mcpTool one, its server and tool read from its name', () => {
+    const held = tui().hold(mcp());
+    expect(held?.prompt).toMatchObject({
+      kind: 'approval',
+      answerIn: 'api',
+      subject: { type: 'mcpTool', server: 'form', tool: 'ask', input: {} },
+    });
+    // A name that can't be split one way is a tool, named whole.
+    const odd = tui().hold({ ...mcp(), tool_name: 'mcp__a__b__c' });
+    expect(odd?.prompt).toMatchObject({ subject: { type: 'tool', tool: 'mcp__a__b__c' } });
+  });
+
+  it('holds nothing else: another tool, a subagent’s request, another event, a command too long', () => {
+    for (const tool of ['apply_patch', 'WebSearch', 'request_user_input', '']) {
+      expect(tui().hold({ ...bash(), tool_name: tool }), tool).toBeUndefined();
+    }
+    expect(tui().hold({ ...bash(), agent_id: 'sub-1' })).toBeUndefined();
+    expect(tui().hold({ ...bash(), hook_event_name: 'PreToolUse' })).toBeUndefined();
+    expect(tui().hold({ ...bash(), tool_input: { command: 'x'.repeat(70_000) } })).toBeUndefined();
+    expect(tui().hold({ ...bash(), tool_input: {} })).toBeUndefined();
+    expect(tui().hold({ ...bash(), cwd: undefined })).toBeUndefined();
+  });
+
+  it('holds nothing where Codex was not given the hook (before 0.162.1)', () => {
+    expect(tui({ permission: false }).hold(bash())).toBeUndefined();
+  });
+
+  it('replies as the recorded allow and deny, with the user’s words framed, and nothing more', () => {
+    const held = tui().hold(bash());
+    const allow = held?.reply(choice('accept'));
+    expect(allow).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
+    });
+    const recordedAllow = JSON.parse(
+      holdRecords(recorded('answer-allow'), 'hook-res').find(({ data }) =>
+        data.body.includes('PermissionRequest'),
+      )?.data.body ?? '{}',
+    ) as unknown;
+    expect(allow).toEqual(recordedAllow);
+    const deny = decision(held?.reply(choice('decline')));
+    expect(deny).toMatchObject({
+      hookEventName: 'PermissionRequest',
+      decision: { behavior: 'deny', message: expect.stringContaining('declined') as string },
+    });
+    expect(Object.keys(deny.decision).sort()).toEqual(['behavior', 'message']);
+    const feedback = decision(held?.reply(choice('decline-feedback', 'use a branch')));
+    expect(feedback.decision.message).toBe('The user declined this and said: use a branch');
+    const lead = decision(
+      held?.reply({
+        ...choice('decline-feedback', 'use a branch'),
+        decider: { party: 'agent:lead', name: 'Lead' },
+      }),
+    );
+    expect(lead.decision.message).toBe(
+      'Lead (another party in corrallm, not the user) declined this and said: use a branch',
+    );
+    for (const answer of [choice('accept'), choice('decline'), choice('decline-feedback', 'x')]) {
+      const sent = JSON.stringify(held?.reply(answer));
+      for (const never of ['interrupt', 'updatedInput', 'updatedPermissions']) {
+        expect(sent).not.toContain(never);
+      }
+    }
+  });
+
+  it('refuses what it cannot express, writing nothing', () => {
+    const held = tui().hold(bash());
+    expect(() => held?.reply(choice('always'))).toThrow();
+    expect(() => held?.reply(choice('decline-feedback'))).toThrow(/instead|words/i);
+    expect(() => held?.reply({ kind: 'questions', answers: {} })).toThrow();
+  });
+
+  it('lets the held request go with {} and no failure line, which the recording shows', () => {
+    // Released, the approval is the terminal's, and Codex prints no "Hook failed".
+    expect(resultsOf('reply-nodecision-long')).toContain(
+      'Would you like to run the following command?',
+    );
+    expect(resultsOf('reply-nodecision-long')).not.toContain('Hook failed');
   });
 });

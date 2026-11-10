@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
@@ -13,7 +14,7 @@ import { TerminalSession, TIMING } from '../../terminal/session';
 import type { TerminalTiming } from '../../terminal/session';
 import { launchInstructions } from '../../instructions';
 import { appendRole } from '../app-server/instructions';
-import { checkVersion, codexVersion } from '../codex';
+import { checkVersion, codexVersion, MIN_API_CODEX_VERSION, versionAtLeast } from '../codex';
 import { nativeDeveloperInstructions } from './instructions';
 import type { InstructionsContext } from './instructions';
 import { HookTruster } from './trust';
@@ -156,6 +157,9 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
           )
         : undefined;
     const usage = this.#usage;
+    // Its PermissionRequest hook, which corrallm holds to answer approvals (B23), is recorded from
+    // 0.162.1, on POSIX; an older Codex asks only in its terminal, and is told so.
+    const permission = versionAtLeast(version, MIN_API_CODEX_VERSION);
     const session = new TerminalSession<CodexMode>({ ...spec, cwd }, host, {
       executable: codex,
       cli: new CodexTui({
@@ -163,6 +167,7 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
         effort: spec.effort ?? null,
         ...(developerInstructions === undefined ? {} : { developerInstructions }),
         platform: this.#platform,
+        permission,
         ...(api === undefined ? {} : { api }),
         usage: () => this.#reader.read({ codex, cwd, env: spec.env }),
       }),
@@ -181,6 +186,14 @@ export class CodexTerminalConnector implements Connector<CodexMode> {
           }),
     });
     await session.launch();
+    if (!permission && this.#platform !== 'win32') {
+      host.emit({
+        type: 'notice',
+        id: randomUUID(),
+        level: 'warning',
+        text: `Codex ${version} asks only in its terminal; corrallm answers its approvals from ${MIN_API_CODEX_VERSION}.`,
+      });
+    }
     return session;
   }
 }

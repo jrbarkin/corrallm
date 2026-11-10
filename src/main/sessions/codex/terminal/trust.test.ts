@@ -85,7 +85,7 @@ describe('trusting a session’s hooks', () => {
     const truster = new HookTruster({ start });
     expect(await truster.trust(HOOKS, CONTEXT)).toEqual(computed);
     // Given the same hooks, on the command line.
-    expect(calls.starts[0]?.args?.filter((arg) => arg !== '-c')).toHaveLength(4);
+    expect(calls.starts[0]?.args?.filter((arg) => arg !== '-c')).toHaveLength(5);
     expect(calls.closed).toBe(1);
     expect(await truster.trust(HOOKS, CONTEXT)).toEqual(computed);
     expect(calls.starts).toHaveLength(1);
@@ -105,7 +105,7 @@ describe('trusting a session’s hooks', () => {
     const truster = new HookTruster({ start });
     const trust = await truster.trust(HOOKS, CONTEXT);
     expect(trust.get('C:\\<session-flags>\\config.toml:Stop:0:0')).toBe('sha256:Stop');
-    expect(trust.size).toBe(4);
+    expect(trust.size).toBe(5);
     await truster.trust(HOOKS, CONTEXT);
     expect(calls.starts).toHaveLength(2);
   });
@@ -137,6 +137,7 @@ describe('trusting a session’s hooks', () => {
       'key-UserPromptSubmit',
       'key-Stop',
       'key-Interrupt',
+      'key-PermissionRequest',
     ]);
     expect(sessionHooksListed(null, HOOKS).size).toBe(0);
   });

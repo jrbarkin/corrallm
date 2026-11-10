@@ -35,6 +35,7 @@ import type { AppServer, startAppServer } from '../rpc';
 
 let dir: string;
 let events: SessionEvent[];
+let versionNotices: Extract<SessionEvent, { type: 'notice' }>[];
 /** What its sessions raised and ended for the core's prompt owner (B13 C6), in order. */
 let prompts: (PromptEvent | PromptEnded)[];
 let remembered: string[];
@@ -48,6 +49,7 @@ let played: (record: TerminalRecord) => void | Promise<void>;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-codex-terminal-'));
   events = [];
+  versionNotices = [];
   prompts = [];
   remembered = [];
   runs = [];
@@ -111,6 +113,9 @@ async function start(
     {
       emit: (event) => {
         if (event.type === 'prompt' || event.type === 'prompt-ended') prompts.push(event);
+        // A Codex before 0.162.1 says once that it asks only in its terminal (B23): kept apart.
+        else if (event.type === 'notice' && event.text.includes('asks only in its terminal'))
+          versionNotices.push(event);
         else events.push(event);
       },
       remember: (id) => remembered.push(id),
@@ -704,7 +709,11 @@ describe('the Codex Terminal connector', () => {
   });
 
   it('trusts its hooks as Codex computes their trust', async () => {
-    await start(['resume'], { resume: RECORDED_SESSION });
+    await start(
+      ['resume'],
+      { resume: RECORDED_SESSION },
+      { version: () => Promise.resolve('0.162.1') },
+    );
     const state = runs[0]?.args.find((arg) => arg.startsWith('hooks.state='));
     const url = /http:\/\/127\.0\.0\.1:\d+\/hook/.exec(runs[0]?.args.join(' ') ?? '')?.[0] ?? '';
     const { sessionHooks } = await import('./hooks');
@@ -773,4 +782,39 @@ it('its Terminal fake lists and calls the verified session entry with the shellâ
     await Promise.all(sessions.map((one) => one.close()));
     await endpoint.close();
   }
+});
+
+describe('the PermissionRequest hook, which corrallm holds (B23 P6)', () => {
+  const hooksOf = (args: readonly string[]) =>
+    args.filter((arg, i) => args[i - 1] === '-c' && arg.startsWith('hooks.'));
+
+  it('gives a Codex from 0.162.1 the hook, and trusts it for the session', async () => {
+    await start(['prompts'], {}, { version: () => Promise.resolve('0.162.1'), platform: 'darwin' });
+    const args = runs[0]?.args ?? [];
+    expect(hooksOf(args).some((arg) => arg.startsWith('hooks.PermissionRequest='))).toBe(true);
+    expect(hooksOf(args).find((arg) => arg.startsWith('hooks.state='))).toContain(
+      '/<session-flags>/config.toml:permission_request:0:0',
+    );
+    expect(versionNotices).toEqual([]);
+  });
+
+  it('gives an older Codex none, and says once that it asks only in its terminal', async () => {
+    await start(['prompts'], {}, { version: () => Promise.resolve('0.161.0'), platform: 'darwin' });
+    const args = runs[0]?.args ?? [];
+    expect(hooksOf(args).some((arg) => arg.startsWith('hooks.PermissionRequest='))).toBe(false);
+    expect(versionNotices).toEqual([
+      expect.objectContaining({
+        level: 'warning',
+        text: 'Codex 0.161.0 asks only in its terminal; corrallm answers its approvals from 0.162.1.',
+      }),
+    ]);
+  });
+
+  it('gives Windows none, which was not recorded, and no notice about a version', async () => {
+    await start(['prompts'], {}, { version: () => Promise.resolve('0.162.1'), platform: 'win32' });
+    expect(
+      hooksOf(runs[0]?.args ?? []).some((arg) => arg.startsWith('hooks.PermissionRequest=')),
+    ).toBe(false);
+    expect(versionNotices).toEqual([]);
+  });
 });

@@ -136,7 +136,7 @@ export const codex: Adapter = {
         short: 'Terminal',
         description: 'Codex itself, in a terminal in its view',
         view: 'terminal',
-        prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
+        prompts: { approval: 'answerable', question: 'none', plan: 'none', form: 'none' },
         signals: false,
         context: false,
         // corrallm's agent API: the session's -c entry and shell policy (recorded on 0.162.1).
