@@ -48,11 +48,8 @@ let profile: string;
 let file: string;
 const cores: Core[] = [];
 
-beforeEach(async () => {
-  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-b19-journey-'));
-  const project = path.join(profile, 'project');
-  await mkdir(project);
-  file = path.join(profile, 'team.corral');
+/** The canvas file: Lead hands a review to Worker and then waits for your OK on it. */
+async function canvas(workerQueue: unknown[] = []): Promise<void> {
   await writeFile(
     file,
     JSON.stringify({
@@ -79,12 +76,20 @@ beforeEach(async () => {
           adapter: 'codex',
           connection: 'codex.app-server',
           position: { x: 200, y: 0 },
-          queue: [],
+          queue: workerQueue,
         },
       ],
       links: [{ agents: ['lead', 'worker'] }],
     }),
   );
+}
+
+beforeEach(async () => {
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-b19-journey-'));
+  const project = path.join(profile, 'project');
+  await mkdir(project);
+  file = path.join(profile, 'team.corral');
+  await canvas();
   await keepCanvases(profile, { [CANVAS]: { file, project } });
 });
 
@@ -262,5 +267,40 @@ describe('a queue hand-off and its sender’s OK, as the window reads them (B19 
     });
     // The lead was never sent a turn: its work was the hand-off and its OK.
     expect(sent.map(({ agent }) => agent)).toEqual(['worker']);
+  });
+
+  it('waits while its recipient stands at an OK of its own, and goes once you answer it', async () => {
+    await canvas([{ id: 'gate', approve: 'the gate' }]);
+    const { connector, sent } = sessions();
+    const core = await start(connector);
+    const engine = await core.engines.open(CANVAS);
+    const store = await core.engines.messagesOf(CANVAS);
+    liveRunOf(engine.run, engine.catalog, () => Date.now(), mailboxTasks(store));
+    engine.run.update(core.engines.canvas(CANVAS)?.document.nodes ?? []);
+    engine.run.start();
+
+    // The worker's OK holds it: pending, from the lead, sent to no one.
+    const gate = await vi.waitFor(
+      async () => {
+        const needs = await ok<{ items: { id: string; kind: string; agent?: string }[] }>(
+          core,
+          'needs',
+          {},
+        );
+        const found = needs.items.find((item) => item.kind === 'hold' && item.agent === 'worker');
+        expect(found).toBeDefined();
+        return found;
+      },
+      { timeout: 10_000, interval: 10 },
+    );
+    const waiting = (await topicMessages(core)).filter((one) => one.purpose?.type === 'handoff');
+    expect(waiting).toEqual([expect.objectContaining({ state: 'pending', from: 'agent:lead' })]);
+    expect(sent).toEqual([]);
+
+    await ok(core, 'reply', { to: gate?.id, answer: { choice: 'approve' } });
+    await vi.waitFor(() => {
+      expect(sent.map(({ agent }) => agent)).toEqual(['worker']);
+    });
+    expect(sent[0]?.text).toContain('Review this');
   });
 });

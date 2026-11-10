@@ -39,6 +39,9 @@ test('a hand-off waits for its recipient’s OK as a read-only row, and your dec
   });
   try {
     const { page } = world;
+    // The worker's session is started first, as the B21 journeys start theirs: a hand-off to a
+    // session that was never started was seen to stay delivering here (B19 X4's report).
+    await world.wake('worker');
     await world.run();
 
     // The worker stands at its OK: the lead's hand-off waits, read-only, from the lead.
@@ -50,7 +53,7 @@ test('a hand-off waits for its recipient’s OK as a read-only row, and your dec
     await expect(handoff).toHaveCount(1, { timeout: 20_000 });
     await expect(handoff).toContainText('From Lead');
     await expect(handoff.locator('button, textarea, input')).toHaveCount(0);
-    expect(await world.sdkPrompts()).toEqual([]);
+    expect((await world.sdkPrompts()).join('\n')).not.toContain('review-this-please');
 
     // Answer the worker's OK: the hand-off goes, and its reply is the lead's evidence.
     await openNeeds(page);
@@ -78,6 +81,7 @@ test('a hand-off waits for its recipient’s OK as a read-only row, and your dec
     ).toEqual([]);
 
     // Answer the lead's own OK.
+    if (!(await needs.isVisible())) await openNeeds(page);
     await needs
       .getByRole('article')
       .filter({ hasText: 'the review' })
