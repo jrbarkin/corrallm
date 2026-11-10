@@ -50,7 +50,7 @@ if command -v node; then die 'Runtime image unexpectedly contains Node on PATH';
 step 'Create non-root test user' useradd --create-home tester
 step 'Test installed app and command as non-root' runuser -u tester -- \
   env HOME=/home/tester CORRALLM_NO_UPDATE_CHECK=1 \
-  bash /checks/linux-smoke.sh /usr/lib/corrallm/corrallm /usr/bin/corrallm
+  bash /checks/linux-smoke.sh /usr/lib/corrallm/corrallm /usr/bin/corrallm /checks/seed-profile.cjs
 
 case "$distro" in
   debian:bookworm) step 'Uninstall deb' apt-get purge --yes corrallm ;;

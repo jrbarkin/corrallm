@@ -53,6 +53,7 @@ export default defineConfig(
     '.corral/',
     '.vite/',
     'dist-cli/',
+    'dist-check/',
     'out/',
     'coverage/',
     'playwright-report/',
