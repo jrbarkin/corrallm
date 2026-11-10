@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { cp, mkdir, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -14,12 +14,17 @@ import { MakerZIP } from '@electron-forge/maker-zip';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeConfig, ForgePackagerOptions } from '@electron-forge/shared-types';
-import { FuseV1Options, FuseVersion } from '@electron/fuses';
+import { FuseVersion } from '@electron/fuses';
 
+import { FUSES } from './build/fuses.js';
+import { rpmVersion } from './build/linux-version.js';
 import { copyNativeModule, NATIVE_MODULES } from './build/native-modules.js';
 import { shipCli, LINUX_CLI_BIN } from './build/shipped-cli.js';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
+const packageVersion = (
+  JSON.parse(readFileSync(path.join(projectDir, 'package.json'), 'utf8')) as { version: string }
+).version;
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 // Invoke Vite through Node: pnpm's Windows .cmd shim cannot be spawned with execFile.
@@ -119,8 +124,14 @@ const windowsCertificate =
 // electron-installer-redhat 4.0.0's default spec fails on rpmbuild >= 4.20; build/rpm.spec.ejs
 // carries the fix. Forge's option type omits specTemplate and desktopTemplate, which the
 // installer still honors. The desktop entry opens the app, not the command linked in /usr/bin.
+// The deb and rpm install this into hicolor (a bare path would go to pixmaps), which the desktop entry's Icon=corrallm resolves.
+const linuxIcon = { '512x512': path.join(projectDir, 'build/icons/corrallm-512.png') };
+
 const rpmOptions: MakerRpmConfigOptions & { specTemplate: string; desktopTemplate: string } = {
   categories: ['Development'],
+  // A prerelease's rpm must sort before its release (build/linux-version.ts).
+  version: rpmVersion(packageVersion),
+  icon: linuxIcon,
   // Electron links libasound. Linux process identity reads /proc, not ps.
   requires: ['alsa-lib'],
   bin: LINUX_CLI_BIN,
@@ -144,7 +155,13 @@ const config = {
     ...(osxSign ? { osxSign } : {}),
     ...(osxNotarize ? { osxNotarize } : {}),
     ...(windowsCertificate ? { windowsSign: true as const } : {}),
-    // TODO: set appBundleId (macOS) and icons before the first signed release.
+    // Reverse DNS under a namespace the project holds, not Electron's default. The profile folder
+    // is named by the product name, so it does not move with this.
+    appBundleId: 'io.github.jrbarkin.corrallm',
+    appCategoryType: 'public.app-category.developer-tools',
+    appCopyright: 'Copyright 2026 corrallm contributors',
+    // Packager appends .icns on macOS (.ico waits for Windows).
+    icon: path.join(projectDir, 'build/icons/corrallm'),
   },
   rebuildConfig: {
     // These ship Node-API prebuilds that work in Electron as-is. Without this,
@@ -216,6 +233,7 @@ const config = {
     new MakerDeb({
       options: {
         categories: ['Development'],
+        icon: linuxIcon,
         // The installer only recommends audio, which Electron links.
         depends: ['libasound2t64 | libasound2'],
         bin: LINUX_CLI_BIN,
@@ -248,17 +266,7 @@ const config = {
     new FusesPlugin({
       version: FuseVersion.V1,
       strictlyRequireAllFuses: true,
-      [FuseV1Options.RunAsNode]: false,
-      [FuseV1Options.EnableCookieEncryption]: true,
-      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
-      [FuseV1Options.EnableNodeCliInspectArguments]: false,
-      // Enforced on macOS and Windows; Electron has no ASAR integrity check on Linux.
-      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-      [FuseV1Options.OnlyLoadAppFromAsar]: true,
-      [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
-      // The renderer is served from app://, so file:// needs no extra privileges.
-      [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
-      [FuseV1Options.WasmTrapHandlers]: true,
+      ...FUSES,
     }),
   ],
 } satisfies ForgeConfig;

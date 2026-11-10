@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '../..');
@@ -252,6 +252,70 @@ it('releases the artifact volume when an installed package check fails', async (
   const calls = await commands();
   expect(calls.some((args) => args.includes('fedora:44'))).toBe(false);
   expect(calls.at(-1)?.slice(0, 2)).toEqual(['volume', 'rm']);
+});
+
+it('installs in Debian, then Ubuntu, then Fedora', async () => {
+  const { env, commands } = await fixture();
+  await exec('bash', ['scripts/check-linux-packages.sh', 'arm64'], { cwd: root, env });
+  const checked = (await commands())
+    .filter((args) => args[0] === 'run' && args.includes('bash'))
+    .map((args) => args.find((arg) => /^(debian|ubuntu|fedora):/.test(arg)))
+    .filter(Boolean);
+  expect(checked).toEqual(['debian:bookworm', 'ubuntu:24.04', 'fedora:44']);
+});
+
+describe('--out', () => {
+  it('keeps the checked installers in the folder, after every installation passed', async () => {
+    const { folder, env, commands } = await fixture();
+    const out = path.join(folder, 'kept installers');
+    await exec('bash', ['scripts/check-linux-packages.sh', '--out', out, 'x64'], {
+      cwd: root,
+      env,
+    });
+    const calls = await commands();
+    const keep = calls.find((args) => args.includes('/checks/linux-keep.sh'));
+    expect(keep).toEqual(expect.arrayContaining(['--platform', 'linux/amd64']));
+    expect(keep).toContain(`${await realpath(out)}:/out`);
+    expect(keep?.some((arg) => arg.endsWith(':/checks:ro'))).toBe(true);
+    expect(calls.indexOf(keep ?? [])).toBeGreaterThan(
+      calls.findLastIndex((args) => args.includes('fedora:44')),
+    );
+    expect(calls.at(-1)?.slice(0, 2)).toEqual(['volume', 'rm']);
+  });
+
+  it('is accepted after the architecture too, and keeps nothing without it', async () => {
+    const { folder, env, commands } = await fixture();
+    await exec(
+      'bash',
+      ['scripts/check-linux-packages.sh', 'arm64', '--out', path.join(folder, 'kept')],
+      { cwd: root, env },
+    );
+    expect((await commands()).some((args) => args.includes('/checks/linux-keep.sh'))).toBe(true);
+    await exec('bash', ['scripts/check-linux-packages.sh', 'arm64'], { cwd: root, env });
+    const second = (await commands()).slice(
+      (await commands()).findLastIndex((args) => args[0] === 'build'),
+    );
+    expect(second.some((args) => args.join(' ').includes('/out'))).toBe(false);
+  });
+
+  it('keeps nothing when an installation fails', async () => {
+    const { folder, env, commands } = await fixture();
+    await expect(
+      exec('bash', ['scripts/check-linux-packages.sh', '--out', path.join(folder, 'kept')], {
+        cwd: root,
+        env: { ...env, FAIL_DOCKER_ARG: 'ubuntu:24.04' },
+      }),
+    ).rejects.toMatchObject({ code: 19 });
+    expect((await commands()).some((args) => args.includes('/checks/linux-keep.sh'))).toBe(false);
+  });
+
+  it('refuses a missing or repeated folder before doing anything in Docker', async () => {
+    const { env } = await fixture();
+    for (const args of [['--out'], ['--out', 'a', '--out', 'b']])
+      await expect(
+        exec('bash', ['scripts/check-linux-packages.sh', ...args], { cwd: root, env }),
+      ).rejects.toMatchObject({ code: 2 });
+  });
 });
 
 it('runs every gate in order, including the e2e global build under xvfb, stopping on failure', async () => {

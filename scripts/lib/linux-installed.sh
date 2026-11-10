@@ -14,8 +14,8 @@ linked_libraries() {
 }
 
 case "$distro" in
-  debian:bookworm)
-    step 'Refresh Debian package metadata' apt-get update
+  debian:bookworm|ubuntu:24.04)
+    step 'Refresh package metadata' apt-get update
     step 'Install deb (declared dependencies only)' \
       apt-get install --yes --no-install-recommends /checks/corrallm.deb
     step 'Check deb identity and architecture' dpkg-query -W -f='${Package} ${Architecture}\n' corrallm
@@ -41,6 +41,27 @@ case "$distro" in
   *) die "Unknown distribution: $distro" ;;
 esac
 
+step 'Check the hicolor icon is installed' test -s /usr/share/icons/hicolor/512x512/apps/corrallm.png
+# A prerelease's package must sort before its release's, or an update would skip the release.
+check_prerelease_order() {
+  local version base
+  case "$distro" in
+    fedora:44)
+      version=$(rpm -q --qf '%{VERSION}' corrallm)
+      base=${version%%~*}
+      [ "$version" = "$base" ] ||
+        [ "$(rpm --eval "%{lua: print(rpm.vercmp('$version', '$base'))}")" = -1 ] ||
+        die "rpm version $version does not sort before $base"
+      ;;
+    *)
+      version=$(dpkg-query -W -f='${Version}' corrallm)
+      base=${version%%~*}
+      [ "$version" = "$base" ] || dpkg --compare-versions "$version" lt "$base" ||
+        die "deb version $version does not sort before $base"
+      ;;
+  esac
+}
+step 'Check a prerelease sorts before its release' check_prerelease_order
 step 'Check launcher symlink' test "$(readlink -f /usr/bin/corrallm)" = /usr/lib/corrallm/resources/bin/corrallm
 step 'Validate desktop entry' desktop-file-validate /usr/share/applications/corrallm.desktop
 step 'Check desktop opens GUI' grep -Fx 'Exec=/usr/lib/corrallm/corrallm %U' /usr/share/applications/corrallm.desktop
