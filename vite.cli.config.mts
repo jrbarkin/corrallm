@@ -31,7 +31,7 @@ export default defineConfig({
       formats: ['cjs'],
       fileName: () => 'corrallm.cjs',
     },
-    rollupOptions: {
+    rolldownOptions: {
       // One file, the CLI (main.ts) inlined to run only once its entry has checked the Node it
       // runs on (index.ts): split into a file of its own, it would be required, and run, first.
       output: { codeSplitting: false },

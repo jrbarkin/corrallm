@@ -505,7 +505,7 @@
           "images": null,
           "usage": "codex",
           "keys": {
-            "shiftEnter": null
+            "shiftEnter": "\u001b[13;2u"
           },
           "shellPrefix": "!"
         },
