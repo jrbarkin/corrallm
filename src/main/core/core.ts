@@ -692,6 +692,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         : { messages: open.messages, nodes: open.document.nodes };
     },
     generationOf: (canvas, agent) => sessions.generationOf(canvas, agent),
+    // B24 C3: who leads now and what it may answer, and the outside parties you let answer
+    // approvals, read on every use.
+    leads: { grantsOf: (canvas, agent) => leadStore.grantsOf(canvas, agent) },
+    grantees: (canvas) => leadStore.granted(canvas),
     // B13 C9: what it holds is published at once, whether or not a window watches: Needs, the
     // agent's summary and its count, and what delivery holds for it.
     changed: (canvas, agent) => {
@@ -950,6 +954,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
    * and what its runtime topics' copies may see checked again. C2 routes its prompts again here.
    */
   const leadsChanged = (canvas: CanvasId) => {
+    // Its prompts are routed again, and nobody keeps a lead's refusals count past your change.
+    prompts.forgive(canvas);
+    prompts.reroute(canvas);
     topics.changed(`leads:${canvas}`, 'corrallm');
     topics.changed(`needs:${canvas}`, 'corrallm');
     engines.needsChanged(canvas);
@@ -1577,7 +1584,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
       rules: {
         ...sessionRules(control),
-        ...ruleChecks(engines, CATALOG, needOf),
+        ...ruleChecks(engines, CATALOG, needOf, (canvas, to, by, answer) =>
+          prompts.refusal(canvas, to, by, answer),
+        ),
         discard: discardChecks({
           lifecycle,
           proposals,

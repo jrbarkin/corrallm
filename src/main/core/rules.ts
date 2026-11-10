@@ -229,6 +229,13 @@ export function ruleChecks(
   engines: Engines,
   catalog: Catalog,
   needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
+  /** B24 C4: why a party the item names may not give this answer, by the one allowance. */
+  allowed: (
+    canvas: CanvasId,
+    to: string,
+    by: PartyId,
+    answer: unknown,
+  ) => string | undefined = () => undefined,
 ): Omit<ArgumentChecks, 'discard' | 'restore-code'> {
   /** The open canvas a call names, if it is open. */
   const openOf = (canvas: string | undefined) =>
@@ -257,6 +264,9 @@ export function ruleChecks(
             refuse: `Only ${andList(item.by.map((party) => partyText([], party)))} may answer this: ${title()}.`,
           };
         }
+        // B24 C4: a lead or an outside grantee only within the one allowance.
+        const banned = allowed(canvas as string as CanvasId, to, partyIdOf(caller), answer);
+        if (banned !== undefined) return { refuse: `${banned} ${title()}` };
         const chosen = 'choice' in answer ? answer.choice : undefined;
         const choice = item.choices.find(({ value }) => value === chosen);
         return choice?.humanOnly === undefined
