@@ -3,7 +3,7 @@ import { request } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HookServer } from './hooks';
-import type { HookEvent, HookRegistration } from './hooks';
+import type { HookEvent, HookHold, HookRegistration } from './hooks';
 
 /** Posts `body` to `url` as a hook would; resolves with the status and what came back. */
 function post(
@@ -163,5 +163,235 @@ describe('HookServer', () => {
       200,
     );
     expect(hooks).not.toHaveBeenCalled();
+  });
+
+  describe('media type', () => {
+    /** A POST with exactly these headers (the default Content-Type is not added). */
+    function postWith(
+      url: string,
+      headers: Record<string, string>,
+    ): Promise<{ status: number; text: string }> {
+      return new Promise((resolve, reject) => {
+        const sent = request(url, { method: 'POST', agent: false, headers }, (response) => {
+          let text = '';
+          response.setEncoding('utf8');
+          response.on('data', (chunk: string) => (text += chunk));
+          response.on('end', () => {
+            resolve({ status: response.statusCode ?? 0, text });
+          });
+        });
+        sent.on('error', reject);
+        sent.end('{}');
+      });
+    }
+
+    it('takes only application/json (UTF-8 at most), before the token is read', async () => {
+      const server = new HookServer();
+      const listener = vi.fn<(event: HookEvent) => void>();
+      const status = vi.fn<(input: HookEvent) => void>();
+      const { url, statusUrl, token } = await register(server, listener, status);
+      const auth = { Authorization: `Bearer ${token}` };
+      for (const target of [url, statusUrl]) {
+        for (const type of [
+          'text/plain',
+          'application/json; charset=latin1',
+          'application/jsonx',
+          'application/json; boundary=x',
+        ]) {
+          await expect(postWith(target, { ...auth, 'Content-Type': type })).resolves.toEqual({
+            status: 415,
+            text: '',
+          });
+        }
+        await expect(postWith(target, { ...auth })).resolves.toEqual({ status: 415, text: '' });
+        // Before the token: an unknown one is refused for its media type, not as unknown.
+        await expect(
+          postWith(target, { Authorization: 'Bearer 00ff', 'Content-Type': 'text/plain' }),
+        ).resolves.toEqual({ status: 415, text: '' });
+        for (const type of ['application/json', 'application/json; charset=utf-8']) {
+          expect((await postWith(target, { ...auth, 'Content-Type': type })).status).toBe(200);
+        }
+      }
+      await vi.waitFor(() => {
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(status).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('takes what Codex’s recorded curl command sends', async () => {
+      const server = new HookServer();
+      const { url, token } = await register(server, vi.fn());
+      // curl -X POST -H "@header-file" -H "Content-Type: application/json" --data-binary @-
+      const sent = await postWith(url, {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: '*/*',
+        'User-Agent': 'curl/8.7.1',
+      });
+      expect(sent.status).toBe(200);
+    });
+  });
+
+  describe('holding a request', () => {
+    const asked = (event: HookEvent) => event.hook_event_name === 'PermissionRequest';
+    const permission = JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' });
+
+    /** A server whose registration holds PermissionRequests, collecting what it holds. */
+    async function holding(options: { heldMs?: number } = {}) {
+      const server = new HookServer(options);
+      const holds: HookHold[] = [];
+      const heard: HookEvent[] = [];
+      const registration = await server.register(
+        (event, hold) => {
+          heard.push(event);
+          if (hold) holds.push(hold);
+        },
+        undefined,
+        asked,
+      );
+      registrations.push(registration);
+      return {
+        server,
+        registration,
+        holds,
+        heard,
+        auth: { Authorization: `Bearer ${registration.token}` },
+      };
+    }
+
+    it('writes nothing until the session answers, then exactly that body, once', async () => {
+      const { registration, holds, auth } = await holding();
+      const reply = post(registration.url, permission, auth);
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(1);
+      });
+      const [hold] = holds as [HookHold];
+      expect(hold.ended).toBeUndefined();
+      const body = { hookSpecificOutput: { hookEventName: 'PermissionRequest' } };
+      expect(hold.answer(body)).toBe(true);
+      await expect(reply).resolves.toEqual({ status: 200, text: JSON.stringify(body) });
+      expect(hold.ended).toBe('answered');
+      // A second answer, or a release, writes nothing.
+      expect(hold.answer({ other: true })).toBe(false);
+      expect(hold.release()).toBe(false);
+      expect(hold.ended).toBe('answered');
+    });
+
+    it('answers {} to a request the session does not hold, and its listener hears it', async () => {
+      const { registration, holds, heard, auth } = await holding();
+      await expect(
+        post(registration.url, JSON.stringify({ hook_event_name: 'Stop' }), auth),
+      ).resolves.toEqual({ status: 200, text: '{}' });
+      await vi.waitFor(() => {
+        expect(heard).toHaveLength(1);
+      });
+      expect(holds).toHaveLength(0);
+    });
+
+    it('writes {} on release, and reports how a hold ended', async () => {
+      const { registration, holds, auth } = await holding();
+      const reply = post(registration.url, permission, auth);
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(1);
+      });
+      const [hold] = holds as [HookHold];
+      expect(hold.release()).toBe(true);
+      await expect(reply).resolves.toEqual({ status: 200, text: '{}' });
+      expect(hold.ended).toBe('released');
+      expect(hold.answer({ late: true })).toBe(false);
+    });
+
+    it('releases an unanswered hold at its deadline', async () => {
+      const { registration, holds, auth } = await holding({ heldMs: 60 });
+      const reply = post(registration.url, permission, auth);
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(1);
+      });
+      const [hold] = holds as [HookHold];
+      expect(hold.deadline - hold.received).toBe(60);
+      const ended = vi.fn();
+      hold.onEnd(ended);
+      await expect(reply).resolves.toEqual({ status: 200, text: '{}' });
+      expect(hold.ended).toBe('deadline');
+      expect(ended).toHaveBeenCalledWith('deadline');
+      expect(hold.answer({ late: true })).toBe(false);
+    });
+
+    it('reports a request its client closed, and writes nothing after', async () => {
+      const { registration, holds, auth } = await holding();
+      const sent = request(registration.url, {
+        method: 'POST',
+        agent: false,
+        headers: { 'Content-Type': 'application/json', ...auth },
+      });
+      sent.on('error', () => undefined);
+      sent.end(permission);
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(1);
+      });
+      const [hold] = holds as [HookHold];
+      const ended = vi.fn();
+      hold.onEnd(ended);
+      sent.destroy();
+      await vi.waitFor(() => {
+        expect(hold.ended).toBe('closed');
+      });
+      expect(ended).toHaveBeenCalledWith('closed');
+      expect(hold.answer({ late: true })).toBe(false);
+      expect(hold.release()).toBe(false);
+    });
+
+    it('answers only the request a decision is for, whatever two bodies say', async () => {
+      const { registration, holds, auth } = await holding();
+      const first = post(registration.url, permission, auth);
+      const second = post(registration.url, permission, auth);
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(2);
+      });
+      const [one, two] = holds as [HookHold, HookHold];
+      expect(two.answer({ for: 'second' })).toBe(true);
+      await expect(second).resolves.toEqual({ status: 200, text: '{"for":"second"}' });
+      expect(one.ended).toBeUndefined();
+      one.release();
+      await expect(first).resolves.toEqual({ status: 200, text: '{}' });
+    });
+
+    it('answers the 33rd concurrent hold of a registration {} at once', async () => {
+      const { registration, holds, heard, auth } = await holding();
+      const replies = Array.from({ length: 32 }, () => post(registration.url, permission, auth));
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(32);
+      });
+      await expect(post(registration.url, permission, auth)).resolves.toEqual({
+        status: 200,
+        text: '{}',
+      });
+      await vi.waitFor(() => {
+        expect(heard).toHaveLength(33);
+      });
+      expect(holds).toHaveLength(32);
+      for (const hold of holds) hold.release();
+      await Promise.all(replies);
+    });
+
+    it('releases every hold with its registration', async () => {
+      const { registration, holds, auth } = await holding();
+      const reply = post(registration.url, permission, auth);
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(1);
+      });
+      registration.release();
+      await expect(reply).resolves.toEqual({ status: 200, text: '{}' });
+      expect(holds[0]?.ended).toBe('released');
+    });
+
+    it('never holds /status', async () => {
+      const server = new HookServer();
+      const registration = await server.register(vi.fn(), vi.fn(), () => true);
+      registrations.push(registration);
+      await expect(
+        post(registration.statusUrl, '{}', { Authorization: `Bearer ${registration.token}` }),
+      ).resolves.toEqual({ status: 200, text: '{}' });
+    });
   });
 });

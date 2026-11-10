@@ -140,6 +140,7 @@ export class Replay implements Pty {
           await fetch(this.#url(), {
             method: 'POST',
             headers: {
+              'Content-Type': 'application/json',
               Authorization: readFileSync(this.options.env[HOOK_HEADER] ?? '', 'utf8')
                 .trim()
                 .slice('Authorization: '.length),

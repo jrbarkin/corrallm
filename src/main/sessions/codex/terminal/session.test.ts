@@ -607,7 +607,7 @@ describe('a turn Codex ends without its Stop hook, as at a usage limit', () => {
       .slice('Authorization: '.length);
     await fetch(url, {
       method: 'POST',
-      headers: { Authorization: authorization },
+      headers: { 'Content-Type': 'application/json', Authorization: authorization },
       body: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'invalid-id' }),
     });
     const before = events.filter(
