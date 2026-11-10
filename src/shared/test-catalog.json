@@ -4,7 +4,6 @@
       "id": "claude-code",
       "name": "Claude Code",
       "accent": 0,
-      "logo": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><g stroke=\"#c15f3c\" stroke-width=\"2.6\" stroke-linecap=\"round\"><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\"/><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\" transform=\"rotate(45 12 12)\"/><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\" transform=\"rotate(90 12 12)\"/><line x1=\"12\" y1=\"3\" x2=\"12\" y2=\"21\" transform=\"rotate(135 12 12)\"/></g></svg>\n",
       "words": {
         "defaults": "Yours, from Claude Code’s settings",
         "mcpHint": "Add them with claude mcp add, or in the project’s .mcp.json."
@@ -363,7 +362,6 @@
       "id": "codex",
       "name": "Codex",
       "accent": 1,
-      "logo": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#0e8a6b\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3.5l7.4 4.25v8.5L12 20.5l-7.4-4.25v-8.5z\"/><path d=\"M9 10l2.5 2L9 14M13 14.5h3\"/></svg>\n",
       "words": {
         "defaults": "Yours, from your Codex config"
       },

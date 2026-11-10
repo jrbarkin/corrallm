@@ -10,7 +10,6 @@ import { FakeConnector } from '../fake';
 import { fakePlan } from '../fake-prompts';
 import type { ModelChoice } from '../../../shared/session';
 import { CODEX_FEATURES } from './features';
-import logo from './logo.svg?raw';
 import { UsageReader } from './terminal/usage';
 import { codexConversations } from './conversations';
 
@@ -90,7 +89,6 @@ export const codex: Adapter = {
     id: 'codex',
     name: 'Codex',
     accent: 1,
-    logo,
     words: { defaults: 'Yours, from your Codex config' },
     modes: MODES.map((mode) => ({
       ...mode,

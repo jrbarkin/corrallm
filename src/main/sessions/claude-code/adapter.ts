@@ -12,7 +12,6 @@ import { TerminalConnector } from './connector';
 import { SdkConnector } from './sdk/connector';
 import { Conversations } from './sdk/conversations';
 import { checkAgentSdk } from './selftest';
-import logo from './logo.svg?raw';
 
 /** The models a fake session offers. */
 const FAKE_MODELS: ModelChoice[] = [
@@ -63,7 +62,6 @@ export const claudeCode: Adapter = {
     id: 'claude-code',
     name: 'Claude Code',
     accent: 0,
-    logo,
     words: {
       defaults: 'Yours, from Claude Code’s settings',
       mcpHint: 'Add them with claude mcp add, or in the project’s .mcp.json.',
