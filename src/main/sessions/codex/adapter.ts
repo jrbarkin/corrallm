@@ -176,7 +176,10 @@ export const codex: Adapter = {
         usage: CODEX_USAGE,
       },
     ],
-    registerMcp: 'codex mcp add {server} --url {url} --bearer-token-env-var {var}',
+    // `codex mcp add` has no scope option: it registers user-wide. The entry goes in the
+    // orchestrator's own folder instead, where Codex loads it once that folder is trusted.
+    registerMcpIn: '.codex/config.toml',
+    registerMcp: '[mcp_servers.{server}]\nurl = "{url}"\nbearer_token_env_var = "{var}"',
     consents: [
       {
         key: PLAN_CONSENT,

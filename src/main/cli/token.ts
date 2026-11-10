@@ -15,7 +15,7 @@ import { writeWhole } from '../whole-file';
 import { nameableFile } from './args';
 import type { TokenCommand } from './args';
 import { shown } from './output';
-import { registrations, SERVER_NAME } from './register';
+import { helperProblem, registrationLines, registrations, SERVER_NAME } from './register';
 import { readTokenFile } from './token-file';
 import { TOKEN_FILE_VARIABLE, TOKEN_VARIABLE, URL_VARIABLE } from './wait';
 
@@ -58,7 +58,14 @@ export interface TokenIO {
   platform?: NodeJS.Platform;
   /** How long it waits for an owner that holds the profile to answer. */
   ownerWaitMs?: number;
+  /** The login shell's environment, where given; otherwise it asks the login shell for it. */
+  loginEnv?: Readonly<Record<string, string>>;
+  /** This command's launcher (`commandLauncher`); none for a build that ships no launcher. */
+  launcher?: string;
 }
+
+const IN_AN_AGENT =
+  'corrallm token: it doesn’t run inside a corrallm agent: make tokens yourself, in your own terminal.';
 
 /** Runs `corrallm token`: its exit code (0 done, 1 refused or failed, saying why). */
 export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<number> {
@@ -66,6 +73,11 @@ export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<
   const say = (line: string) => {
     io.stderr.write(`${shown(line)}\n`);
   };
+  // Defense in depth, not a boundary: an agent that clears the marker is a process running as you.
+  if (io.env.CORRALLM_AGENT_SESSION === '1') {
+    say(IN_AN_AGENT);
+    return 1;
+  }
   if (!io.stderr.isTTY) {
     say(NOT_A_TERMINAL);
     return 1;
@@ -117,11 +129,16 @@ export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<
       written = undefined;
     }
   }
-  const installed = await installedClis(
-    agentEnvironment(await loginShellEnvironment({ env: io.env })),
-  );
+  const login = io.loginEnv ?? (await loginShellEnvironment({ env: io.env }));
+  const installed = await installedClis(agentEnvironment(login));
   const otherProfile = profile !== path.resolve(appProfile({ env: io.env }));
-  for (const line of madeText(answer, request, { into: written, installed, otherProfile })) {
+  const problem = written === undefined ? undefined : helperProblem(login.PATH ?? '', io.launcher);
+  for (const line of madeText(answer, request, {
+    into: written,
+    installed,
+    otherProfile,
+    helperProblem: problem,
+  })) {
     say(line);
   }
   return written === into ? 0 : 1;
@@ -226,10 +243,13 @@ function madeText(
     into,
     installed,
     otherProfile,
+    helperProblem,
   }: {
     into: string | undefined;
     installed: Readonly<Record<string, boolean>>;
     otherProfile: boolean;
+    /** Why the headers helper wouldn't run as `corrallm` in a client's shell, if it wouldn't. */
+    helperProblem: string | undefined;
   },
 ): string[] {
   const hours = request.op === 'revoke' ? 0 : request.hours;
@@ -258,13 +278,12 @@ function madeText(
     return lines;
   }
   const { byFile, byVariable } = registrations(installed, url, into);
-  const indented = (commands: string[]) => commands.map((line) => `  ${line}`);
   const anyClient = `  ${url}, as the MCP server ${SERVER_NAME}, with the header Authorization: Bearer <the token, from ${TOKEN_VARIABLE}>`;
   if (into === undefined) {
     lines.push(
       `Keep it in ${TOKEN_VARIABLE} where your orchestrator runs, without echoing it (read -rs ${TOKEN_VARIABLE} && export ${TOKEN_VARIABLE}), and register corrallm by that variable, never by pasting the token:`,
       '',
-      ...(byVariable.length > 0 ? indented(byVariable) : [anyClient]),
+      ...(byVariable.length > 0 ? registrationLines(byVariable) : [anyClient]),
       '',
       'A client keeps the token it started with: after corrallm token renew it must start again. With --into <file>, the token goes only to a file you can read, which a client with a headers helper reads each time it connects.',
       '',
@@ -274,15 +293,23 @@ function madeText(
       lines.push(
         'Register corrallm so that it reads the token from that file each time it connects: a renewal into the same file then needs no restart.',
         '',
-        ...indented(byFile),
+        ...registrationLines(byFile),
         '',
       );
+      const stays = byFile.filter(({ renews }) => !renews).map(({ name }) => name);
+      if (stays.length > 0) {
+        lines.push(
+          `${stays.join(' and ')} must start again after a renewal: ${stays.length === 1 ? 'it keeps' : 'they keep'} the token it started with.`,
+          '',
+        );
+      }
+      if (helperProblem !== undefined) lines.push(helperProblem, '');
     }
     if (byVariable.length > 0 || byFile.length === 0) {
       lines.push(
         `A client that reads the token only from a variable, as it starts, takes it from the file (export ${TOKEN_VARIABLE}="$(cat "${into}")"), and must start again after a renewal:`,
         '',
-        ...(byVariable.length > 0 ? indented(byVariable) : [anyClient]),
+        ...(byVariable.length > 0 ? registrationLines(byVariable) : [anyClient]),
         '',
       );
     }

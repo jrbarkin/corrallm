@@ -357,6 +357,7 @@
         }
       ],
       "registerMcp": "claude mcp add --transport http {server} {url} --header 'Authorization: Bearer ${{var}}'",
+      "registerMcpRenews": true,
       "registerMcpHelper": "claude mcp add-json {server} '{\"type\":\"http\",\"url\":\"{url}\",\"headersHelper\":\"{helper}\"}'"
     },
     {
@@ -549,7 +550,8 @@
           "usage": "codex"
         }
       ],
-      "registerMcp": "codex mcp add {server} --url {url} --bearer-token-env-var {var}",
+      "registerMcpIn": ".codex/config.toml",
+      "registerMcp": "[mcp_servers.{server}]\nurl = \"{url}\"\nbearer_token_env_var = \"{var}\"",
       "consents": [
         {
           "key": "plan",

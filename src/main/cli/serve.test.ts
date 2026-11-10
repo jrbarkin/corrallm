@@ -860,7 +860,7 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
           '2',
         ]);
         await vi.waitFor(() => {
-          expect(printed()).toMatch(/codex mcp add/);
+          expect(printed()).toMatch(/\.codex\/config\.toml/);
         });
         const token = /^ {2}([A-Za-z0-9_-]{43})$/m.exec(printed())?.[1];
         expect(token).toBeDefined();
@@ -881,8 +881,10 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
           `claude mcp add --transport http corrallm-server ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
         );
         expect(printed()).toContain(
-          `codex mcp add corrallm-server --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+          'Codex: in your orchestrator’s folder, add this to .codex/config.toml (corrallm doesn’t write it):',
         );
+        expect(printed()).toContain(`url = "${server.url}"`);
+        expect(printed()).not.toMatch(/codex mcp add/);
         // It works.
         const client = await connect(server.url, token);
         expect((await call<{ agents: unknown[] }>(client, 'agents')).agents).toHaveLength(2);

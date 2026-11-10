@@ -120,9 +120,13 @@ describe("Codex's adapter", () => {
     for (const placeholder of ['{server}', '{url}', '{var}']) {
       expect(descriptor.registerMcp).toContain(placeholder);
     }
-    expect(descriptor.registerMcp).toMatch(/^codex mcp add /);
-    // Codex reads a bearer token only from a variable, as it starts: it has no headers helper.
+    // Text for a file in the orchestrator's own folder, never `codex mcp add`, which is user-wide.
+    expect(descriptor.registerMcpIn).toBe('.codex/config.toml');
+    expect(descriptor.registerMcp).toMatch(/^\[mcp_servers\.\{server\}\]\n/);
+    expect(descriptor.registerMcp).not.toMatch(/codex mcp add/);
+    // Codex's headers helper isn't recorded: the token comes from a variable, as it starts.
     expect(descriptor.registerMcpHelper).toBeUndefined();
+    expect(descriptor.registerMcpRenews).toBeUndefined();
   });
 });
 
