@@ -65,6 +65,7 @@ const promptEnvelope = {
   detail: ToolDetail.optional(),
   answerIn: AnswerIn,
   cut,
+  until: z.number().optional(),
   humanOnly: z.string().optional(),
   choices: z.array(NeedChoiceSchema),
 };
@@ -130,6 +131,7 @@ const LiveOutcome = z.discriminatedUnion('type', [
   }),
   z.strictObject({ type: z.literal('withdrawn') }),
   z.strictObject({ type: z.literal('answered-in-terminal'), by: z.literal('terminal') }),
+  z.strictObject({ type: z.literal('moved') }),
   z.strictObject({ type: z.literal('dismissed'), by: Party }),
 ]);
 

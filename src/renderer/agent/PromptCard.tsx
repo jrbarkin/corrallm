@@ -364,6 +364,8 @@ function outcomeWords(outcome: LiveOutcome): string {
       return 'No longer waiting.';
     case 'answered-in-terminal':
       return 'Answered in the terminal.';
+    case 'moved':
+      return 'Moved to its terminal.';
     case 'dismissed':
       return 'Not waiting.';
     case 'choice':

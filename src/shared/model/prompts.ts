@@ -235,6 +235,11 @@ const envelope = {
   detail: Detail.optional(),
   answerIn: AnswerIn,
   cut: z.literal(true).optional(),
+  /**
+   * A Terminal prompt held through its CLI's hook (B23 C3): when corrallm releases it to the
+   * terminal, in epoch ms. Only the platform's session sets it, and only on a held prompt.
+   */
+  until: z.int().positive().optional(),
 };
 
 function kinds<C extends typeof Choice | typeof CoreChoice, S extends z.core.$ZodShape>(
@@ -288,7 +293,8 @@ export type PromptEvent = z.infer<typeof PromptEvent>;
 export const PromptEnded = z.strictObject({
   type: z.literal('prompt-ended'),
   key: z.uuid(),
-  reason: z.enum(['withdrawn', 'answered-natively']),
+  /** `moved`: a held prompt was released to its terminal (its deadline, or Answer in terminal). */
+  reason: z.enum(['withdrawn', 'answered-natively', 'moved']),
 });
 export type PromptEnded = z.infer<typeof PromptEnded>;
 export const Prompt = z

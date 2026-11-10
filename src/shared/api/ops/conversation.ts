@@ -345,6 +345,7 @@ export const b11ConversationOps = {
             'completed',
             'retained',
             'dismissed',
+            'moved',
           ])
           .optional(),
         raised: NeedId.optional(),
