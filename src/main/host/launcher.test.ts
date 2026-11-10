@@ -1,9 +1,10 @@
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { CommandLink } from '../core/command-link';
 import { packagedLauncher } from './launcher';
 
 /** The packaged app's launcher (B30 C2): found only in a packaged app, as a real regular file. */
@@ -44,7 +45,7 @@ describe('the packaged launcher', () => {
     );
   });
 
-  it('is none unpackaged, on Windows, with no file, with a folder there, or in a translocated copy', async () => {
+  it('is none unpackaged, on Windows, with no file, or with a folder there', async () => {
     expect(
       packagedLauncher({ packaged: false, resourcesPath: resources, platform: 'darwin' }),
     ).toBe(null);
@@ -63,6 +64,9 @@ describe('the packaged launcher', () => {
     expect(packagedLauncher({ packaged: true, resourcesPath: folder, platform: 'linux' })).toBe(
       null,
     );
+  });
+
+  it('hands over a translocated copy’s path as it is, so the core can say why it will not link it', async () => {
     const moved = path.join(
       dir,
       'AppTranslocation',
@@ -74,8 +78,37 @@ describe('the packaged launcher', () => {
     );
     await mkdir(path.join(moved, 'bin'), { recursive: true });
     await writeFile(path.join(moved, 'bin', 'corrallm'), '#!/bin/sh\n');
-    expect(packagedLauncher({ packaged: true, resourcesPath: moved, platform: 'darwin' })).toBe(
-      null,
+    expect(packagedLauncher({ packaged: true, resourcesPath: moved, platform: 'darwin' })).toMatch(
+      /AppTranslocation\/X\/d\/corrallm\.app\/Contents\/Resources\/bin\/corrallm$/,
     );
+  });
+
+  it('composes with the command link: a translocated app is told to move to Applications, and nothing is written', async () => {
+    const moved = path.join(
+      dir,
+      'AppTranslocation',
+      'X',
+      'd',
+      'corrallm.app',
+      'Contents',
+      'Resources',
+    );
+    await mkdir(path.join(moved, 'bin'), { recursive: true });
+    await writeFile(path.join(moved, 'bin', 'corrallm'), '#!/bin/sh\n');
+    const home = path.join(dir, 'home');
+    await mkdir(home);
+    const service = new CommandLink({
+      home,
+      searchPath: () => Promise.resolve('/usr/bin'),
+      launcher: () =>
+        packagedLauncher({ packaged: true, resourcesPath: moved, platform: 'darwin' }),
+      platform: 'darwin',
+    });
+    expect(await service.status()).toEqual({
+      state: 'unavailable',
+      sentence: 'Move corrallm to Applications, then open it from there.',
+    });
+    await expect(service.install()).rejects.toMatchObject({ code: 'refused' });
+    await expect(lstat(path.join(home, '.local'))).rejects.toThrow();
   });
 });

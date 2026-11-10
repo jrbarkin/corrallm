@@ -83,7 +83,7 @@ case "$(uname -s)" in Darwin) mode=$(stat -f %Lp "$token") ;; *) mode=$(stat -c 
 [ "$mode" = 600 ] || fail "the token file is mode $mode, not 600"
 [ "$(wc -l <"$token" | tr -d ' ')" = 1 ] || fail 'the token file does not hold exactly one line'
 [ "$(tr -d '\n' <"$token" | wc -c | tr -d ' ')" = 43 ] || fail 'the token is not 43 characters'
-if grep -qF "$(cat "$token")" "$tmp/token.log"; then fail 'the token was shown although it was written to a file'; fi
+if grep -qFf "$token" "$tmp/token.log"; then fail 'the token was shown although it was written to a file'; fi
 
 say 'wait with the token passes its time limit (exit 1) and prints one JSON line'
 code=0

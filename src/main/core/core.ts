@@ -922,6 +922,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     home: config.home ?? homedir(),
     searchPath: async () => (await environment()).PATH ?? '',
     launcher: () => host.launcher(),
+    // The settings topic carries the link's state, for you alone.
+    changed: () => {
+      topics.changed('settings', 'you');
+    },
   });
   const reveal = new FileRevealer({
     // Reveal the picked root, with the resolver excluding every unverified/foreign workspace.

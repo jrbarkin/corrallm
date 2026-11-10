@@ -60,8 +60,8 @@ export interface HostServices {
   showFile(file: string): Promise<null>;
   /**
    * The packaged app's own `corrallm` launcher (B30 C2), as a real path, for the command link
-   * Settings makes: only a regular file in a packaged app on macOS or Linux, never from a
-   * translocated copy; null under plain Node and in unpackaged or e2e builds. It comes from the
+   * Settings makes: only a regular file in a packaged app on macOS or Linux, a translocated
+   * copy's path included (the command link refuses it and says why); null under plain Node and in unpackaged or e2e builds. It comes from the
    * packaged app itself, never from a window, an operation's input, a setting or a variable.
    */
   launcher(): string | null;

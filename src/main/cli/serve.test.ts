@@ -187,6 +187,8 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       ...extra,
     };
     delete env.CORRALLM_URL;
+    // This fixture runs the outside orchestrator, not one of corrallm's agents.
+    delete env.CORRALLM_AGENT_SESSION;
     delete env.CORRALLM_OUTSIDE_TOKEN;
     return env;
   }

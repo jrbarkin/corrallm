@@ -68,3 +68,11 @@ it('seeds with a test-only bundle that is built outside the app, never packed, a
   // Run by the shipped Node, by absolute path: an installed package's image has no other Node.
   expect(script).toContain('run "$node" "$seed"');
 });
+
+it('never puts the outside token in a command’s arguments: a pattern file is read, not expanded', async () => {
+  const script = await read('scripts/lib/headless-smoke.sh');
+  const lines = script.split('\n').filter((line) => !line.trimStart().startsWith('#'));
+  expect(lines.filter((line) => /\$\((?:cat|<)\s*"?\$\{?token\b/.test(line))).toEqual([]);
+  expect(lines.filter((line) => /`cat\s+"?\$\{?token\b/.test(line))).toEqual([]);
+  expect(script).toContain('grep -qFf "$token" "$tmp/token.log"');
+});

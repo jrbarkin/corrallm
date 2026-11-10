@@ -10,7 +10,7 @@ import { serveTokenSocket } from '../core/token-socket';
 import type { TokenRequest, TokenSocket } from '../core/token-socket';
 import { keepCanvases } from '../core/store/test-store';
 import type { TokenCommand } from './args';
-import { tokenCommand } from './token';
+import { byFileLines, tokenCommand } from './token';
 import type { TokenIO } from './token';
 
 /*
@@ -156,6 +156,22 @@ describe.skipIf(process.platform === 'win32')('what corrallm token says to regis
     // Claude Code's helper runs again after a renewal; Codex's registration is by variable.
     expect(said).toContain('claude mcp add-json corrallm-server');
     expect(said).toContain('and must start again after a renewal');
+    // Claude Code renews: nothing says it must start again.
+    expect(said).not.toContain('Claude Code must start again');
+    expect(said).toContain('a renewal into the same file then needs no restart');
+  });
+
+  it('says a by-file client must start again, and claims no restart-free renewal, unless every one renews', () => {
+    const renews = { name: 'R', text: 'r', in: '.r/config.toml', renews: true };
+    const stays = { name: 'X', text: 'x', in: '.x/config.toml', renews: false };
+    const all = byFileLines([renews]).join('\n');
+    expect(all).toContain('needs no restart');
+    expect(all).not.toContain('must start again');
+    const some = byFileLines([renews, stays]).join('\n');
+    expect(some).toContain('X must start again after a renewal');
+    expect(some).not.toContain('needs no restart');
+    expect(some).not.toContain('R must start again');
+    expect(byFileLines([stays]).join('\n')).not.toContain('needs no restart');
   });
 
   it('tells you to install the command when no corrallm is on the login PATH', async () => {

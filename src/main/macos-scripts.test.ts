@@ -50,6 +50,22 @@ if (kind === 'app' && args.length) {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, program, { mode: 0o755 });
   }
+  // The seeding build and the headless round trip are other gates' work (headless-smoke.test.ts
+  // pins them): here they are stood in for, and only what they were asked is kept.
+  const steps = path.join(folder, 'steps.log');
+  await mkdir(path.join(folder, 'scripts/lib'));
+  await writeFile(
+    path.join(folder, 'scripts/lib/headless-smoke.sh'),
+    `#!/bin/sh\nprintf 'smoke %s\\n' "$*" >> "${steps}"\n`,
+    { mode: 0o755 },
+  );
+  await writeFile(
+    path.join(folder, 'pnpm'),
+    `#!/bin/sh\nprintf 'pnpm %s\\n' "$*" >> "${steps}"\n`,
+    {
+      mode: 0o755,
+    },
+  );
   const env = { ...process.env, PATH: `${folder}:${process.env.PATH ?? ''}`, COMMAND_LOG: log };
   async function commands(): Promise<
     { kind: string; args: string[]; path: string; selfTest?: string }[]
@@ -59,14 +75,18 @@ if (kind === 'app' && args.length) {
       .split('\n')
       .map((line) => JSON.parse(line) as Awaited<ReturnType<typeof commands>>[number]);
   }
-  return { folder, script, app, helper, env, commands };
+  return { folder, script, app, helper, env, commands, steps };
 }
 
 it.each(['arm64', 'x64'])(
   'verifies the %s bundle, helper, native self-test, refused switches and shipped command',
   async (arch) => {
-    const { script, app, env, commands } = await fixture(arch);
+    const { script, app, env, commands, steps, folder } = await fixture(arch);
     await exec('bash', [script, arch], { cwd: root, env });
+    expect((await readFile(steps, 'utf8')).trim().split('\n')).toEqual([
+      'pnpm build:seed',
+      `smoke ${app}/Contents/Resources/bin/corrallm ${app}/Contents/Resources/cli/node ${folder}/dist-check/seed-profile.cjs`,
+    ]);
     const calls = await commands();
     expect(calls.map(({ kind, args }) => ({ kind, args }))).toEqual([
       { kind: 'codesign', args: ['--verify', '--deep', '--strict', app] },

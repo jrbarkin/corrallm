@@ -42,6 +42,8 @@ export interface CommandLinkDeps {
   /** The packaged app's launcher, as its host says; none under plain Node or unpackaged. */
   launcher: () => string | null;
   platform?: NodeJS.Platform;
+  /** Told after the link was written or removed, so the settings you read moves with it. */
+  changed?: () => void;
   /** The file operations the write uses, replaceable for failure tests. */
   rename?: typeof rename;
   symlink?: typeof symlink;
@@ -76,6 +78,7 @@ export class CommandLink {
       }
     }
     await this.#write(launcher.real);
+    this.#deps.changed?.();
     return { changed: true, command: await this.#ready(launcher.real) };
   }
 
@@ -98,6 +101,7 @@ export class CommandLink {
     } catch {
       throw new OpFailure('unavailable', `corrallm couldn’t remove ${this.#shown(at)}.`);
     }
+    this.#deps.changed?.();
     return { changed: true, command: await this.#ready(launcher.real) };
   }
 

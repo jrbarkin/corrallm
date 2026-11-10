@@ -759,7 +759,8 @@ describe.skipIf(process.platform === 'win32')('the token socket the core process
         '--name',
         'bot',
       ],
-      { ...process.env, CORRALLM_AGENT_PATHS: '{}' },
+      // Not one of corrallm's agents: the marker would make `token new` refuse.
+      { ...process.env, CORRALLM_AGENT_SESSION: undefined, CORRALLM_AGENT_PATHS: '{}' },
     );
     expect(await exited, printed()).toBe(0);
     const token = /^ {2}([A-Za-z0-9_-]{43})$/m.exec(printed())?.[1] ?? '';

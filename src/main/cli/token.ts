@@ -16,6 +16,7 @@ import { nameableFile } from './args';
 import type { TokenCommand } from './args';
 import { shown } from './output';
 import { helperProblem, registrationLines, registrations, SERVER_NAME } from './register';
+import type { Registration } from './register';
 import { readTokenFile } from './token-file';
 import { TOKEN_FILE_VARIABLE, TOKEN_VARIABLE, URL_VARIABLE } from './wait';
 
@@ -290,19 +291,7 @@ function madeText(
     );
   } else {
     if (byFile.length > 0) {
-      lines.push(
-        'Register corrallm so that it reads the token from that file each time it connects: a renewal into the same file then needs no restart.',
-        '',
-        ...registrationLines(byFile),
-        '',
-      );
-      const stays = byFile.filter(({ renews }) => !renews).map(({ name }) => name);
-      if (stays.length > 0) {
-        lines.push(
-          `${stays.join(' and ')} must start again after a renewal: ${stays.length === 1 ? 'it keeps' : 'they keep'} the token it started with.`,
-          '',
-        );
-      }
+      lines.push(...byFileLines(byFile));
       if (helperProblem !== undefined) lines.push(helperProblem, '');
     }
     if (byVariable.length > 0 || byFile.length === 0) {
@@ -325,6 +314,29 @@ function madeText(
     );
   }
   return lines;
+}
+
+/**
+ * What is said of the registrations that read the token from its file: that a renewal into the
+ * same file needs no restart only when every one of them renews, and which ones must start again.
+ */
+export function byFileLines(byFile: readonly Registration[]): string[] {
+  const stays = byFile.filter(({ renews }) => !renews).map(({ name }) => name);
+  const lead =
+    'Register corrallm so that it reads the token from that file each time it connects' +
+    (stays.length === 0 ? ': a renewal into the same file then needs no restart.' : ':');
+  return [
+    lead,
+    '',
+    ...registrationLines(byFile),
+    '',
+    ...(stays.length > 0
+      ? [
+          `${stays.join(' and ')} must start again after a renewal: ${stays.length === 1 ? 'it keeps' : 'they keep'} the token it started with.`,
+          '',
+        ]
+      : []),
+  ];
 }
 
 /** `corrallm token header --from <file>`: the Authorization header, as a headers helper prints it. */
