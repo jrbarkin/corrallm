@@ -1463,3 +1463,92 @@ describe('the message store, when its database fails', () => {
     ]);
   });
 });
+
+describe('readdress (B24 C4)', () => {
+  const question: Extract<Message['ask'], { type: 'question' }> = {
+    v: 1,
+    type: 'question',
+    questions: [
+      {
+        id: 'q',
+        header: 'H',
+        text: 'Which?',
+        options: [{ label: 'A' }, { label: 'B' }],
+        multiple: false,
+        other: false,
+      },
+    ],
+    deadline: 5000,
+  };
+
+  it('moves only the recipient of an open row that went through a manager, keeping everything else', async () => {
+    const messages = await store();
+    const ask = messages.add({
+      ...draft('agent:worker', 'agent:lead', 'delivered'),
+      kind: 'prompt',
+      ask: { ...question, via: 'manager' },
+    });
+    const moved = messages.readdress(ask.id, 'you', 'Question was moved.');
+    expect(moved).toMatchObject({ id: ask.id, to: 'you', state: 'delivered', ask: ask.ask });
+    // The old recipient hears of it; nobody else does.
+    expect(messages.withdrawals('agent:lead')).toEqual([
+      { id: ask.id, text: 'Question was moved.' },
+    ]);
+    expect(messages.withdrawals('you')).toEqual([]);
+    await messages.durable();
+    const loaded = await store();
+    expect(loaded.withdrawals('agent:lead')).toEqual([{ id: ask.id, text: 'Question was moved.' }]);
+  });
+
+  it('sends a row to another agent back to pending', async () => {
+    const messages = await store();
+    const ask = messages.add({
+      ...draft('agent:worker', 'agent:mid', 'replied'),
+      kind: 'prompt',
+      ask: { ...question, via: 'manager' },
+    });
+    expect(messages.readdress(ask.id, 'agent:top')).toMatchObject({
+      to: 'agent:top',
+      state: 'pending',
+    });
+  });
+
+  it('moves a message still pending that was sent to a manager, and no other', async () => {
+    const messages = await store();
+    const kept = messages.add({
+      ...draft('agent:worker', 'agent:lead'),
+      display: { via: 'manager' },
+    });
+    const plain = messages.add(draft('agent:worker', 'agent:lead'));
+    const sent = messages.add({
+      ...draft('agent:worker', 'agent:lead', 'delivered'),
+      display: { via: 'manager' },
+    });
+    expect(messages.readdress(plain.id, 'you')).toBeUndefined();
+    expect(messages.readdress(sent.id, 'you')).toBeUndefined();
+    expect(messages.readdress(kept.id, 'you')).toMatchObject({ to: 'you', state: 'delivered' });
+    expect(messages.get(plain.id)?.to).toBe('agent:lead');
+  });
+
+  it('refuses one not through a manager, one already there, one not kept and one settled', async () => {
+    const messages = await store();
+    const direct = messages.add({
+      ...draft('agent:worker', 'agent:lead', 'delivered'),
+      kind: 'prompt',
+      ask: question,
+    });
+    const via = messages.add({
+      ...draft('agent:worker', 'agent:lead', 'delivered'),
+      kind: 'prompt',
+      ask: { ...question, via: 'manager' },
+    });
+    expect(messages.readdress(direct.id, 'you')).toBeUndefined();
+    expect(messages.readdress(via.id, 'agent:lead')).toBeUndefined();
+    expect(messages.readdress('missing', 'you')).toBeUndefined();
+    messages.update(via.id, {
+      state: 'expired',
+      settled: { v: 1, type: 'expired' } as never,
+    });
+    expect(messages.readdress(via.id, 'you')).toBeUndefined();
+  });
+});

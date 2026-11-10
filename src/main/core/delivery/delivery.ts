@@ -139,6 +139,8 @@ export interface DeliveryDeps {
     live(message: Message): boolean;
     refused(message: Message): void;
   };
+  /** B24 C4: whether `lead` may take its team's questions now (Asks.manages). */
+  manages?: (lead: string) => boolean;
   handoff?: {
     /**
      * Whether a request waiting goes (`go`), waits while corrallm switches its agent (`hold`), or
@@ -452,6 +454,7 @@ export class Delivery {
       heard: (agents) => {
         this.heard(agents);
       },
+      ...(deps.manages === undefined ? {} : { manages: deps.manages }),
     });
     this.#stop = [
       // A streamed word changes nothing a check reads: a reply's many never make one.
@@ -899,7 +902,7 @@ export class Delivery {
     to: string,
     body: string,
     replyTo?: string,
-    { images, told }: { images?: UserMessage['images']; told?: string } = {},
+    { images, told, via }: { images?: UserMessage['images']; told?: string; via?: 'manager' } = {},
   ): Promise<Message> {
     const { store } = this.#deps;
     if (from !== 'you' && this.waitingFrom(to, from) >= MAX_WAITING) {
@@ -917,7 +920,14 @@ export class Delivery {
         // Yours is yours as you sent it; anyone else's a party's.
         origin: from === 'you' ? 'manual' : 'party',
         // Its images are live-only: once a restart lost them, it is never sent without them.
-        ...(pasted > 0 ? { display: { images: pasted, requiresImages: true } } : {}),
+        ...(pasted > 0 || via !== undefined
+          ? {
+              display: {
+                ...(pasted > 0 ? { images: pasted, requiresImages: true as const } : {}),
+                ...(via === undefined ? {} : { via }),
+              },
+            }
+          : {}),
         body,
         state: 'pending',
         ...(replyTo === undefined ? {} : { replyTo }),

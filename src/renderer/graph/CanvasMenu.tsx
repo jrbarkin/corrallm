@@ -17,6 +17,7 @@ export function CanvasMenu({
   onSettings,
   onDismiss,
   canvases,
+  outside,
 }: {
   name: string | undefined;
   edited: boolean;
@@ -31,6 +32,8 @@ export function CanvasMenu({
   onSettings: (opener: HTMLElement | null) => void;
   onDismiss: () => void;
   canvases?: ReactNode;
+  /** B24 X3: the outside orchestrators you let answer approvals (leads/Leads.tsx). */
+  outside?: ReactNode;
 }) {
   return (
     <div className="canvas-float-position">
@@ -85,6 +88,7 @@ export function CanvasMenu({
                 Settings…
               </button>
               {canvases}
+              {outside}
             </>
           )}
         </FloatPopover>

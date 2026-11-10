@@ -14,7 +14,7 @@ import type { OpContext } from '../call';
 import { ownTurn } from '../attempts';
 import { canvasesOf, isTokenCaller, partyIdOf, promptReaderOf } from '../caller';
 import type { MessageId } from '../../../shared/api/ids';
-import { agentParty } from '../../../shared/model/messages';
+import { agentOf as partyAgent, agentParty } from '../../../shared/model/messages';
 import { DeliveryError } from '../delivery/errors';
 import { capBody, cursorOf, readCursor } from '../delivery/messages';
 import { resultKey } from '../delivery/tasks';
@@ -189,12 +189,19 @@ export function conversationOps(
       if (replyTo !== undefined && !open.messages.get(replyTo)) {
         throw new OpFailure('not-found', `There is no message ${replyTo}.`);
       }
-      // B21 C5: to you, or to the sender's manager (you, until B24): a record and a Needs item.
+      // B21 C5: to you, or to the sender's manager: a record and a Needs item for you; B24 C4: to
+      // the nearest lead granted questions, an ordinary message to it, shown as to its manager.
       if (typeof to !== 'string') {
         const { via } = partyTarget(to, ctx);
+        const from = partyIdOf(ctx.caller);
+        const lead = via === undefined ? undefined : partyAgent(open.delivery.asks.managerOf(from));
         try {
+          if (lead !== undefined) {
+            const sent = await open.delivery.send(from, lead, body, replyTo, { via: 'manager' });
+            return { id: sent.id };
+          }
           const sent = await open.delivery.asks.toYou({
-            from: partyIdOf(ctx.caller),
+            from,
             body,
             ...(replyTo === undefined ? {} : { replyTo }),
             ...(via === undefined ? {} : { via }),
@@ -313,8 +320,8 @@ export function conversationOps(
 }
 
 /**
- * Where a party target goes (B21 C4, C5): you, or the caller's manager, which is the nearest lead
- * its tree grants questions, else you; until B24 grants none, you, `via` it. You name neither (you
+ * Where a party target goes (B21 C4, C5; B24 C4): you, or the caller's manager, which delivery
+ * resolves to the nearest lead its tree grants questions, else you, `via` it. You name neither (you
  * message agents), and an outside orchestrator has no manager.
  */
 function partyTarget(

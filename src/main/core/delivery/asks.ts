@@ -11,6 +11,7 @@ import type {
 import type { CanvasNode } from '../../../shared/model/canvas';
 import {
   agentOf,
+  agentParty,
   isContinuation,
   isOpenAsk,
   isOpenToYou,
@@ -22,6 +23,7 @@ import type { NeedsItem } from '../../../shared/model/needs';
 import type { QuestionAnswers } from '../../../shared/model/prompts';
 import { threadTitle } from '../../../shared/model/session';
 import type { TaskMessage, TurnResult } from '../../../shared/session';
+import { ancestorsOf } from '../ancestry';
 import { partyName, partyText, quotedName, quotedParty } from '../parties';
 import { DeliveryError } from './errors';
 import { capBody } from './messages';
@@ -83,6 +85,11 @@ export interface AsksDeps {
    * with the write that holds the answer, dismissal or reply that was it.
    */
   heard: (agents: readonly string[]) => void;
+  /**
+   * B24 C4: whether `lead` may take a manager's questions now: you made it a lead, it isn't held,
+   * it holds the questions grant, and its connection has an API route. None: nobody does.
+   */
+  manages?: (lead: string) => boolean;
 }
 
 /** An ask's answer: the answers by question id, or the text that answered it. */
@@ -111,6 +118,8 @@ export class Asks {
    * stopped task's, never every message delivery acts on.
    */
   readonly #continuing = new Set<string>();
+  /** B24 C4: the open rows addressed to an agent through its asker's manager, by id. */
+  readonly #managed = new Set<string>();
   #unwatch: () => void;
   #alarm: { at: number; cancel: () => void } | undefined;
   #started = false;
@@ -158,7 +167,7 @@ export class Asks {
    */
   async ask({
     from,
-    to,
+    to: asked,
     via,
     questions,
     seconds,
@@ -174,15 +183,17 @@ export class Asks {
     /** B21 C7: the task attempt whose own turn its asker was on as it asked (`ownTurn`). */
     task?: TaskMessage;
   }): Promise<Message> {
+    let to = asked;
     const { store } = this.#deps;
     this.sweep();
     const told = request === undefined ? undefined : askRequestKey(from, request);
     const before = told === undefined ? undefined : store.toldAs(told);
     if (before !== undefined) {
       const kept = before.ask?.type === 'question' ? before.ask : undefined;
+      // A manager's ask may have been re-addressed since: it is the same ask wherever it is.
       if (
         kept === undefined ||
-        before.to !== to ||
+        (via === 'manager' ? kept.via !== 'manager' : before.to !== to) ||
         JSON.stringify(kept.questions) !== JSON.stringify(questions)
       ) {
         throw new DeliveryError('conflict', 'That request id was used for another ask.');
@@ -195,6 +206,8 @@ export class Asks {
         'This step was already reported; it cannot ask another question.',
       );
     }
+    // B24 C4: a manager is resolved now, to the nearest lead granted questions, else you.
+    if (via === 'manager') to = this.managerOf(from);
     const open = this.#asks();
     const pair = open.find((one) => one.from === from && one.to === to);
     if (pair !== undefined) {
@@ -296,6 +309,50 @@ export class Asks {
       throw new DeliveryError('unavailable', unsaved('message', error));
     }
     return store.get(message.id) ?? message;
+  }
+
+  /**
+   * B24 C4 (Design §6): the manager of agent `from` now: the nearest agent above it that is a lead
+   * granted questions on a connection with an API route, else you. Never `from` itself, never a
+   * party the walk already passed, and you at once on a loop in the ancestry.
+   */
+  managerOf(from: PartyId): PartyId {
+    const asker = agentOf(from);
+    const manages = this.#deps.manages;
+    if (asker === undefined || manages === undefined) return 'you';
+    const lead = ancestorsOf(this.#deps.nodes(), asker)?.find((one) => manages(one));
+    return lead === undefined ? 'you' : agentParty(lead);
+  }
+
+  /**
+   * B24 C4: moves each open row addressed through a manager away from a recipient that lost the
+   * authority to take it (demoted, held, grant off, deleted, moved out of its asker's ancestry) to
+   * the nearest lead that holds it now, else you; never to a lead newly granted, while its
+   * recipient still holds it. Its id, request key, deadline and task are unchanged; an ask that had
+   * reached the old recipient leaves it a note.
+   */
+  readdress(): void {
+    let changed = false;
+    for (const row of this.#ordered(this.#managed)) changed = this.#moveAway(row) || changed;
+    if (changed) {
+      this.#deps.schedule();
+      queueMicrotask(this.#deps.changed);
+    }
+  }
+
+  /** Re-addresses one managed row if its recipient no longer holds the authority. */
+  #moveAway(row: Message): boolean {
+    const recipient = agentOf(row.to);
+    if (recipient === undefined) return false;
+    const manages = this.#deps.manages;
+    const chain = ancestorsOf(this.#deps.nodes(), agentOf(row.from) ?? '');
+    if (manages?.(recipient) === true && chain?.includes(recipient) === true) return false;
+    const to = this.managerOf(row.from);
+    const reached =
+      row.ask !== undefined &&
+      (row.state === 'delivering' || row.state === 'delivered' || row.state === 'replied');
+    const note = reached ? this.#movedNote(row) : undefined;
+    return this.#deps.store.readdress(row.id, to, note) !== undefined;
   }
 
   /**
@@ -544,7 +601,11 @@ export class Asks {
     let changed = false;
     for (const ask of this.#asks()) {
       if (gone(ask.from, here)) this.#settle(ask, withdrawn('asker'), 'corrallm', 'none');
-      else if (gone(ask.to, here)) this.#settle(ask, withdrawn('recipient'), 'corrallm', 'record');
+      else if (gone(ask.to, here) && ask.ask?.type === 'question' && ask.ask.via === 'manager') {
+        // A manager's ask doesn't end with the lead it went to: it comes back to you (or goes up).
+        if (!this.#moveAway(ask)) continue;
+      } else if (gone(ask.to, here))
+        this.#settle(ask, withdrawn('recipient'), 'corrallm', 'record');
       else if (ask.ask?.type === 'question' && ask.ask.deadline <= now)
         this.#settle(ask, { type: 'expired' }, 'corrallm', 'record');
       else continue;
@@ -572,6 +633,11 @@ export class Asks {
    */
   #withdrawalNote(ask: Message, why: AskWithdrawal): string {
     return `Question ${ask.id} from ${quotedParty(this.#deps.nodes(), ask.from)} was withdrawn after it reached you: ${WITHDRAWN_WORDS[why]}. Do not answer it. Anything already done is left as it is.`;
+  }
+
+  /** What a lead an ask was moved away from is told of it, with its next message. */
+  #movedNote(ask: Message): string {
+    return `Question ${ask.id} from ${quotedParty(this.#deps.nodes(), ask.from)} was moved to someone else after it reached you: you no longer answer for it. Do not answer it. Anything already done is left as it is.`;
   }
 
   /** The open ask `need` names: one answered or ended meanwhile is a conflict saying how. */
@@ -708,6 +774,20 @@ export class Asks {
     else this.#toYou.delete(id);
     if (message?.state === 'pending' && isContinuation(message)) this.#continuing.add(id);
     else this.#continuing.delete(id);
+    if (message !== undefined && this.#isManaged(message)) this.#managed.add(id);
+    else this.#managed.delete(id);
+  }
+
+  /** Whether `message` is an open row addressed to an agent through its asker's manager. */
+  #isManaged(message: Message): boolean {
+    if (agentOf(message.to) === undefined) return false;
+    if (message.ask?.type === 'question')
+      return message.ask.via === 'manager' && isOpenAsk(message);
+    return (
+      message.kind === 'text' &&
+      message.state === 'pending' &&
+      this.#deps.store.displayOf(message.id)?.via === 'manager'
+    );
   }
 
   /** Expires every open ask whose deadline passed, then watches for the next. */

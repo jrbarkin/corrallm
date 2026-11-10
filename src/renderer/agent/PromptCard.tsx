@@ -358,6 +358,12 @@ function hostOf(url: string) {
     return 'link';
   }
 }
+/** Who decided, in words: you, the lead a worker's request was routed to, or an outside party. */
+function byWords(by: string): string {
+  if (by === 'you') return 'you';
+  if (by.startsWith('agent:')) return 'Lead';
+  return by.startsWith('outside:') ? by.slice('outside:'.length) : by;
+}
 function outcomeWords(outcome: LiveOutcome): string {
   switch (outcome.type) {
     case 'withdrawn':
@@ -367,11 +373,11 @@ function outcomeWords(outcome: LiveOutcome): string {
     case 'dismissed':
       return 'Not waiting.';
     case 'choice':
-      return `${outcome.hint === 'allow_once' ? 'Allowed once' : outcome.hint === 'allow_always' ? 'Always allowed' : outcome.hint === 'reject_once' ? 'Declined' : outcome.hint === 'reject_always' ? 'Always declined' : 'Answered'} by ${outcome.by}.`;
+      return `${outcome.hint === 'allow_once' ? 'Allowed once' : outcome.hint === 'allow_always' ? 'Always allowed' : outcome.hint === 'reject_once' ? 'Declined' : outcome.hint === 'reject_always' ? 'Always declined' : 'Answered'} by ${byWords(outcome.by)}.`;
     case 'answers':
-      return `Answered${outcome.secret === true ? ' (secret)' : ''} by ${outcome.by}.`;
+      return `Answered${outcome.secret === true ? ' (secret)' : ''} by ${byWords(outcome.by)}.`;
     case 'form':
-      return `${outcome.action === 'accept' ? 'Submitted' : outcome.action === 'decline' ? 'Declined' : outcome.action === 'cancel' ? 'Cancelled' : 'Answered'} by ${outcome.by}.`;
+      return `${outcome.action === 'accept' ? 'Submitted' : outcome.action === 'decline' ? 'Declined' : outcome.action === 'cancel' ? 'Cancelled' : 'Answered'} by ${byWords(outcome.by)}.`;
   }
 }
 function subjectText(subject: PromptSubject | undefined): string {

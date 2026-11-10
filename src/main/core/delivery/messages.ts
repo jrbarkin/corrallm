@@ -13,6 +13,7 @@ import type { RecordRow } from '../../../shared/model/records';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
+  isOpenAsk,
   isQueueHandoff,
   isSettled,
   isTurn,
@@ -108,7 +109,12 @@ interface Kept extends Provenance {
   bytes: number;
   told?: string;
   /** What its recipient must still be told of a withdrawal after receipt. */
-  withdrawal?: { text: string; told?: boolean };
+  withdrawal?: {
+    text: string;
+    told?: boolean;
+    /** B24 C4: for whom, when it isn't the row's recipient now (an ask re-addressed away from it). */
+    for?: PartyId;
+  };
 }
 
 /**
@@ -590,10 +596,35 @@ export class MessageStore {
     return message;
   }
 
+  /**
+   * B24 C4: moves an open row addressed to a party's manager (`via` it: an ask not yet answered,
+   * or a message still pending) to another recipient, changing only whom it is for: back to
+   * `pending` for an agent, `delivered` for you. An ask that had reached the old recipient leaves
+   * it `withdrawal`, told with its next message. As kept, or undefined if the row isn't kept, isn't
+   * open, never went through a manager, or is already there.
+   */
+  readdress(id: string, to: PartyId, withdrawal?: string): Message | undefined {
+    const kept = this.#kept.get(id);
+    if (kept === undefined) return undefined;
+    const { message } = kept;
+    const ask = message.ask?.type === 'question' ? message.ask : undefined;
+    const open =
+      ask === undefined
+        ? kept.display?.via === 'manager' && message.kind === 'text' && message.state === 'pending'
+        : ask.via === 'manager' && isOpenAsk(message);
+    if (!open || message.to === to) return undefined;
+    const was = message.to;
+    const moved = this.update(id, { to, state: to === 'you' ? 'delivered' : 'pending' });
+    const now = this.#kept.get(id);
+    if (withdrawal !== undefined && now !== undefined)
+      this.#keep({ ...now, withdrawal: { text: withdrawal, for: was } });
+    return moved;
+  }
+
   /** The withdrawals a recipient has not yet been told of, in the order their messages came. */
   withdrawals(to: PartyId): { id: string; text: string }[] {
     return [...this.#kept.values()].flatMap(({ message, withdrawal }) =>
-      message.to === to && withdrawal !== undefined && !withdrawal.told
+      (withdrawal?.for ?? message.to) === to && withdrawal !== undefined && !withdrawal.told
         ? [{ id: message.id, text: withdrawal.text }]
         : [],
     );
@@ -1147,6 +1178,9 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
           withdrawal: {
             text: withdrawal.text,
             ...(withdrawal.told === true ? { told: true } : {}),
+            ...(typeof withdrawal.for === 'string' && PARTY_PATTERN.test(withdrawal.for)
+              ? { for: withdrawal.for as PartyId }
+              : {}),
           },
         }
       : {}),

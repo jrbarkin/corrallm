@@ -1,5 +1,6 @@
 import { agentAdapter } from '../graph/agents';
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useDraft, useLabel } from '../useDraft';
 
@@ -91,6 +92,7 @@ export function AgentSettingsSummary({
 /** Saved agent identity, connection, standing instructions and native startup settings. */
 export function AgentSettingsPanel({
   inert = false,
+  lead,
   node,
   session,
   options,
@@ -103,6 +105,8 @@ export function AgentSettingsPanel({
   onClose,
 }: {
   inert?: boolean;
+  /** B24 X2: the Lead section (leads/Leads.tsx), which the graph provides for its canvas. */
+  lead?: ReactNode;
   node: AgentNode;
   session: Session;
   options: Options;
@@ -243,6 +247,7 @@ export function AgentSettingsPanel({
         <p className="agent-settings-help">{connectionInfo(connection).description}.</p>
         <WorkspaceDetails agent={node.id} />
         <HandoffTile agent={node.id} />
+        {lead}
         <label className="agent-settings-field">
           Role
           <textarea

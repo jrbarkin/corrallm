@@ -972,6 +972,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     // Its prompts are routed again, and nobody keeps a lead's refusals count past your change.
     prompts.forgive(canvas);
     prompts.reroute(canvas);
+    // B24 C4: a manager's rows leave a lead that lost the authority to take them.
+    engines.canvas(canvas)?.delivery.asks.readdress();
     topics.changed(`leads:${canvas}`, 'corrallm');
     topics.changed(`needs:${canvas}`, 'corrallm');
     engines.needsChanged(canvas);
@@ -1042,6 +1044,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // Each commit to a canvas's document: its agents, how they run, who reaches what.
   documents.subscribe(({ canvas, by }) => {
     workspaceDirectories.changed(canvas);
+    engines.canvas(canvas)?.delivery.asks.readdress();
     topics.changed(`needs:${canvas}`, by);
     engines.needsChanged(canvas);
     runtime.documentChanged(canvas);
@@ -1177,7 +1180,21 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
     },
   });
+  // B24 C4: whether a lead may take its team's questions now: it leads, holds the questions
+  // grant, and its connection has an API route to answer them through.
+  const managesQuestions = (canvas: CanvasId, lead: string): boolean => {
+    if (leadStore.grantsOf(canvas, lead)?.questions !== true) return false;
+    const node = documents
+      .loaded(canvas)
+      ?.document.nodes.find((one) => one.id === lead && one.type === 'agent');
+    const endpoint = node?.type === 'agent' ? agentEndpoint(node.data, CATALOG) : undefined;
+    return (
+      endpoint?.kind === 'known' &&
+      connectionIn(CATALOG, endpoint.connection)?.connection.api != null
+    );
+  };
   const engines: Engines = new Engines({
+    manages: (canvas, lead) => managesQuestions(canvas, lead),
     leadCopy: {
       live: (message) => leadCopies.live(message),
       refused: () => {

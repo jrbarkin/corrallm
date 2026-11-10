@@ -106,6 +106,7 @@ import type { WorkFlowEdge } from './nodes';
 import { NeedsSidebar } from './NeedsSidebar';
 import { Canvases } from './Canvases';
 import { FallbackProvider } from '../agent/Fallback';
+import { LeadsProvider, LeadSection, OutsideGrants } from '../leads/Leads';
 import { WorkspaceProvider } from '../workspaces/Workspace';
 import { workEdges } from '../../shared/model/work';
 import { WorkDetail } from './WorkDetail';
@@ -1332,6 +1333,7 @@ function Editor({
         >
           {files && (
             <CanvasMenu
+              outside={<OutsideGrants canvas={canvasId} mirror={mirror} client={api} />}
               canvases={
                 <Canvases
                   canvas={canvasId}
@@ -1758,6 +1760,9 @@ function Editor({
           <AgentSettingsPanel
             key={`settings:${settingsNode.id}`}
             inert={restoring}
+            lead={
+              <LeadSection canvas={canvasId} agent={settingsNode.id} mirror={mirror} client={api} />
+            }
             node={settingsNode}
             session={sessions[settingsNode.id] ?? NEW_SESSION}
             options={(adapter) => sessionOptions(api, canvasId, adapter, settingsNode.id)}
@@ -1866,7 +1871,9 @@ function GraphContext({
         nodes={workspace.nodes}
         inert={workspace.inert}
       >
-        <WorkspaceProvider {...workspace} />
+        <LeadsProvider canvas={workspace.canvas} mirror={workspace.mirror}>
+          <WorkspaceProvider {...workspace} />
+        </LeadsProvider>
       </FallbackProvider>
     </GraphActionsContext>
   );
