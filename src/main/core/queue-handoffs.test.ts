@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import { MAX_RUN_BYTES } from '../../shared/run';
+import { STORE_SETTLED_PER_PARTY } from '../../shared/api/limits';
 import type { Message } from '../../shared/model/messages';
 import type { SessionHost } from '../sessions/connector';
 import type { SessionMode, UserMessage } from '../../shared/session';
@@ -236,6 +237,61 @@ const handoffs = (messages: Message[]) =>
   messages.filter((message) => message.purpose?.type === 'handoff');
 
 describe('a queue hand-off in the core (B19 C1)', () => {
+  it('releases its recipient’s slot when retention prunes the completed hand-off', async () => {
+    await canvas(
+      [{ id: 'hand', message: 'Review this', target: 'worker' }],
+      [
+        { id: 'first', message: 'First task' },
+        { id: 'next', message: 'Next task' },
+      ],
+    );
+    const { connector, sent, end } = sessions();
+    const core = await start(connector);
+    const { engine, messages } = await opened(core);
+    const store = await core.engines.messagesOf(CANVAS);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(1);
+    });
+    expect(sent[0]).toMatchObject({ agent: 'worker', text: 'First task' });
+    end('worker', 'First task complete');
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2);
+    });
+    expect(sent[1]).toMatchObject({
+      agent: 'worker',
+      text: expect.stringContaining('Review this') as unknown,
+    });
+    const first = handoffs(messages())[0];
+    expect(first).toBeDefined();
+    // Its turn can outlive both parties’ settled history. While active it is always kept.
+    for (let index = 0; index < STORE_SETTLED_PER_PARTY; index++) {
+      store.add({
+        from: 'agent:worker',
+        to: 'agent:lead',
+        kind: 'text',
+        origin: 'party',
+        body: `Earlier reply ${String(index)}`,
+        state: 'replied',
+      });
+    }
+    expect(store.get(first?.id ?? '')).toBeDefined();
+    end('worker', 'Review complete');
+    await vi.waitFor(() => {
+      expect(store.get(first?.id ?? '')).toBeUndefined();
+    });
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3);
+    });
+    expect(sent[2]).toMatchObject({ agent: 'worker', text: 'Next task' });
+    end('worker', 'Next task complete');
+    await vi.waitFor(() => {
+      expect(engine.run.snapshot().agents.lead?.outcomes).toEqual({
+        hand: 'succeeded',
+      });
+    });
+  });
+
   it('is a pending message from the queue’s agent, on disk with its attempt’s link before it is delivered, once, framed', async () => {
     const { connector, sent, seen } = sessions();
     const core = await start(connector);
@@ -503,6 +559,60 @@ describe('a queue hand-off in the core (B19 C1)', () => {
     await vi.waitFor(() => {
       expect(sent).toHaveLength(1);
     });
+  });
+
+  it('takes back an outstanding hand-off when its queue owner is deleted', async () => {
+    const { connector, sent, end } = sessions();
+    const core = await start(connector);
+    const { engine, messages } = await opened(core);
+    engine.run.start();
+    await vi.waitFor(() => {
+      expect(handoffs(messages())[0]?.state).toBe('delivered');
+    });
+    expect(
+      await core.call('canvas.delete', { canvas: CANVAS, nodes: ['lead'] }, CALLERS.you),
+    ).toMatchObject({ ok: true });
+    end('worker', 'Stopped.', 'cancelled');
+    await vi.waitFor(() => {
+      expect(handoffs(messages())[0]).toMatchObject({ state: 'withdrawn', by: 'corrallm' });
+    });
+    expect(messages().filter((one) => one.purpose?.type === 'evidence')).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('withdraws a deleted owner’s hand-off before the recipient finishes starting', async () => {
+    const { connector, sent } = sessions();
+    const ready = Promise.withResolvers<undefined>();
+    let starting = false;
+    const held: Connector<SessionMode> = {
+      start: async (spec, host) => {
+        starting = true;
+        await ready.promise;
+        return connector.start(spec, host);
+      },
+    };
+    const core = await start(held);
+    const { engine, messages } = await opened(core);
+    engine.run.start();
+    try {
+      await vi.waitFor(() => {
+        expect(starting).toBe(true);
+        expect(handoffs(messages())[0]?.state).toBe('delivering');
+      });
+      expect(
+        await core.call('canvas.delete', { canvas: CANVAS, nodes: ['lead'] }, CALLERS.you),
+      ).toMatchObject({ ok: true });
+      await vi.waitFor(() => {
+        expect(handoffs(messages())[0]).toMatchObject({ state: 'withdrawn', by: 'corrallm' });
+      });
+      ready.resolve(undefined);
+      await engine.sessions.ready('worker');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toEqual([]);
+      expect(messages().filter((one) => one.purpose?.type === 'evidence')).toEqual([]);
+    } finally {
+      ready.resolve(undefined);
+    }
   });
 
   it('is withdrawn unsent by Stop while it waits, its recipient sent nothing', async () => {

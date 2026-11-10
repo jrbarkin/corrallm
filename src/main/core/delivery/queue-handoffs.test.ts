@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import type { QueueItem } from '../../../shared/model/queue';
+import { MAX_WAITING } from '../../../shared/api/limits';
+import { agentParty } from '../../../shared/model/messages';
 import { Delivery } from './delivery';
 import { LoopStore, LoopTable } from './loops';
 import { MessageStore, MessageTable } from './messages';
@@ -137,6 +139,113 @@ it('offers no gap a walk of every message delivery acts on: only what waits for 
     const walks = vi.spyOn(messages, 'active');
     expect(delivery.offer('worker', 'gap', {})).toBe(false);
     expect(walks).not.toHaveBeenCalled();
+  } finally {
+    await stop();
+  }
+});
+
+it.each([false, true])(
+  'rechecks the exact hand-off line when another is full: %s',
+  async (other) => {
+    const owner = 'lead\u0000part';
+    const to = 'worker\u0000part';
+    const { engine, messages, delivery, stop } = await worldOf([
+      agentNode(owner, 'claude-code.sdk'),
+      agentNode(to, 'claude-code.sdk'),
+      agentNode('lead', 'claude-code.sdk'),
+      agentNode('part', 'claude-code.sdk'),
+    ]);
+    try {
+      engine.run.pauseAgent(to);
+      engine.run.pauseAgent('part');
+      const waiting = Array.from({ length: MAX_WAITING }, () =>
+        messages.add({
+          from: agentParty(owner),
+          to: agentParty(to),
+          kind: 'text',
+          origin: 'party',
+          body: 'Waiting work',
+          state: 'pending',
+        }),
+      );
+      if (other)
+        for (let index = 0; index < MAX_WAITING; index++)
+          messages.add({
+            from: 'agent:lead',
+            to: 'agent:part',
+            kind: 'text',
+            origin: 'party',
+            body: 'Other waiting work',
+            state: 'pending',
+          });
+      const admission = vi.spyOn(engine.run, 'admissionChanged');
+      expect(
+        delivery.handOff({
+          owner,
+          to,
+          text: 'Review this',
+          task: { agent: owner, item: 'hand', attempt: 'attempt' },
+        }),
+      ).toBeUndefined();
+      delivery.schedule();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(admission).not.toHaveBeenCalled();
+      messages.update(waiting[0]?.id ?? '', { state: 'withdrawn' });
+      delivery.schedule();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(admission).toHaveBeenCalledTimes(1);
+    } finally {
+      await stop();
+    }
+  },
+);
+
+it('checks full hand-off lines with a fixed amount of work per waiting message', async () => {
+  const owners = Array.from({ length: 64 }, (_, index) => `lead-${String(index)}`);
+  const { engine, messages, delivery, stop } = await worldOf([
+    ...owners.map((owner) => agentNode(owner, 'claude-code.sdk')),
+    agentNode('worker', 'claude-code.sdk'),
+  ]);
+  try {
+    engine.run.pauseAgent('worker');
+    for (const owner of owners)
+      for (let index = 0; index < MAX_WAITING; index++)
+        messages.add({
+          from: agentParty(owner),
+          to: 'agent:worker',
+          kind: 'text',
+          origin: 'party',
+          body: 'Waiting work',
+          state: 'pending',
+        });
+    // Let the ordinary pause notices land before measuring a steady-state check.
+    delivery.schedule();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    for (const owner of owners)
+      expect(
+        delivery.handOff({
+          owner,
+          to: 'worker',
+          text: 'Review this',
+          task: { agent: owner, item: 'hand', attempt: 'attempt' },
+        }),
+      ).toBeUndefined();
+    const line = messages.activeTo('agent:worker');
+    let reads = 0;
+    for (const message of line) {
+      const from = message.from;
+      Object.defineProperty(message, 'from', {
+        get: () => {
+          reads++;
+          return from;
+        },
+      });
+    }
+    delivery.schedule();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Includes every delivery classifier, not only room checks. Adding blocked owners must
+    // never make each message get read once again for every owner sharing its recipient.
+    expect(reads).toBeLessThanOrEqual(line.length * 16);
   } finally {
     await stop();
   }
