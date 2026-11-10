@@ -24,6 +24,7 @@ import type {
 } from '../connector';
 import { isNativeId } from '../id';
 import type { TerminalCli, TerminalHold, TerminalSignal } from './cli';
+import { askOf } from './ask';
 import type { FirstRunTurn } from './first-run';
 import { launchInstructions } from '../instructions';
 import { HOOK_HEADER, HOOK_TOKEN } from './hooks';
@@ -208,6 +209,8 @@ type HeldEnd = 'moved' | 'native' | 'withdrawn';
 interface Block {
   report: ProgramStatus;
   since: number;
+  /** When this wait's own id began (`since` carries over from the wait it replaced). */
+  began: number;
   id: string;
   detail: string | null | undefined;
 }
@@ -1194,9 +1197,15 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** A hook told what the CLI is about to ask (once, though two hooks may tell it). */
   #told(id: string, prompt: AdapterPrompt): void {
-    if (this.#asks.some((told) => JSON.stringify(told.prompt) === JSON.stringify(prompt))) return;
+    if (this.#addAsk(id, prompt)) this.#list();
+  }
+
+  /** Adds an ask unless the same one is told already; whether it was added. */
+  #addAsk(id: string, prompt: AdapterPrompt): boolean {
+    const same = askOf(prompt);
+    if (this.#asks.some((told) => askOf(told.prompt) === same)) return false;
     this.#asks = [...this.#asks, { id, prompt, at: Date.now() }].slice(-MAX_ASKS);
-    this.#list();
+    return true;
   }
 
   /**
@@ -1221,9 +1230,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         this.#blocks.set(record, { ...known, report });
       } else {
         const id = randomUUID();
+        if (known !== undefined) this.#dropBlock(known, 'withdrawn');
         this.#blocks.set(record, {
           report,
           since: known?.since ?? Date.now(),
+          began: Date.now(),
           id,
           detail: this.#cli.waitDetail === undefined ? null : undefined,
         });
@@ -1237,16 +1248,19 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       this.#asks = [];
       this.#notified = undefined;
       if (removed !== undefined) {
-        this.#spoken.delete(removed.id);
-        // The wait a hold covered cleared: the terminal (or another hook) answered it first.
-        for (const held of [...this.#holds.values()]) {
-          if (held.block === removed.id) {
-            this.#endHold(held, report.state === 'working' ? 'native' : 'withdrawn');
-          }
-        }
+        this.#dropBlock(removed, report.state === 'working' ? 'native' : 'withdrawn');
       }
     }
     this.#list(report.state === 'working' ? 'answered-natively' : 'withdrawn');
+  }
+
+  /** A wait is over (cleared, or described anew): the holds it covered end `how`. */
+  #dropBlock(block: Block, how: HeldEnd): void {
+    this.#spoken.delete(block.id);
+    // The terminal (or another hook) answered it first, or it is another wait now.
+    for (const held of [...this.#holds.values()]) {
+      if (held.block === block.id) this.#endHold(held, how);
+    }
   }
 
   /**
@@ -1436,10 +1450,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#heldEnds.set(`held:${held.id}`, how);
     held.hold.release();
     if (how === 'moved') {
-      this.#asks = [
-        ...this.#asks,
-        { id: randomUUID(), prompt: inTerminal(held.held.prompt), at: Date.now() },
-      ].slice(-MAX_ASKS);
+      this.#addAsk(randomUUID(), inTerminal(held.held.prompt));
     }
   }
 
@@ -1533,12 +1544,12 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       if (held.block !== undefined || held.held.prompt.answerIn === 'api') continue;
       const block = [...this.#blocks.values()]
         .filter(
-          ({ id, since }) =>
+          ({ id, began }) =>
             !claimed.has(id) &&
-            since >= held.hold.received - ASK_WINDOW &&
-            since <= held.hold.received + ASK_WINDOW,
+            began >= held.hold.received - ASK_WINDOW &&
+            began <= held.hold.received + ASK_WINDOW,
         )
-        .sort((a, b) => a.since - b.since)[0];
+        .sort((a, b) => a.began - b.began)[0];
       if (block === undefined) continue;
       held.block = block.id;
       claimed.add(block.id);
@@ -1668,17 +1679,6 @@ function waitingFor(
     ...(cut ? { cut: true as const } : {}),
   };
   return kind === 'question' ? { kind, ...shown, questions: [] } : { kind, ...shown, choices: [] };
-}
-
-/** What makes two prompts the same ask, whoever tells it and wherever it is answered. */
-function askOf(prompt: AdapterPrompt): string {
-  return JSON.stringify([
-    prompt.kind,
-    prompt.title,
-    prompt.kind === 'approval' ? prompt.subject : undefined,
-    prompt.kind === 'question' ? prompt.questions : undefined,
-    prompt.kind === 'plan' ? prompt.plan : undefined,
-  ]);
 }
 
 /** A held prompt as it is raised once let go of: the same ask, answered in the terminal. */

@@ -4,7 +4,8 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ConnectionId } from '../../shared/adapter';
+import type { Catalog, ConnectionId } from '../../shared/adapter';
+import { TWO_MADE_UP } from '../../shared/test-made-up';
 import { newCanvasId } from '../../shared/canvas';
 import type { CanvasId } from '../../shared/canvas';
 import type { PromptAnswer } from '../../shared/model/prompts';
@@ -17,6 +18,7 @@ import { CanvasMemory } from '../memory';
 import { CATALOG } from './adapters';
 import type { Connector, LiveSession, PromptAnswers, SessionHost } from './connector';
 import { fakeConnector } from './test-fake';
+import { HELD_KEY, heldConnector } from './test-held';
 import { SessionManager } from './manager';
 import type { PromptOrigin, PromptSink } from './manager';
 
@@ -75,9 +77,10 @@ const directories: DirectoryResolver = {
 function manager(
   connectors: Partial<Record<ConnectionId, Connector>>,
   owner = true,
+  catalog: Catalog = CATALOG,
 ): SessionManager {
   return new SessionManager({
-    catalog: CATALOG,
+    catalog,
     connectors,
     environment: () => Promise.resolve({}),
     adapterOf: () => Promise.resolve('claude-code'),
@@ -360,5 +363,39 @@ describe('prompts a session raises', () => {
     });
     expect(at(0, sessions).answered).toEqual([]);
     await sessionManager.closeCanvas(canvas);
+  });
+});
+
+describe('the answers a generation is given (B23 C7)', () => {
+  const YAK_TERMINAL: SessionOptions = { connection: 'yak.terminal', model: null, mode: null };
+  const YAK_FREE: SessionOptions = { connection: 'yak.free', model: null, mode: null };
+
+  it('let a terminal-view generation release a held request, once, swallowing a throw', async () => {
+    const { connector, sessions } = heldConnector('throws');
+    const sessionManager = manager({ 'yak.terminal': connector }, true, TWO_MADE_UP);
+    await sessionManager.start(newCanvasId(), 'b', YAK_TERMINAL);
+    const session = sessions[0];
+    session?.raise('api');
+    const answers = raised[0]?.[0].answers;
+    expect('release' in (answers ?? {})).toBe(true);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(() => answers?.release?.(HELD_KEY)).not.toThrow();
+    expect(session?.released).toEqual([HELD_KEY]);
+    expect(quiet).toHaveBeenCalledOnce();
+    quiet.mockRestore();
+  });
+
+  it('give no release to a generation whose view is not a terminal, whose decline reaches it', async () => {
+    const { connector, sessions } = heldConnector('none');
+    const sessionManager = manager({ 'yak.free': connector }, true, TWO_MADE_UP);
+    await sessionManager.start(newCanvasId(), 'b', YAK_FREE);
+    const session = sessions[0];
+    session?.raise('api');
+    const answers = raised[0]?.[0].answers;
+    expect(answers).toBeDefined();
+    expect('release' in (answers ?? {})).toBe(false);
+    answers?.decline(HELD_KEY, 'corrallm declined this request.');
+    expect(session?.declined).toEqual([[HELD_KEY, 'corrallm declined this request.']]);
+    expect(session?.released).toEqual([]);
   });
 });

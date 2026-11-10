@@ -647,7 +647,7 @@ export function permissionResult(native: Native, answer: PromptAnswer): Permissi
         case 'deny':
           return {
             behavior: 'deny',
-            message: DENIED,
+            message: deniedBy(answer),
             interrupt: true,
             decisionClassification: 'user_reject',
           };
@@ -742,6 +742,16 @@ function chosen(answer: PromptAnswer): string {
 export function said(answer: PromptAnswer): string | undefined {
   const feedback = answer.kind === 'choice' ? answer.feedback?.trim() : undefined;
   return feedback === undefined || feedback === '' ? undefined : feedback;
+}
+
+/** How the CLI is told of a plain no: the user's, as Claude Code says, or another party's. */
+export function deniedBy(answer: PromptAnswer): string {
+  if (answer.decider === undefined) return DENIED;
+  const who = `${answer.decider.name} (another party in corrallm, not the user)`;
+  return DENIED.replace("The user doesn't want", `${who} doesn't want`).replace(
+    'wait for the user to tell you',
+    `wait for ${answer.decider.name} to tell you`,
+  );
 }
 
 /** How the CLI is told whose words follow a denial: the user's, as Claude Code says, or another's. */

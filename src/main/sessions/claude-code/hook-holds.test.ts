@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HookServer } from '../terminal/hooks';
+import { askOf } from '../terminal/ask';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import {
   first,
@@ -431,7 +432,12 @@ describe('what Claude Code · Terminal holds (B23 C2)', () => {
     expect(claude().hold({ hook_event_name: 'PermissionRequest' })).toBeUndefined();
     expect(
       claude().hold({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: 'x' }),
-    ).toBeDefined();
+    ).toBeUndefined();
+    for (const tool_input of [{}, { command: '' }, { command: 3 }, ['ls']]) {
+      expect(
+        claude().hold({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input }),
+      ).toBeUndefined();
+    }
   });
 
   it('does not hold questions with the same text, none, or a request it cannot show whole', () => {
@@ -477,6 +483,53 @@ describe('what Claude Code · Terminal holds (B23 C2)', () => {
       }
     },
   );
+
+  it('tells and holds the same ask for AskUserQuestion, with option previews too', () => {
+    const pre = request('ask-baseline', 'PreToolUse', 'AskUserQuestion');
+    const perm = request('ask-baseline', 'PermissionRequest', 'AskUserQuestion');
+    const withPreview = (event: Record<string, unknown>) => {
+      const input = event.tool_input as { questions: { options: object[] }[] };
+      return {
+        ...event,
+        tool_input: {
+          ...input,
+          questions: input.questions.map((question) => ({
+            ...question,
+            options: question.options.map((option) => ({ ...option, preview: '<b>sample</b>' })),
+          })),
+        },
+      };
+    };
+    for (const [told, asked] of [
+      [pre, perm],
+      [withPreview(pre), withPreview(perm)],
+    ] as const) {
+      const signal = claude()
+        .hook(told)
+        .find((one) => one.kind === 'ask');
+      const held = claude().hold(asked);
+      if (signal?.kind !== 'ask' || held === undefined) throw new Error('not told or held');
+      expect(askOf(signal.prompt)).toBe(askOf(held.prompt));
+    }
+  });
+
+  it('names a decider other than the user on a plain No, keeping the recorded shape without one', () => {
+    const held = claude().hold(request('answer-deny-interrupt', 'PermissionRequest', 'Bash'));
+    interface Body {
+      hookSpecificOutput: { decision: { message: string; interrupt?: boolean } };
+    }
+    const other = held?.reply({
+      ...choice('deny'),
+      decider: { party: 'agent:lead', name: 'Lead' },
+    }) as Body;
+    expect(other.hookSpecificOutput.decision.message).toContain(
+      'Lead (another party in corrallm, not the user)',
+    );
+    expect(other.hookSpecificOutput.decision.message).not.toContain("The user doesn't want");
+    expect(other.hookSpecificOutput.decision.interrupt).toBe(true);
+    const user = held?.reply(choice('deny')) as Body;
+    expect(user.hookSpecificOutput.decision.message).toContain("The user doesn't want");
+  });
 
   it('replies No with words as a deny that goes on, in the user’s words framed as theirs', () => {
     const held = claude().hold(request('answer-deny', 'PermissionRequest', 'Bash'));

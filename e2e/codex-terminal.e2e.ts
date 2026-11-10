@@ -504,7 +504,8 @@ test('answers a held command approval from Needs through its hook, never by typi
   const { view, terminal } = await openShop();
   await codexReady();
   await typeIn(terminal, 'ask to run echo', 'Enter');
-  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  // Codex's terminal shows only 'Running hook': corrallm answers, so the bar says to answer here.
+  await expect(status(view)).toHaveText('Needs you here');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await openNeeds(page);
   const needs = page.getByRole('complementary', { name: 'Needs you' });
@@ -516,7 +517,7 @@ test('answers a held command approval from Needs through its hook, never by typi
   // Deny with words: Codex is told them, framed as the user's.
   await page.locator('.react-flow__node').dblclick();
   await typeIn(terminal, 'ask again', 'Enter');
-  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await expect(status(view)).toHaveText('Needs you here');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await openNeeds(page);
   await asked
@@ -540,7 +541,7 @@ test('moves an unanswered held approval to its terminal at the deadline, where i
   const { view, terminal } = await openShop();
   await codexReady();
   await typeIn(terminal, 'ask to run echo', 'Enter');
-  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await expect(status(view)).toHaveText('Needs you here');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await openNeeds(page);
   const needs = page.getByRole('complementary', { name: 'Needs you' });

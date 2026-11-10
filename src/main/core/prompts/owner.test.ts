@@ -11,10 +11,14 @@ import type { Message } from '../../../shared/model/messages';
 import type { PromptEntryChange } from '../../../shared/model/prompt-views';
 import type { PromptAnswer } from '../../../shared/model/prompts';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
-import { MADE_UP } from '../../../shared/test-made-up';
+import type { Catalog } from '../../../shared/adapter';
+import { MADE_UP, TWO_MADE_UP } from '../../../shared/test-made-up';
 import { CanvasMemory } from '../../memory';
 import type { PromptAnswers } from '../../sessions/connector';
+import { SessionManager } from '../../sessions/manager';
 import type { PromptOrigin } from '../../sessions/manager';
+import { HELD_KEY, heldConnector } from '../../sessions/test-held';
+import { mintTrustedPath } from '../host';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
 import { recoverDecisions } from '../decisions';
@@ -131,9 +135,13 @@ function origin(
   };
 }
 
-function make(limits?: Partial<PromptLimits>, nodes = NODES): PromptOwner {
+function make(
+  limits?: Partial<PromptLimits>,
+  nodes = NODES,
+  catalog: Catalog = MADE_UP,
+): PromptOwner {
   return new PromptOwner({
-    catalog: MADE_UP,
+    catalog,
     canvas: (canvas) =>
       (canvas === CANVAS || canvas === OTHER) && !stopped.has(canvas)
         ? { messages, nodes }
@@ -1821,8 +1829,50 @@ describe('a held Terminal prompt (B23 C3, C7)', () => {
     });
     expect(one.answered).toEqual([]);
     // A token reads the type alone.
-    raise(origin(7, one), held, KEY2);
+    const second = raise(origin(7, one), held, KEY2)?.id ?? '';
     owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY2, reason: 'moved' });
+    expect(outcomeIn(second)).toEqual({ type: 'moved' });
+  });
+
+  it('moves an api prompt of a made-up terminal-view connection to its terminal, end to end', async () => {
+    const { connector, sessions } = heldConnector();
+    owner = make(undefined, NODES, TWO_MADE_UP);
+    const manager = new SessionManager({
+      catalog: TWO_MADE_UP,
+      connectors: { 'yak.terminal': connector },
+      environment: () => Promise.resolve({}),
+      adapterOf: () => Promise.resolve('claude-code'),
+      directories: {
+        workingDirectory: () =>
+          Promise.resolve({
+            state: 'ready',
+            cwd: mintTrustedPath('/work/app'),
+            workspace: null,
+            generation: 0,
+            branch: null,
+          }),
+        onAvailability: () => () => undefined,
+        projectRoot: () => mintTrustedPath('/work/app'),
+      },
+      memory: new CanvasMemory(database),
+      closeMs: 20,
+      emit: () => undefined,
+      activity: () => undefined,
+      prompts: owner,
+    });
+    await manager.start(CANVAS, 'b', { connection: 'yak.terminal', model: null, mode: null });
+    generations.set('b', manager.generationOf(CANVAS, 'b') ?? 0);
+    const session = sessions[0];
+    session?.raise('api');
+    const item = owner.items(CANVAS).at(-1);
+    expect(item?.choices.map(({ value }) => value)).toContain('answer-in-terminal');
+    expect(await answer(item?.id ?? '', { choice: 'answer-in-terminal' })).toEqual({
+      outcome: 'moved',
+    });
+    expect(session?.released).toEqual([HELD_KEY]);
+    expect(session?.answered).toEqual([]);
+    expect(session?.declined).toEqual([]);
+    await manager.closeCanvas(CANVAS);
   });
 
   it('declines a held prompt it cannot admit by releasing it to its terminal, never as a refusal', () => {

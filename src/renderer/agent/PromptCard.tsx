@@ -135,6 +135,9 @@ function Card({
               )}
             </>
           )}
+          {live.answerIn === 'api' && live.until !== undefined && (
+            <p>Its terminal waits on corrallm. Answer it here, or choose Answer in terminal.</p>
+          )}
           {live.answerIn === 'both' && (
             <>
               <p>Or answer it in its terminal.</p>

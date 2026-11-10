@@ -190,7 +190,17 @@ it('reads a prompt that moved to its terminal as such', () => {
   expect(screen.getByRole('status').textContent).toBe('Moved to its terminal.');
 });
 
-it('keeps OwnedPrompt’s loading state free of a button for what is not loaded', () => {
+it('says an api prompt’s terminal waits on corrallm, and offers no such line for one both answer', () => {
+  const api = setup('api');
+  const { unmount } = render(<PromptCard entry={api.entry} onReply={() => Promise.resolve()} />);
+  expect(screen.getByText(/its terminal waits on corrallm/i)).toBeTruthy();
+  unmount();
+  const both = setup('both');
+  render(<PromptCard entry={both.entry} onReply={() => Promise.resolve()} />);
+  expect(screen.queryByText(/its terminal waits on corrallm/i)).toBeNull();
+});
+
+it('renders the loaded held prompt through OwnedPrompt with its countdown and Answer in terminal', async () => {
   const { core, item } = setup('api');
   render(
     <OwnedPrompt
@@ -200,5 +210,8 @@ it('keeps OwnedPrompt’s loading state free of a button for what is not loaded'
       onOpen={vi.fn()}
     />,
   );
-  expect(screen.queryByRole('timer')).toBeNull();
+  await waitFor(() => {
+    expect(screen.getByRole('timer').textContent).toMatch(/20 s/);
+  });
+  expect(screen.getByRole('button', { name: 'Answer in terminal' })).toBeTruthy();
 });

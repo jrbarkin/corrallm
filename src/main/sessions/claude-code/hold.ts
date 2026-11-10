@@ -1,7 +1,7 @@
 import type { AdapterPrompt, PromptAnswer } from '../../../shared/model/prompts';
 import type { TerminalHold } from '../terminal/cli';
 import type { HookEvent } from '../terminal/hooks';
-import { DENIED, deniedWith, permissionResult, said, toolPrompt } from './sdk/raise';
+import { deniedBy, deniedWith, permissionResult, said, toolPrompt } from './sdk/raise';
 import type { Native, ToolOptions } from './sdk/raise';
 import type { Places } from './sdk/tools';
 
@@ -33,12 +33,13 @@ export function claudeHold(event: HookEvent, places: Places): TerminalHold | und
   if (event.hook_event_name !== 'PermissionRequest') return undefined;
   const tool = event.tool_name;
   if (typeof tool !== 'string' || tool === '' || tool === PLAN_TOOL) return undefined;
-  const input =
-    typeof event.tool_input === 'object' &&
-    event.tool_input !== null &&
-    !Array.isArray(event.tool_input)
-      ? (event.tool_input as Record<string, unknown>)
-      : {};
+  // A request whose input can't be shown is not held: it would be approved unseen.
+  const given: unknown = event.tool_input;
+  if (typeof given !== 'object' || given === null || Array.isArray(given)) return undefined;
+  const input = given as Record<string, unknown>;
+  if (tool === 'Bash' && (typeof input.command !== 'string' || input.command.trim() === '')) {
+    return undefined;
+  }
   const raised = toolPrompt(tool, input, {} as ToolOptions, { places, modes: [] });
   if ('declined' in raised || raised.prompt.cut === true) return undefined;
   const { prompt, native } = raised;
@@ -75,7 +76,7 @@ function decide(native: Native, answer: PromptAnswer): unknown {
     case 'allow':
       return { behavior: 'allow' };
     case 'deny':
-      return { behavior: 'deny', message: DENIED, interrupt: true };
+      return { behavior: 'deny', message: deniedBy(answer), interrupt: true };
     case 'deny-feedback': {
       const feedback = said(answer);
       if (feedback === undefined) throw new Error('Say what to do instead.');

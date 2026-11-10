@@ -43,6 +43,28 @@ function approval(answerIn: 'both' | 'api' | 'terminal', command = 'ls'): Adapte
   };
 }
 
+/** A question as a hook tells it (no previews) and as a held card shows it (with them). */
+function ask(previews: boolean, answerIn: 'terminal' | 'api'): AdapterPrompt {
+  return {
+    kind: 'question',
+    title: 'Pick a color',
+    answerIn,
+    questions: [
+      {
+        id: 'q1',
+        header: 'Color',
+        text: 'Pick a color',
+        options: [
+          { label: 'Red', ...(previews ? { preview: '<b>red</b>' } : {}) },
+          { label: 'Blue', ...(previews ? { preview: '<b>blue</b>' } : {}) },
+        ],
+        multiple: false,
+        other: true,
+      },
+    ],
+  };
+}
+
 class HeldCli implements TerminalCli<CodexMode> {
   readonly name = 'Held';
   readonly words = {
@@ -73,16 +95,24 @@ class HeldCli implements TerminalCli<CodexMode> {
     return false;
   }
   title(text: string): ProgramStatus | undefined {
-    if (text.includes('Action Required')) return { state: 'blocked', kind: 'permission' };
+    if (text.includes('Action Required')) {
+      // What the dialog says follows the colon, as a CLI that describes its wait.
+      const msg = text.split('Action Required:')[1]?.trim();
+      return { state: 'blocked', kind: 'permission', ...(msg ? { msg } : {}) };
+    }
     if (text.includes('Working')) return { state: 'working' };
     if (text === 'Ready') return { state: 'idle' };
     return undefined;
   }
   hook(event: HookEvent): TerminalSignal<CodexMode>[] {
     // What it tells without holding: the ask, answered in the terminal.
+    if (event.hook_event_name === 'PreToolUse' && event.question === true) {
+      return [{ kind: 'ask', id: 'told-q', prompt: ask(false, 'terminal') }];
+    }
     if (event.hook_event_name === 'PreToolUse') {
       return [{ kind: 'ask', id: 'told', prompt: approval('terminal') }];
     }
+    if (event.hook_event_name === 'PermissionRequest' && event.question === true) return [];
     if (event.hook_event_name === 'PermissionRequest') {
       return [{ kind: 'ask', id: 'told2', prompt: approval('terminal') }];
     }
@@ -90,6 +120,9 @@ class HeldCli implements TerminalCli<CodexMode> {
   }
   hold(event: HookEvent): TerminalHold | undefined {
     if (event.hook_event_name !== 'PermissionRequest') return undefined;
+    if (event.question === true) {
+      return { prompt: ask(true, 'api'), reply: () => ({}) };
+    }
     const answerIn = event.answer_in === 'api' ? 'api' : 'both';
     return {
       prompt: approval(answerIn),
@@ -112,6 +145,13 @@ class HeldCli implements TerminalCli<CodexMode> {
   }
   submitted(text: string): string {
     return text.trim();
+  }
+}
+
+/** A CLI that never reports a state: nothing says when a wait begins or ends. */
+class SilentCli extends HeldCli {
+  override title(): ProgramStatus | undefined {
+    return undefined;
   }
 }
 
@@ -184,8 +224,7 @@ const SPEC: SessionSpec<CodexMode> = {
 };
 
 /** The session, its CLI and its fake terminal, with the hook server holding for `heldMs`. */
-async function start(heldMs = 5000) {
-  const cli = new HeldCli();
+async function start(heldMs = 5000, cli: HeldCli = new HeldCli()) {
   let pty: FakePty | undefined;
   const session = new TerminalSession<CodexMode>(
     SPEC,
@@ -330,7 +369,7 @@ describe('a held request, answered in the terminal too (both)', () => {
   it('writes the owner’s answer to that request alone, ending and raising nothing', async () => {
     const started = await start();
     await working(started);
-    const first = post(started, request());
+    const first = post(started, request({ tool_name: 'Bash' }));
     await pause(40);
     const other = post(started, request({ tool_name: 'Write' }));
     await pause(40);
@@ -341,12 +380,15 @@ describe('a held request, answered in the terminal too (both)', () => {
     const [key] = [...open().keys()];
     if (key === undefined) throw new Error('no prompt');
     answerAs(started, key, { kind: 'choice', value: 'yes' });
-    // The request that raised it, whichever it was, has its reply; the other still waits.
-    const settled = await Promise.race([
+    const replies = [
       first.then((value) => ({ which: 'first', value })),
       other.then((value) => ({ which: 'other', value })),
-    ]);
-    expect(settled.value).toEqual({ status: 200, body: { decision: 'yes' } });
+    ];
+    const winner = await Promise.race(replies);
+    expect(winner.value).toEqual({ status: 200, body: { decision: 'yes' } });
+    // The other request is still pending: the answer was written to one request alone.
+    const rest = replies[winner.which === 'first' ? 1 : 0];
+    expect(await Promise.race([rest, pause(60).then(() => 'waiting')])).toBe('waiting');
     expect(endsOf()).toEqual([]);
   });
 
@@ -531,6 +573,29 @@ describe('a telling a hold supersedes', () => {
   });
 });
 
+describe('a held question whose options have previews', () => {
+  it('supersedes its telling and, moved at its deadline, is listed once in the terminal', async () => {
+    const started = await start(150);
+    await working(started);
+    await post(started, { hook_event_name: 'PreToolUse', question: true });
+    const reply = post(started, request({ question: true, answer_in: 'api' }));
+    await until(() => {
+      expect([...open().values()].map((prompt) => prompt.answerIn)).toEqual(['api']);
+    });
+    await expect(reply).resolves.toEqual({ status: 200, body: {} });
+    await until(() => {
+      expect(endsOf().map((end) => end.reason)).toEqual(['moved']);
+    });
+    // The CLI now shows its dialog: one terminal prompt for the one question.
+    started.screen().print(title('[ ! ] Action Required'));
+    await until(() => {
+      expect([...open().values()].map((prompt) => prompt.answerIn)).toEqual(['terminal']);
+    });
+    await pause(40);
+    expect(open().size).toBe(1);
+  });
+});
+
 describe('the end of a hold', () => {
   it('withdraws what the CLI closes, raising and writing nothing', async () => {
     const started = await start();
@@ -580,5 +645,88 @@ describe('the end of a hold', () => {
       status: 200,
       body: {},
     });
+  });
+});
+
+describe('a wait its CLI describes anew', () => {
+  const skew = { ms: 0 };
+  beforeEach(() => {
+    skew.ms = 0;
+    const real = Date.now.bind(Date);
+    vi.spyOn(Date, 'now').mockImplementation(() => real() + skew.ms);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const bothPrompts = () => [...open().values()].map((prompt) => prompt.answerIn);
+
+  async function firstHold(started: Started) {
+    await working(started);
+    const reply = post(started, request());
+    reply.catch(() => undefined);
+    await pause(40);
+    started.screen().print(title('[ ! ] Action Required: approve a'));
+    await until(() => {
+      expect(bothPrompts()).toEqual(['both']);
+    });
+    return { reply };
+  }
+
+  it('withdraws the hold it replaced, releasing its request, and holds the next', async () => {
+    const started = await start();
+    const { reply: first } = await firstHold(started);
+    const [key] = [...open().keys()];
+    void post(started, request({ tool_name: 'Write' })).catch(() => undefined);
+    await pause(40);
+    started.screen().print(title('[ ! ] Action Required: approve b'));
+    await expect(first).resolves.toEqual({ status: 200, body: {} });
+    expect(endsOf()).toEqual([{ type: 'prompt-ended', key, reason: 'withdrawn' }]);
+    await until(() => {
+      expect(bothPrompts()).toEqual(['both']);
+    });
+    expect(() => {
+      started.session.prompts.answer(key ?? '', { kind: 'choice', value: 'yes' });
+    }).toThrow();
+  });
+
+  it('does so too when the first wait lasted longer than the window', async () => {
+    const started = await start();
+    const { reply: first } = await firstHold(started);
+    skew.ms = 6000;
+    void post(started, request({ tool_name: 'Write' })).catch(() => undefined);
+    await pause(40);
+    started.screen().print(title('[ ! ] Action Required: approve b'));
+    await expect(first).resolves.toEqual({ status: 200, body: {} });
+    expect(endsOf().map((end) => end.reason)).toEqual(['withdrawn']);
+    await until(() => {
+      expect(bothPrompts()).toEqual(['both']);
+    });
+  });
+
+  it('binds the next hold after an owner answer', async () => {
+    const started = await start();
+    await firstHold(started);
+    const [key] = [...open().keys()];
+    answerAs(started, key ?? '', { kind: 'choice', value: 'yes' });
+    skew.ms = 6000;
+    void post(started, request({ tool_name: 'Write' })).catch(() => undefined);
+    await pause(40);
+    started.screen().print(title('[ ! ] Action Required: approve b'));
+    await until(() => {
+      expect(bothPrompts()).toEqual(['both']);
+    });
+  });
+});
+
+describe('a CLI that never reports a state', () => {
+  it('releases a both hold at once and tells its ask answered in the terminal', async () => {
+    const started = await start(5000, new SilentCli());
+    const reply = post(started, request());
+    await expect(reply).resolves.toEqual({ status: 200, body: {} });
+    await until(() => {
+      expect([...open().values()].map((prompt) => prompt.answerIn)).toEqual(['terminal']);
+    });
+    expect([...open().values()].some((prompt) => prompt.answerIn === 'both')).toBe(false);
   });
 });
