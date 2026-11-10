@@ -114,7 +114,7 @@ export const claudeCode: Adapter = {
         short: 'Terminal',
         description: 'Claude Code itself, in a terminal in its view: works with your Claude login',
         view: 'terminal',
-        prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
+        prompts: { approval: 'answerable', question: 'answerable', plan: 'seen', form: 'none' },
         signals: false,
         context: true,
         // corrallm's agent API: the session's own --mcp-config entry (recorded on 2.1.316).

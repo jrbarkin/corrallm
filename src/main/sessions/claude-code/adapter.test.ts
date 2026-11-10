@@ -55,7 +55,7 @@ describe("Claude Code's adapter", () => {
 
   it('declares the four prompt kinds per connection, and signals only where recordings prove them', () => {
     expect(connection('claude-code.terminal')).toMatchObject({
-      prompts: { approval: 'seen', question: 'seen', plan: 'seen', form: 'none' },
+      prompts: { approval: 'answerable', question: 'answerable', plan: 'seen', form: 'none' },
       signals: false,
     });
     expect(connection('claude-code.sdk')).toMatchObject({

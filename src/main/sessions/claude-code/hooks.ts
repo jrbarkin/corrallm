@@ -20,6 +20,12 @@ const MATCHERS: Partial<Record<(typeof HOOK_EVENTS)[number], string>> = {
 };
 /** How long Claude Code waits for corrallm's answer, in seconds; it answers at once. */
 const TIMEOUT_S = 5;
+/**
+ * How long it waits for the one hook corrallm may hold (B23 C2): the hook server releases a hold
+ * itself, 10 s before this (`HELD_MS`), so a decision is never written as the CLI cuts the
+ * request. 30 s is the most that was recorded.
+ */
+const HELD_TIMEOUT_S = 30;
 
 /**
  * The settings (for `claude --settings <file>`) that add corrallm's hooks: each event posted to
@@ -27,19 +33,23 @@ const TIMEOUT_S = 5;
  * Claude Code merges these hooks with the user's and the project's hooks.
  */
 export function hookSettings(url: string, token: string): { hooks: Record<string, HookGroup[]> } {
-  const hook = {
+  const hook = (timeout: number) => ({
     type: 'http',
     url,
     headers: { Authorization: `Bearer ${token}` },
-    timeout: TIMEOUT_S,
-  };
+    timeout,
+  });
   return {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: postHookCommand(url), timeout: 10 }] }],
       ...Object.fromEntries(
         HOOK_EVENTS.map((name) => {
           const matcher = MATCHERS[name];
-          return [name, [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook] }]];
+          const timeout = name === 'PermissionRequest' ? HELD_TIMEOUT_S : TIMEOUT_S;
+          return [
+            name,
+            [{ ...(matcher === undefined ? {} : { matcher }), hooks: [hook(timeout)] }],
+          ];
         }),
       ),
     },

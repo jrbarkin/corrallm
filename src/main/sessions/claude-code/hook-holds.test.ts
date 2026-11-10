@@ -15,6 +15,7 @@ import {
 } from '../terminal/hook-recorded';
 import type { HoldRecord } from '../terminal/hook-recorded';
 import { ClaudeCode } from './claude-code';
+import type { PromptAnswer } from '../../../shared/model/prompts';
 
 /*
  * What Claude Code 2.1.321 did when its HTTP hooks were held, answered or ignored (B23),
@@ -355,5 +356,192 @@ describe("an MCP server's form (Elicitation)", () => {
     ['elic-cancel', '"action":"cancel"'],
   ])('%s answers it, as the server sees', (name, result) => {
     expect(JSON.stringify(toolResults(name))).toContain(result.replaceAll('"', '\\"'));
+  });
+});
+
+/*
+ * B23 C2 and C4: what Claude Code · Terminal holds and how it answers, read from the recorded
+ * requests: the held prompt, and each reply equal, byte for byte, to the one the recording shows
+ * decided.
+ */
+describe('what Claude Code · Terminal holds (B23 C2)', () => {
+  const claude = () => new ClaudeCode({ cwd: '/work/app', home: '/Users/me', env: {} });
+  const request = (name: string, event: string, tool?: string) =>
+    first(hookRequests(recorded(name), event, tool)).data.body;
+  const decided = (name: string): string => {
+    const res = holdRecords(recorded(name), 'hook-res').find(
+      ({ data }) => data.status === 200 && data.body !== '{}' && data.body !== '',
+    );
+    if (res === undefined) throw new Error(`${name} decided nothing`);
+    return res.data.body;
+  };
+  const choice = (value: string, feedback?: string): PromptAnswer => ({
+    kind: 'choice',
+    value,
+    ...(feedback === undefined ? {} : { feedback }),
+  });
+
+  it('holds a tool’s permission as a both approval with Yes, No and No with words, and no always', () => {
+    const held = claude().hold(request('answer-allow', 'PermissionRequest', 'Bash'));
+    expect(held?.prompt).toMatchObject({
+      kind: 'approval',
+      answerIn: 'both',
+      title: 'Claude wants to use Bash',
+      subject: {
+        type: 'tool',
+        tool: 'Bash',
+        input: { command: 'echo hi > hi.txt', description: 'write hi' },
+      },
+    });
+    const prompt = held?.prompt;
+    if (prompt?.kind !== 'approval') throw new Error('not an approval');
+    expect(prompt.choices.map(({ value, hint }) => [value, hint])).toEqual([
+      ['allow', 'allow_once'],
+      ['deny', 'reject_once'],
+      ['deny-feedback', 'reject_once'],
+    ]);
+    // The dialog also offers to allow a folder; corrallm passes none of that on, and says so.
+    expect(prompt.omitted).toBe(true);
+  });
+
+  it('does not say it left a choice out where the dialog offers only Yes and No', () => {
+    const event = { ...request('answer-allow', 'PermissionRequest', 'Bash') };
+    delete event.permission_suggestions;
+    expect(claude().hold(event)?.prompt).not.toHaveProperty('omitted');
+  });
+
+  it('holds AskUserQuestion as a both question', () => {
+    const held = claude().hold(
+      request('ask-perm-allow-answers', 'PermissionRequest', 'AskUserQuestion'),
+    );
+    expect(held?.prompt).toMatchObject({
+      kind: 'question',
+      answerIn: 'both',
+      title: 'Pick a color',
+      questions: [{ id: 'q1', text: 'Pick a color', other: true }],
+    });
+  });
+
+  it('holds neither a plan, nor any PreToolUse, nor an event that is no permission', () => {
+    expect(claude().hold(request('ask-baseline', 'PreToolUse', 'AskUserQuestion'))).toBeUndefined();
+    const plan = hookRequests(recorded('plan-file'), 'PermissionRequest', 'ExitPlanMode');
+    expect(plan.length).toBeGreaterThan(0);
+    for (const { data } of plan) expect(claude().hold(data.body)).toBeUndefined();
+    expect(claude().hold(request('answer-allow', 'Stop'))).toBeUndefined();
+    expect(claude().hold({ hook_event_name: 'PermissionRequest' })).toBeUndefined();
+    expect(
+      claude().hold({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: 'x' }),
+    ).toBeDefined();
+  });
+
+  it('does not hold questions with the same text, none, or a request it cannot show whole', () => {
+    const base = request('ask-perm-allow-answers', 'PermissionRequest', 'AskUserQuestion');
+    const input = base.tool_input as { questions: Record<string, unknown>[] };
+    const [question] = input.questions;
+    const duplicated = { ...base, tool_input: { questions: [question, { ...question }] } };
+    expect(claude().hold(duplicated)).toBeUndefined();
+    expect(claude().hold({ ...base, tool_input: { questions: [] } })).toBeUndefined();
+    const long = {
+      ...base,
+      tool_input: { questions: [{ ...question, header: 'h'.repeat(5000) }] },
+    };
+    expect(claude().hold(long)).toBeUndefined();
+    const bash = request('answer-allow', 'PermissionRequest', 'Bash');
+    const huge = { ...bash, tool_input: { command: 'x'.repeat(30_000), description: 'd' } };
+    expect(claude().hold(huge)).toBeUndefined();
+  });
+
+  it.each([
+    ['answer-allow', choice('allow')],
+    ['answer-deny-interrupt', choice('deny')],
+  ])(
+    'replies %s byte for byte as recorded, except the words only the recording had',
+    (name, answer) => {
+      const held = claude().hold(request(name, 'PermissionRequest', 'Bash'));
+      const body = JSON.stringify(held?.reply(answer));
+      if (name === 'answer-allow') expect(body).toBe(decided(name));
+      else {
+        // The recording's own message words differ; the shape is the same.
+        const recordedBody = JSON.parse(decided(name)) as {
+          hookSpecificOutput: { decision: object };
+        };
+        expect(JSON.parse(body)).toMatchObject({
+          hookSpecificOutput: {
+            hookEventName: 'PermissionRequest',
+            decision: { behavior: 'deny', interrupt: true, message: expect.any(String) as string },
+          },
+        });
+        expect(
+          Object.keys((JSON.parse(body) as typeof recordedBody).hookSpecificOutput.decision),
+        ).toEqual(Object.keys(recordedBody.hookSpecificOutput.decision));
+      }
+    },
+  );
+
+  it('replies No with words as a deny that goes on, in the user’s words framed as theirs', () => {
+    const held = claude().hold(request('answer-deny', 'PermissionRequest', 'Bash'));
+    const body = held?.reply(choice('deny-feedback', 'use a branch')) as {
+      hookSpecificOutput: { decision: { behavior: string; message: string; interrupt?: boolean } };
+    };
+    expect(Object.keys(body.hookSpecificOutput.decision)).toEqual(
+      Object.keys(
+        (
+          JSON.parse(decided('answer-deny')) as {
+            hookSpecificOutput: { decision: object };
+          }
+        ).hookSpecificOutput.decision,
+      ),
+    );
+    expect(body.hookSpecificOutput.decision.message).toMatch(/the user said:\nuse a branch$/);
+    expect(body.hookSpecificOutput.decision.interrupt).toBeUndefined();
+    const other = held?.reply({
+      ...choice('deny-feedback', 'use a branch'),
+      decider: { party: 'agent:lead', name: 'Lead' },
+    }) as typeof body;
+    expect(other.hookSpecificOutput.decision.message).toContain(
+      'Lead (another party in corrallm, not the user) said:',
+    );
+  });
+
+  it('replies a question as the recorded allow, keyed by the question’s text', () => {
+    const held = claude().hold(
+      request('ask-perm-allow-answers', 'PermissionRequest', 'AskUserQuestion'),
+    );
+    const body = held?.reply({ kind: 'questions', answers: { q1: { picked: ['Blue'] } } });
+    // The same JSON (the stub wrote the request's own input back in its own key order).
+    expect(body).toEqual(JSON.parse(decided('ask-perm-allow-answers')));
+    // Several picks are joined, own words go as given.
+    expect(
+      JSON.stringify(
+        held?.reply({ kind: 'questions', answers: { q1: { picked: ['Red', 'Blue'] } } }),
+      ),
+    ).toContain('"answers":{"Pick a color":"Red, Blue"}');
+    expect(
+      JSON.stringify(held?.reply({ kind: 'questions', answers: { q1: { text: 'Teal' } } })),
+    ).toContain('"answers":{"Pick a color":"Teal"}');
+  });
+
+  it('refuses a question answered by another party, writing nothing', () => {
+    const held = claude().hold(
+      request('ask-perm-allow-answers', 'PermissionRequest', 'AskUserQuestion'),
+    );
+    expect(() =>
+      held?.reply({
+        kind: 'questions',
+        answers: { q1: { picked: ['Blue'] } },
+        decider: { party: 'agent:lead', name: 'Lead' },
+      }),
+    ).toThrow(/only the user/i);
+  });
+
+  it('never sends an always, a changed input on an approval, or a classification', () => {
+    const held = claude().hold(request('answer-allow', 'PermissionRequest', 'Bash'));
+    for (const answer of [choice('allow'), choice('deny'), choice('deny-feedback', 'x')]) {
+      const sent = JSON.stringify(held?.reply(answer));
+      for (const never of ['updatedPermissions', 'updatedInput', 'decisionClassification']) {
+        expect(sent).not.toContain(never);
+      }
+    }
+    expect(() => held?.reply(choice('always'))).toThrow();
   });
 });

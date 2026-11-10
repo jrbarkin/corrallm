@@ -1402,6 +1402,13 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** Holds a request its CLI's hook posted until the owner answers it, or it is let go of. */
   #holdRequest(hold: HookHold, planned: TerminalHold): void {
+    // A CLI that does not report what it waits on can't tell when a `both` hold's wait is over
+    // or answered in its terminal: it is let go of, and its ask told as it always was.
+    if (planned.prompt.answerIn === 'both' && !this.#reporting) {
+      hold.release();
+      this.#told(randomUUID(), inTerminal(planned.prompt));
+      return;
+    }
     const held: Held = { id: randomUUID(), hold, held: planned, block: undefined };
     // It tells what it asks itself: a hook's telling of the same ask is superseded.
     const same = askOf(planned.prompt);
@@ -1513,7 +1520,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     return covered;
   }
 
-  /** Binds each `both` hold to the wait its CLI reports for it: begun no earlier than ASK_WINDOW before. */
+  /**
+   * Binds each `both` hold to the wait its CLI reports for it: begun within ASK_WINDOW of its
+   * arrival (its dialog follows its request at once; a later one, with another hook having
+   * answered this, is another wait).
+   */
   #attach(): void {
     if (this.#holds.size === 0) return;
     const claimed = new Set<string>();
@@ -1521,7 +1532,12 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     for (const held of this.#holds.values()) {
       if (held.block !== undefined || held.held.prompt.answerIn === 'api') continue;
       const block = [...this.#blocks.values()]
-        .filter(({ id, since }) => !claimed.has(id) && since >= held.hold.received - ASK_WINDOW)
+        .filter(
+          ({ id, since }) =>
+            !claimed.has(id) &&
+            since >= held.hold.received - ASK_WINDOW &&
+            since <= held.hold.received + ASK_WINDOW,
+        )
         .sort((a, b) => a.since - b.since)[0];
       if (block === undefined) continue;
       held.block = block.id;

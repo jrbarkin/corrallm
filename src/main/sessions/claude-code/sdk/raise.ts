@@ -739,13 +739,13 @@ function chosen(answer: PromptAnswer): string {
 }
 
 /** An answer's words, trimmed: none if it gave none. */
-function said(answer: PromptAnswer): string | undefined {
+export function said(answer: PromptAnswer): string | undefined {
   const feedback = answer.kind === 'choice' ? answer.feedback?.trim() : undefined;
   return feedback === undefined || feedback === '' ? undefined : feedback;
 }
 
 /** How the CLI is told whose words follow a denial: the user's, as Claude Code says, or another's. */
-function deniedWith(answer: PromptAnswer): string {
+export function deniedWith(answer: PromptAnswer): string {
   if (answer.decider === undefined) return DENIED_WITH_FEEDBACK;
   return DENIED_WITH_FEEDBACK.replace(
     'the user said:',
