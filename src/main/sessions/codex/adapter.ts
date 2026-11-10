@@ -148,8 +148,9 @@ export const codex: Adapter = {
         panels: {},
         images: null,
         usage: CODEX_USAGE,
-        // Not checked against its TUI yet: until it is, Shift+Enter types what the terminal types.
-        keys: { shiftEnter: null },
+        // CSI-u Shift+Enter, the kitty keyboard protocol key its TUI asks for: a new line in its
+        // draft, not a send (recorded on 0.162.1: terminal/fixtures/multiline.jsonl).
+        keys: { shiftEnter: '\x1b[13;2u' },
         // What follows runs as a shell command, without asking.
         shellPrefix: '!',
       },
