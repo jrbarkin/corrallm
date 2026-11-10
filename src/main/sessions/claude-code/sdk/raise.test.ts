@@ -83,20 +83,20 @@ describe('signals, from the facts the CLI gives (never its words)', () => {
     });
   });
 
-  it('claims no safety check for a compound command: the CLI says subcommandResults whether or not one is nested, so it is only a person’s', () => {
+  it('counts a compound command’s subcommandResults as a safety check: the options never say whether one is nested', () => {
     const [plain, nested, unreasoned] = requests('signals-compound');
-    // The two are alike in everything the options carry.
+    // The two are alike in everything the options carry, so neither can be told from a safety check.
     expect(plain?.opts).toMatchObject({ decisionReasonType: 'subcommandResults' });
     expect(nested?.opts).toMatchObject({ decisionReasonType: 'subcommandResults' });
     expect(plain?.opts).not.toHaveProperty('decisionReason');
     expect(nested?.opts).not.toHaveProperty('decisionReason');
     expect(signalsOf('Bash', plain?.opts as unknown as ToolOptions)).toEqual({
-      requiresUser: true,
+      safetyCheck: true,
     });
     expect(signalsOf('Bash', nested?.opts as unknown as ToolOptions)).toEqual({
-      requiresUser: true,
+      safetyCheck: true,
     });
-    // A compound command that only reaches beyond the folder carries no reason type.
+    // A compound command that writes inside the folder was asked with no reason type at all.
     expect(signalsOf('Bash', unreasoned?.opts as unknown as ToolOptions)).toBeUndefined();
   });
 
@@ -147,8 +147,7 @@ describe('signals, from the facts the CLI gives (never its words)', () => {
     expect(of({ decisionReasonType: 'rule' })).toEqual({ askRule: true });
     expect(of({ decisionReasonType: 'hook' })).toEqual({ askRule: true });
     expect(of({ decisionReasonType: 'safetyCheck' })).toEqual({ safetyCheck: true });
-    // A command's parts may hide a safety check, and the options don't say (recorded): a person's.
-    expect(of({ decisionReasonType: 'subcommandResults' })).toEqual({ requiresUser: true });
+    expect(of({ decisionReasonType: 'subcommandResults' })).toEqual({ safetyCheck: true });
     expect(of({ decisionReasonType: 'classifier' })).toEqual({ requiresUser: true });
     expect(of({ decisionReasonType: 'other' })).toEqual({ requiresUser: true });
     expect(of({ decisionReasonType: 'somethingNew' })).toEqual({ requiresUser: true });

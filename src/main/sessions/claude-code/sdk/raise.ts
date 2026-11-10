@@ -57,8 +57,8 @@ import { corrallmMode, sdkMode } from './translate';
  *   open (only in `form.url`, never in its words), naming its server; one corrallm can't show is
  *   declined, the user told.
  * - Signals: an ask rule (`matchedAskRule`, or the reason `rule` or `hook`), a safety check
- *   (`safetyCheck`), or a person's (`subcommandResults`, which may hide a safety check the options
- *   don't tell, `classifier`, `serverPolicyAskOnly`, `requiresUserInteraction` but on the built-in
+ *   (`safetyCheck`, or `subcommandResults`, which can hide one only a person may approve), or a
+ *   person's (`classifier`, `serverPolicyAskOnly`, `requiresUserInteraction` but on the built-in
  *   question and plan, `other`, or any reason it doesn't know).
  */
 
@@ -114,12 +114,11 @@ const PLAN_TOOL = 'ExitPlanMode';
 /** The reasons the runtime gives that make a request no one's but a person's, or ordinary. */
 const ASK_RULE = new Set(['rule', 'hook']);
 /**
- * Only `safetyCheck` itself. `subcommandResults` is said of a compound command whether or not a
- * safety check is nested in it (B13 C13's recordings: the same options for `cd elsewhere && touch x`
- * and for a write to .git/config), so it claims none: it is a reason this list doesn't know, a
- * person's (`requiresUser`).
+ * `subcommandResults` counts: it is said of a compound command whether or not a safety check is
+ * nested in it (B13 C13's recordings: the same options for `cd elsewhere && touch x` and for a
+ * write to .git/config), and the options don't tell, so it may hide one only a person may approve.
  */
-const SAFETY_CHECK = new Set(['safetyCheck']);
+const SAFETY_CHECK = new Set(['safetyCheck', 'subcommandResults']);
 const ORDINARY = new Set([
   'mode',
   'workingDir',

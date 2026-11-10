@@ -120,7 +120,7 @@ describe('Codex Terminal, on what the real Codex waited on (0.162.1)', () => {
     ]);
   });
 
-  it('reads Action Required at another size (60×20) from the screen as it is drawn there', async () => {
+  it('reads Action Required as Codex drew it at 60×20, the dialog whole', async () => {
     const session = await start('approvals-small');
     session.terminal?.resize(60, 20);
     await session.send({ id: 'm1', text: 'do the thing' });
@@ -128,9 +128,19 @@ describe('Codex Terminal, on what the real Codex waited on (0.162.1)', () => {
       expect(raised()).toHaveLength(1);
     });
     const [only] = raised();
-    expect(detailOf(only)).toContain('touch one.txt');
-    expect(detailOf(only).split('\n').length).toBeLessThanOrEqual(12);
-    expect(detailOf(only)).toContain('Yes, proceed');
+    // The whole dialog, from the running line to the last row, with Codex's own 60-column wrap.
+    expect(detailOf(only).split('\n')).toEqual([
+      '• Running touch one.txt',
+      '  Would you like to run the following command?',
+      '  Environment: local',
+      '  Reason: Needs to write a file.',
+      '  $ touch one.txt',
+      '› 1. Yes, proceed (y)',
+      "  2. Yes, and don't ask again for commands that start with",
+      '     `touch one.txt` (p)',
+      '  3. No, and tell Codex what to do differently (esc)',
+      '  Press enter to confirm or esc to cancel',
+    ]);
     session.terminal?.input('y');
     await until(() => {
       expect(ends()).toBe(1);
