@@ -22,6 +22,8 @@ import type { SessionAction } from './engine/transcript/reduce';
 import type { Entry, Session } from '../../shared/model/session';
 import { MESSAGE_ORIGINS } from '../../shared/model/messages';
 import type { PartyId } from '../../shared/model/messages';
+import { recordsFor } from '../../shared/model/records';
+import type { RecordEntryView, RecordRow } from '../../shared/model/records';
 import { projectData, runView, summaryFor } from '../../shared/model/views';
 import type {
   EntryView,
@@ -56,7 +58,9 @@ import { agentsReached } from './reach';
  * the run's and sessions' stores, a session's actions as they are reduced (a text or thinking
  * append is said as an append, never by comparing transcripts; any other action by comparing
  * entries by identity, which the reducer keeps for those it leaves), the message store's changed
- * messages, and the canvas's document. A summary is said again on any change but an append (its
+ * messages and each agent's window of settled records as it changes (B19 C3: its records lead the
+ * session's entries, yours alone, through the one selector the transcript's read uses), and the
+ * canvas's document. A summary is said again on any change but an append (its
  * `reply` then waits for the next, at the latest the turn's end). Whoever sees less than you (a
  * token's copy, which only T3c's followers keep: tokens get no topics, D5) reads its own copy again
  * through the topic's projection, below, as each change is published.
@@ -188,8 +192,21 @@ interface SessionBase {
   order: readonly string[];
   byId: Map<string, { entry: Entry; at: number; raw: number }>;
   summary: SessionSummary | undefined;
+  /** B19 C3: its agent's window as last published, which leads your view's entries. */
+  records: RecordsBase;
   view?: SessionView;
   redacted?: SessionView;
+}
+
+/**
+ * An agent's window of settled records as last published (B19 C3): the message store's rows (the
+ * same list until the window changes), and your entries of them, each by id, in the store's order.
+ */
+export interface RecordsBase {
+  readonly rows: readonly RecordRow[];
+  readonly views: readonly RecordEntryView[];
+  readonly ids: readonly string[];
+  readonly byId: ReadonlyMap<string, RecordEntryView>;
 }
 
 /** What a canvas's session store did since it was last taken from, for one agent. */
@@ -215,6 +232,8 @@ interface CanvasSource {
     summaries: Set<string> | 'all';
     entries: Map<string, EntryWork>;
     messages: Set<string>;
+    /** The agents whose window of settled records changed (B19 C3). */
+    records: Set<string>;
     /** Whether its sessions' change came from their store (what their CLIs said), not the run. */
     native: boolean;
     /** Anything changed, its document included (who reaches what): what a token reads again. */
@@ -234,6 +253,7 @@ function fresh(): CanvasSource['dirty'] {
     summaries: new Set(),
     entries: new Map(),
     messages: new Set(),
+    records: new Set(),
     native: false,
     touched: false,
   };
@@ -297,7 +317,9 @@ export class RuntimeSource {
       session: projection('session', SessionArgs, ({ canvas, agent }, ctx) => {
         const open = openCanvas(deps.engines, canvas);
         const base = this.#canvases.get(canvas as string as CanvasId)?.session.get(agent);
-        return base?.summary && base.session === open.engine.sessions.of(agent)
+        return base?.summary &&
+          base.session === open.engine.sessions.of(agent) &&
+          base.records.rows === open.messages.records(agent)
           ? sessionState(base, ctx.caller.kind === 'human')
           : sessionViewOf(open, agent, ctx.caller);
       }),
@@ -418,7 +440,7 @@ export class RuntimeSource {
     const { dirty } = source;
     const agents = this.#agents(source);
     const summaries = dirty.summaries === 'all' ? agents : [...dirty.summaries];
-    const sessions = new Set([...summaries, ...dirty.entries.keys()]);
+    const sessions = new Set([...summaries, ...dirty.entries.keys(), ...dirty.records]);
     return [
       ...(dirty.run ? [`run:${canvas}` as const] : []),
       ...(summaries.length > 0 || dirty.summaries === 'all' ? [`sessions:${canvas}` as const] : []),
@@ -473,7 +495,12 @@ export class RuntimeSource {
       case 'messages':
         return dirty.messages.size > 0;
       default:
-        return dirty.summaries === 'all' || dirty.summaries.size > 0 || dirty.entries.size > 0;
+        return (
+          dirty.summaries === 'all' ||
+          dirty.summaries.size > 0 ||
+          dirty.entries.size > 0 ||
+          dirty.records.size > 0
+        );
     }
   }
 
@@ -588,6 +615,11 @@ export class RuntimeSource {
         it.dirty.messages.add(id);
         this.#changed(it);
       }),
+      // B19 C3: an agent's window of settled records changed; its session says it.
+      messages.watchRecords((agent) => {
+        it.dirty.records.add(agent);
+        this.#changed(it);
+      }),
     ];
     source.attached = {
       open,
@@ -619,6 +651,7 @@ export class RuntimeSource {
       source.session.set(agent, {
         ...this.#entriesBase(engine.sessions.of(agent)),
         summary: source.sessions.get(agent),
+        records: recordsBase(messages.records(agent)),
       });
     source.messages = this.#messagesBase(open);
     source.dirty = fresh();
@@ -709,9 +742,14 @@ export class RuntimeSource {
     const session = open.engine.sessions.of(agent);
     const summary = source.sessions?.get(agent);
     let base = source.session.get(agent);
+    const rows = open.messages.records(agent);
     if (!base) {
       // A new agent: its session as it is now, at its topic's first revision.
-      source.session.set(agent, { ...this.#entriesBase(session), summary });
+      source.session.set(agent, {
+        ...this.#entriesBase(session),
+        summary,
+        records: recordsBase(rows),
+      });
       return undefined;
     }
     const work = source.dirty.entries.get(agent);
@@ -722,17 +760,23 @@ export class RuntimeSource {
           entriesDiff(base, session));
     // Its summary is the canvas's sessions' for it, as they were just taken.
     const summaryChanged = summary !== undefined && summary !== base.summary;
+    // B19 C3: its window, read again only once it changed, its records said ahead of the rest.
+    const before = base.records;
+    const records = rows === before.rows ? before : recordsBase(rows, before);
     base = entries?.base ?? base;
     base.summary = summary;
+    base.records = records;
+    if (records !== before) delete base.view;
     source.session.set(agent, base);
-    if (!entries?.change && !summaryChanged) return undefined;
+    const change = withRecords(entries?.change, before, records, base.order);
+    if (!change && !summaryChanged) return undefined;
     return {
       ...(summaryChanged ? { summary } : {}),
-      entries: entries?.change ?? {},
+      entries: change ?? {},
     };
   }
 
-  #entriesBase(session: Session): Omit<SessionBase, 'summary'> {
+  #entriesBase(session: Session): Omit<SessionBase, 'summary' | 'records'> {
     const { entries, byId } = once(session);
     return { session, entries, order: entries.map(({ id }) => id), byId };
   }
@@ -893,18 +937,77 @@ function sessionState(base: SessionBase, yours: boolean): SessionView {
   // What is yours alone of the summary (summaryFor) leaves a redacted copy's.
   const summary = summaryFor(base.summary, yours);
   let view = base[key];
-  if (!view)
+  if (!view) {
+    // B19 C3: the window leads, through the one selector the read uses (a token's: none), and
+    // no native entry under a record's id is shown beside it.
+    const records = yours ? base.records.views : recordsFor(base.records.rows, 'token');
+    const ids = new Set(records.map(({ id }) => id));
+    const native = ids.size === 0 ? base.entries : base.entries.filter(({ id }) => !ids.has(id));
     view = projectData({
       summary,
-      entries: Object.fromEntries(
-        base.entries.map((entry) => [entry.id, transcriptEntry(entry, yours)]),
-      ),
-      order: base.order,
+      entries: Object.fromEntries([
+        ...records.map((record): [string, EntryView] => [record.id, record]),
+        ...native.map((entry): [string, EntryView] => [entry.id, transcriptEntry(entry, yours)]),
+      ]),
+      order: ids.size === 0 ? base.order : [...ids, ...base.order.filter((id) => !ids.has(id))],
     });
-  else if (view.summary !== summary) view = projectData({ ...view, summary }, view);
+  } else if (view.summary !== summary) view = projectData({ ...view, summary }, view);
   base[key] = view;
   return view;
 }
+/**
+ * An agent's window of settled records as your entries (B19 C3: the one selector's), each the one
+ * published before where it is the same, so that what didn't change is said again nowhere.
+ */
+export function recordsBase(rows: readonly RecordRow[], previous?: RecordsBase): RecordsBase {
+  const views = recordsFor(rows, 'you').map((view) =>
+    projectData<RecordEntryView>(view, previous?.byId.get(view.id)),
+  );
+  return {
+    rows,
+    views,
+    ids: views.map(({ id }) => id),
+    byId: new Map(views.map((view) => [view.id, view])),
+  };
+}
+
+/**
+ * A session's change with its window's (B19 C3): the records new or changed, upserted ahead of the
+ * rest; no native entry under a record's id; and the whole order, the window first, wherever the
+ * window's records came or went, or the native entries' order was said. The change as it was,
+ * reading nothing of the window but its upserts' ids, where the window didn't change and the change
+ * says no order and no entry under a record's id: what most changes of a session are (a turn's).
+ */
+export function withRecords(
+  change: SessionBody['entries'] | undefined,
+  before: RecordsBase,
+  now: RecordsBase,
+  order: readonly string[],
+): SessionBody['entries'] | undefined {
+  if (
+    before === now &&
+    change?.order === undefined &&
+    !(change?.upsert ?? []).some(({ id }) => now.byId.has(id))
+  )
+    return change;
+  const ids = new Set(now.ids);
+  const records = now.views.filter((view) => before.byId.get(view.id) !== view);
+  const native = (change?.upsert ?? []).filter(({ id }) => !ids.has(id));
+  const upsert = [...records, ...native];
+  const moved =
+    before.ids.length !== now.ids.length || before.ids.some((id, i) => now.ids[i] !== id);
+  const whole =
+    moved || change?.order !== undefined
+      ? [...now.ids, ...(change?.order ?? order).filter((id) => !ids.has(id))]
+      : undefined;
+  if (upsert.length === 0 && change?.append === undefined && whole === undefined) return undefined;
+  return {
+    ...(upsert.length === 0 ? {} : { upsert }),
+    ...(change?.append === undefined ? {} : { append: change.append }),
+    ...(whole === undefined ? {} : { order: whole }),
+  };
+}
+
 function appendedView(view: SessionView, changed: readonly Entry[], yours: boolean): SessionView {
   return projectData(
     {
@@ -965,7 +1068,14 @@ function tailDiff(
     entries.push(entry);
   }
   const order = added.length === 0 ? base.order : [...base.order, ...added.map(({ id }) => id)];
-  const next: SessionBase = { session, entries, order, byId: base.byId, summary: base.summary };
+  const next: SessionBase = {
+    session,
+    entries,
+    order,
+    byId: base.byId,
+    summary: base.summary,
+    records: base.records,
+  };
   const upsert = [...replaced.map(({ entry }) => entry), ...added].map((entry) =>
     transcriptEntry(entry, true),
   );
@@ -990,7 +1100,14 @@ function entriesDiff(
   const order = entries.map(({ id }) => id);
   const appendsOnly =
     order.length >= base.order.length && base.order.every((id, i) => order[i] === id);
-  const next: SessionBase = { session, entries, order, byId, summary: base.summary };
+  const next: SessionBase = {
+    session,
+    entries,
+    order,
+    byId,
+    summary: base.summary,
+    records: base.records,
+  };
   if (upsert.length === 0 && appendsOnly) return { change: undefined, base: next };
   return {
     change: { ...(upsert.length === 0 ? {} : { upsert }), ...(appendsOnly ? {} : { order }) },

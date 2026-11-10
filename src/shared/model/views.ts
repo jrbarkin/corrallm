@@ -13,6 +13,7 @@ import { turnReply } from './session';
 import type { Entry, Session } from './session';
 import { entryFor } from './prompt-views';
 import type { PromptEntryView } from './prompt-views';
+import type { RecordEntryView } from './records';
 
 /** Wire/view data only. No mutable store, callback or timer is part of a view. */
 export type ReadonlyData<T> = T extends string | number | boolean | null | undefined
@@ -87,12 +88,15 @@ export interface SessionSummary {
 
 /**
  * Images are counted for display, never serialized as bytes on the general topic; a prompt the
- * core's owner holds is read through B13 C11's selector (PromptEntryView).
+ * core's owner holds is read through B13 C11's selector (PromptEntryView); a settled record its
+ * agent's window shows is B19 C3's (RecordEntryView: src/shared/model/records.ts), never a native
+ * entry.
  */
 export type EntryView = ReadonlyData<
   | Exclude<Entry, { kind: 'user' | 'prompt' }>
   | (Omit<Extract<Entry, { kind: 'user' }>, 'images' | 'promptReply'> & { images?: number })
   | PromptEntryView
+  | RecordEntryView
 >;
 export interface SessionView {
   readonly summary: SessionSummary;

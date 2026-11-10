@@ -63,7 +63,8 @@ export function Transcript({
         atEnd.current = scrollHeight - scrollTop - clientHeight < 40;
       }}
     >
-      {session.entries.length === 0 && (
+      {/* B19 C3: settled records lead the entries, but are no turn: X3 draws them. */}
+      {!session.entries.some((entry) => (entry.kind as string) !== 'record') && (
         <div className="agent-empty">
           <p>What should {agentName} do?</p>
           <p className="agent-empty-note">{note}</p>

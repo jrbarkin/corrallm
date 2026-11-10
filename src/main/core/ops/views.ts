@@ -5,6 +5,8 @@ import type { HandoffView } from '../../../shared/model/handoff';
 import { agentParty } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { entryFor } from '../../../shared/model/prompt-views';
+import { recordsFor } from '../../../shared/model/records';
+import type { RecordEntryView } from '../../../shared/model/records';
 import { turnReply } from '../../../shared/model/session';
 import type { Entry } from '../../../shared/model/session';
 import { messageView, suggestionOf, runView, summaryReply } from '../../../shared/model/views';
@@ -118,23 +120,38 @@ export function transcriptEntry(entry: Entry, yours: boolean): EntryView {
 }
 
 /**
- * An agent's transcript as `caller` sees it: each entry once, in its order (the first of any id
- * kept twice), as transcriptEntry gives it.
+ * The settled records agent `agent`'s window shows `caller` (B19 C3), through the one selector the
+ * session topic reads too (`recordsFor`): yours, the window the message store keeps; a token's,
+ * none.
+ */
+export function recordsOf(
+  open: OpenCanvas,
+  agent: string,
+  caller: Caller,
+): readonly RecordEntryView[] {
+  return recordsFor(open.messages.records(agent), caller.kind === 'human' ? 'you' : 'token');
+}
+
+/**
+ * An agent's transcript as `caller` sees it: the settled records its window shows the caller
+ * (recordsOf: B19 C3), in the store's order, then each native entry once, in its order (the first
+ * of any id kept twice, and none under a record's id), as transcriptEntry gives it.
  */
 export function transcriptOf(
   open: OpenCanvas,
   agent: string,
   caller: Caller,
-): { entries: readonly Entry[]; shown: readonly EntryView[] } {
+): { shown: readonly EntryView[] } {
   agentOf(open, agent);
   const yours = caller.kind === 'human';
-  const seen = new Set<string>();
+  const records = recordsOf(open, agent, caller);
+  const seen = new Set<string>(records.map(({ id }) => id));
   const entries = open.engine.sessions.of(agent).entries.filter((entry) => {
     if (seen.has(entry.id)) return false;
     seen.add(entry.id);
     return true;
   });
-  return { entries, shown: entries.map((entry) => transcriptEntry(entry, yours)) };
+  return { shown: [...records, ...entries.map((entry) => transcriptEntry(entry, yours))] };
 }
 
 /** Agent `agent`'s session topic's state as `caller` sees it: its summary and whole transcript. */
