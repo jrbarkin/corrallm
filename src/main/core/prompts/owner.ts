@@ -190,7 +190,7 @@ export interface RouteChange {
   from?: string;
   to?: string;
   /** Why it moved: or `ended`, with `how` it ended. */
-  why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'ended';
+  why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'unreachable' | 'ended';
   how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you';
   /** Who answered it or handed it back (the party it already told), if a party did. */
   by?: PartyId;
@@ -469,10 +469,19 @@ export class PromptOwner implements PromptSink {
 
   /** The lead the prompt `need` is routed to now, if it still waits. */
   routeOf(canvas: CanvasId, need: string): string | undefined {
-    for (const occurrence of this.#canvases.get(canvas)?.live.values() ?? []) {
-      if (occurrence.need === need) return occurrence.route?.lead;
-    }
-    return undefined;
+    return this.#resolve(canvas, need)?.route?.lead;
+  }
+
+  /**
+   * B24 C5: `lead` can't be sent its copy of the prompt `need` (it already has MAX_WAITING open,
+   * or its card is refused by its connection's checks): if it holds the route, the route is
+   * withdrawn from it and moves up, and it is never offered the prompt again (R28).
+   */
+  unreachable(canvas: CanvasId, need: string, lead: string): void {
+    const occurrence = this.#resolve(canvas, need);
+    if (occurrence?.route?.lead !== lead) return;
+    occurrence.passed.add(lead);
+    this.#route(occurrence, 'unreachable');
   }
 
   /** Whether `to` names a live prompt here: what the reply router's prompt handler answers. */

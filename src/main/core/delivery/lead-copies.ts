@@ -48,6 +48,11 @@ export interface LeadCopiesDeps {
   schedule(canvas: CanvasId): void;
   /** The lead a prompt is routed to now, if it still waits (`PromptOwner.routeOf`). */
   routeOf(canvas: CanvasId, need: string): string | undefined;
+  /**
+   * A lead the prompt is routed to can't be sent its copy (it is full, or the card is refused):
+   * the route is withdrawn from it and it is never offered the prompt again (`PromptOwner.unreachable`).
+   */
+  unreachable(canvas: CanvasId, need: string, lead: string): void;
 }
 
 export class LeadCopies {
@@ -95,7 +100,7 @@ export class LeadCopies {
     const messages = this.#deps.messages(canvas);
     if (messages === undefined) return;
     const told = `outside-${type}:${need}|${name}`;
-    if (messages.toldStarting(told).length > 0) return;
+    if (messages.toldWith(told).length > 0) return;
     messages.add(
       {
         from: 'corrallm',
@@ -119,10 +124,16 @@ export class LeadCopies {
     return lead !== undefined && this.#deps.routeOf(message.canvas, message.purpose.need) === lead;
   }
 
-  /** A copy or notice was withdrawn instead of sent: nothing more to do, the route is the owner's. */
-  refused(): void {
-    // The prompt stays yours, and its route stays with the owner, which moves it on its own
-    // deadline: a card that fails its checks is never retried.
+  /**
+   * A copy or notice was withdrawn instead of sent. A copy whose card failed its checks (its route
+   * still on that lead) loses the route, which moves up and never returns; one withdrawn because
+   * its route had moved on already changes nothing.
+   */
+  refused(message: Message): void {
+    if (!isLeadCopy(message) || message.purpose?.type !== 'lead-copy') return;
+    const lead = message.to.startsWith('agent:') ? message.to.slice('agent:'.length) : undefined;
+    if (lead === undefined) return;
+    this.#deps.unreachable(message.canvas, message.purpose.need, lead);
   }
 
   /** Offers `lead` the prompt `need`: one copy, unless it already has or is full. */
@@ -135,11 +146,15 @@ export class LeadCopies {
   ): void {
     const to = agentParty(lead);
     const told = `${COPY}${need}|${lead}`;
-    if (messages.toldStarting(told).some(({ state }) => state !== 'withdrawn')) return;
+    if (messages.toldWith(told).some(({ state }) => state !== 'withdrawn')) return;
     const open = messages
       .activeTo(to)
       .filter((one) => one.from === 'corrallm' && isLeadCopy(one) && one.state !== 'replied');
-    if (open.length >= MAX_WAITING) return;
+    if (open.length >= MAX_WAITING) {
+      // Full: the route passes it by (a route never stays with a lead that was not told).
+      this.#deps.unreachable(canvas, need, lead);
+      return;
+    }
     messages.add(
       {
         from: 'corrallm',
@@ -156,7 +171,7 @@ export class LeadCopies {
 
   /** `lead` no longer holds `need`: its pending copy withdrawn, one that reached it noticed once. */
   #away(messages: MessageStore, need: string, lead: string, how: keyof typeof ENDED): void {
-    for (const copy of messages.toldStarting(`${COPY}${need}|${lead}`)) {
+    for (const copy of messages.toldWith(`${COPY}${need}|${lead}`)) {
       if (copy.state === 'withdrawn') continue;
       if (copy.state === 'pending') {
         messages.update(copy.id, { state: 'withdrawn', by: 'corrallm', turn: TAKEN_BACK });
@@ -199,7 +214,7 @@ export class LeadCopies {
 /** The one notice for `need`'s copy, to the lead that got it: none if it already has one. */
 function notice(messages: MessageStore, copy: Message, need: string, why: string): void {
   const told = `${NOTICE}${need}|${copy.to}`;
-  if (messages.toldStarting(told).length > 0) return;
+  if (messages.toldWith(told).length > 0) return;
   messages.add(
     {
       from: 'corrallm',

@@ -690,6 +690,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       engines.canvas(canvas)?.delivery.schedule();
     },
     routeOf: (canvas, need) => prompts.routeOf(canvas, need),
+    unreachable: (canvas, need, lead) => {
+      prompts.unreachable(canvas, need, lead);
+    },
   });
   const prompts: PromptOwner = new PromptOwner({
     catalog: CATALOG,
@@ -1199,8 +1202,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     manages: (canvas, lead) => managesQuestions(canvas, lead),
     leadCopy: {
       live: (message) => leadCopies.live(message),
-      refused: () => {
-        leadCopies.refused();
+      refused: (message) => {
+        leadCopies.refused(message);
       },
     },
     processes: children,

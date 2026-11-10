@@ -47,6 +47,8 @@ const NODES = [
   agent('mid', 'Mid', 'top'),
   agent('work', `Work ${CANARY}`, 'mid'),
 ];
+/** The nodes the owner reads: a test may nest its own. */
+let nodes: NodeLike[] = NODES;
 
 let profile: string;
 let database: Store;
@@ -69,10 +71,13 @@ function wire(): void {
     messages: () => messages,
     schedule: () => undefined,
     routeOf: (canvas, need) => owner.routeOf(canvas, need),
+    unreachable: (canvas, need, lead) => {
+      owner.unreachable(canvas, need, lead);
+    },
   });
   owner = new PromptOwner({
     catalog: WITH_API,
-    canvas: () => ({ messages, nodes: NODES }),
+    canvas: () => ({ messages, nodes }),
     generationOf: () => 1,
     changed: () => undefined,
     notice: () => undefined,
@@ -134,6 +139,7 @@ beforeEach(async () => {
   database = await openTestStore(profile);
   messages = await load();
   grantees = [];
+  nodes = NODES;
   grants = new Map([
     ['top', ALL],
     ['mid', ALL],
@@ -231,7 +237,210 @@ describe('a lead’s copy', () => {
     for (let n = 0; n < 25; n += 1) {
       raise(`${String(n).padStart(8, '0')}-3c4d-4e5f-8a9b-0c1d2e3f4a5b`);
     }
-    expect(copies().length).toBeLessThanOrEqual(20);
+    expect(copies().filter(({ to }) => to === 'agent:mid').length).toBeLessThanOrEqual(20);
+    expect(copies().filter(({ to }) => to === 'agent:top').length).toBeLessThanOrEqual(20);
+  });
+});
+
+describe('a lead it could not send a copy', () => {
+  it('loses the route past MAX_WAITING open copies: the next lead above gets it, and the lead is passed', () => {
+    let last = '';
+    for (let n = 0; n < 22; n += 1) {
+      last = raise(`${String(n).padStart(8, '0')}-3c4d-4e5f-8a9b-0c1d2e3f4a5b`);
+    }
+    expect(copies().filter(({ to }) => to === 'agent:mid')).toHaveLength(20);
+    expect(owner.routeOf(CANVAS, last)).toBe('top');
+    expect(
+      copies().some(
+        ({ to, purpose }) =>
+          to === 'agent:top' && purpose?.type === 'lead-copy' && purpose.need === last,
+      ),
+    ).toBe(true);
+  });
+
+  it('with nobody above leaves the prompt with you alone', () => {
+    grants.delete('top');
+    let last = '';
+    for (let n = 0; n < 22; n += 1) {
+      last = raise(`${String(n).padStart(8, '0')}-3c4d-4e5f-8a9b-0c1d2e3f4a5b`);
+    }
+    expect(owner.routeOf(CANVAS, last)).toBeUndefined();
+  });
+
+  it('loses the route when its card is refused by the lead’s shell prefix or file-mention check', () => {
+    const need = raise(KEY);
+    const [copy] = copies();
+    if (copy === undefined) throw new Error('no copy');
+    messages.update(copy.id, { state: 'withdrawn', by: 'corrallm' });
+    live.refused(copy);
+    expect(owner.routeOf(CANVAS, need)).toBe('top');
+    // A copy whose route had moved already changes nothing more.
+    live.refused(copy);
+    expect(owner.routeOf(CANVAS, need)).toBe('top');
+  });
+});
+
+describe('copy and notice keys', () => {
+  it('match exactly: a lead whose id starts another’s still gets its own copy', async () => {
+    nodes = [
+      agent('lead', 'Lead'),
+      agent('lead2', 'Lead2', 'lead'),
+      agent('work', 'Work', 'lead2'),
+    ];
+    grants = new Map([
+      ['lead', ALL],
+      ['lead2', ALL],
+    ]);
+    const need = raise(KEY);
+    const [first] = copies();
+    if (first === undefined) throw new Error('no copy');
+    expect(first.to).toBe('agent:lead2');
+    messages.update(first.id, { state: 'delivered' });
+    await owner.answer(CANVAS, need, { choice: 'hand-back' }, {
+      by: 'agent:lead2',
+      caller: { kind: 'agent', agent: 'lead2' },
+      signal: new AbortController().signal,
+      noReturn: () => undefined,
+    } as never);
+    expect(copies().map(({ to, state }) => [to, state])).toEqual([
+      ['agent:lead2', 'delivered'],
+      ['agent:lead', 'pending'],
+    ]);
+  });
+
+  it('notice only the lead that held the prompt, not one whose id extends its own', () => {
+    nodes = [
+      agent('lead2', 'Lead2'),
+      agent('lead', 'Lead', 'lead2'),
+      agent('work', 'Work', 'lead'),
+    ];
+    grants = new Map([
+      ['lead', ALL],
+      ['lead2', ALL],
+    ]);
+    const need = raise(KEY);
+    const [copy] = copies();
+    if (copy === undefined) throw new Error('no copy');
+    expect(copy.to).toBe('agent:lead');
+    messages.update(copy.id, { state: 'delivered' });
+    // A copy kept for the farther lead2, once delivered to it, is its own business.
+    messages.add(
+      {
+        from: 'corrallm',
+        to: 'agent:lead2',
+        kind: 'text',
+        origin: 'party',
+        body: 'old',
+        state: 'delivered',
+        purpose: { v: 1, type: 'lead-copy', need },
+      },
+      `lead-copy:${need}|lead2`,
+    );
+    owner.closed(CANVAS);
+    expect(notices().map(({ to }) => to)).toEqual(['agent:lead']);
+  });
+});
+
+describe('work per event', () => {
+  /** Entries iterated by Maps and Sets while `run` does. */
+  function iterated(run: () => void): number {
+    let count = 0;
+    const patch = (type: { prototype: Record<string | symbol, unknown> }): (() => void) => {
+      const restore: (() => void)[] = [];
+      for (const name of ['values', 'entries', 'keys', Symbol.iterator] as const) {
+        const original = type.prototype[name] as (this: unknown) => Iterator<unknown>;
+        type.prototype[name] = function (this: unknown): Iterator<unknown> {
+          const inner = original.call(this);
+          return {
+            next: () => {
+              const step = inner.next();
+              if (step.done !== true) count += 1;
+              return step;
+            },
+            [Symbol.iterator]() {
+              return this;
+            },
+          } as Iterator<unknown>;
+        };
+        restore.push(() => {
+          type.prototype[name] = original;
+        });
+      }
+      return () => {
+        restore.forEach((one) => {
+          one();
+        });
+      };
+    };
+    const undoMap = patch(Map as never);
+    const undoSet = patch(Set as never);
+    try {
+      run();
+    } finally {
+      undoMap();
+      undoSet();
+    }
+    return count;
+  }
+
+  function backlog(n: number): void {
+    for (let i = 0; i < n; i += 1) {
+      messages.add({
+        from: 'you',
+        to: 'agent:other',
+        kind: 'text',
+        origin: 'party',
+        body: `old ${String(i)}`,
+        state: 'pending',
+      });
+    }
+  }
+
+  it('a routing event reads no more with a bigger backlog of messages', () => {
+    raise(KEY2); // warm
+    backlog(10);
+    const small = iterated(() => {
+      raise(KEY);
+    });
+    backlog(300);
+    const big = iterated(() => {
+      raise('3c9e4b5d-6f70-4182-9d3e-4f5a6b7c8d9e');
+    });
+    expect(big).toBeLessThanOrEqual(small + 4);
+  });
+
+  it('recovering a copy reads no more with a bigger backlog', async () => {
+    const setup = async (n: number) => {
+      messages = await load();
+      wire();
+      const need = raise(KEY);
+      const [copy] = copies();
+      if (copy === undefined) throw new Error('no copy');
+      messages.update(copy.id, { state: 'delivered' });
+      backlog(n);
+      await messages.durable();
+      return need;
+    };
+    await setup(10);
+    const small = await (async () => {
+      const again = await load();
+      return iterated(() => {
+        LeadCopies.recover(again);
+      });
+    })();
+    // A second world, with a far bigger backlog.
+    await database.close();
+    await rm(profile, { recursive: true, force: true });
+    profile = await mkdtemp(path.join(tmpdir(), 'corrallm-copies-'));
+    database = await openTestStore(profile);
+    await setup(400);
+    const big = await (async () => {
+      const again = await load();
+      return iterated(() => {
+        LeadCopies.recover(again);
+      });
+    })();
+    expect(big).toBeLessThanOrEqual(small + 4);
   });
 });
 

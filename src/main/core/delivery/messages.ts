@@ -232,6 +232,12 @@ export class MessageStore {
   readonly #now: () => number;
   /** Every message kept, by id, in the store's order. */
   readonly #kept = new Map<string, Kept>();
+  /**
+   * The messages kept by the told key they were kept with, and by its group (the key up to and
+   * including its first colon): a lookup by key, or of one group, never walks the rest (B24 G2).
+   */
+  readonly #toldKeys = new Map<string, Set<string>>();
+  readonly #toldGroups = new Map<string, Set<string>>();
   /** The messages kept that delivery still acts on (isActive), by id, in the store's order. */
   #active = new Map<string, Kept>();
   /** The latest place of a message `#active` has taken: one placed later goes last in it. */
@@ -504,19 +510,33 @@ export class MessageStore {
 
   /** A durable notice already told this, even if its message's turn has ended since. */
   hasTold(key: string): boolean {
-    return [...this.#kept.values()].some(({ told }) => told === key);
+    return this.#toldKeys.has(key);
   }
 
   /** The message kept with the told key `key`, if one is (what a request admitted once). */
   toldAs(key: string): Message | undefined {
-    for (const { message, told } of this.#kept.values()) if (told === key) return message;
-    return undefined;
+    return this.#inOrder(this.#toldKeys.get(key))[0];
   }
 
-  /** The messages kept with a told key starting `prefix`, in the store's order. */
+  /** The messages kept with exactly the told key `key`, in the store's order. */
+  toldWith(key: string): Message[] {
+    return this.#inOrder(this.#toldKeys.get(key));
+  }
+
+  /**
+   * The messages kept with a told key starting `prefix`, in the store's order. A prefix reaching
+   * its key's first colon reads only that group, never every message kept.
+   */
   toldStarting(prefix: string): Message[] {
-    return [...this.#kept.values()].flatMap(({ message, told }) =>
-      told?.startsWith(prefix) === true ? [message] : [],
+    const colon = prefix.indexOf(':');
+    if (colon < 0) {
+      return [...this.#kept.values()].flatMap(({ message, told }) =>
+        told?.startsWith(prefix) === true ? [message] : [],
+      );
+    }
+    const ids = this.#toldGroups.get(prefix.slice(0, colon + 1));
+    return this.#inOrder(ids).filter((message) =>
+      this.#kept.get(message.id)?.told?.startsWith(prefix),
     );
   }
 
@@ -762,6 +782,7 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexTold(id, before?.told, kept.told);
     this.#indexRecord(before, kept);
     this.#indexResult(before, false);
     this.#indexResult(kept, true);
@@ -788,6 +809,39 @@ export class MessageStore {
     }
   }
 
+  /** Keeps the told-key indexes as message `id` goes from key `was` to key `now` (none: undefined). */
+  #indexTold(id: string, was: string | undefined, now: string | undefined): void {
+    if (was === now) return;
+    const drop = (index: Map<string, Set<string>>, key: string) => {
+      const ids = index.get(key);
+      ids?.delete(id);
+      if (ids?.size === 0) index.delete(key);
+    };
+    const add = (index: Map<string, Set<string>>, key: string) => {
+      const ids = index.get(key) ?? new Set<string>();
+      ids.add(id);
+      index.set(key, ids);
+    };
+    if (was !== undefined) {
+      drop(this.#toldKeys, was);
+      drop(this.#toldGroups, groupOf(was));
+    }
+    if (now !== undefined) {
+      add(this.#toldKeys, now);
+      add(this.#toldGroups, groupOf(now));
+    }
+  }
+
+  /** The messages with these ids, in the store's order. */
+  #inOrder(ids: Iterable<string> | undefined): Message[] {
+    const rows: Kept[] = [];
+    for (const id of ids ?? []) {
+      const kept = this.#kept.get(id);
+      if (kept !== undefined) rows.push(kept);
+    }
+    return rows.sort((a, b) => a.seq - b.seq).map(({ message }) => message);
+  }
+
   /** Keeps a message no more. */
   #delete(id: string): void {
     const kept = this.#kept.get(id);
@@ -798,6 +852,7 @@ export class MessageStore {
       this.#indexRecord(kept, undefined);
     }
     this.#kept.delete(id);
+    this.#indexTold(id, kept?.told, undefined);
     this.#active.delete(id);
     if (kept !== undefined) this.#lineOf(kept, undefined);
   }
@@ -981,6 +1036,12 @@ export class MessageStore {
     this.#windowsChanged.delete(id);
     for (const agent of agents) for (const watcher of this.#recordWatchers) watcher(agent);
   }
+}
+
+/** A told key's group: up to and including its first colon, or the whole key without one. */
+function groupOf(key: string): string {
+  const colon = key.indexOf(':');
+  return colon < 0 ? key : key.slice(0, colon + 1);
 }
 
 /** An untold withdrawal is protected even after its turn has settled. */
