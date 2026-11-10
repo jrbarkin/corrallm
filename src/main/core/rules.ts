@@ -24,6 +24,7 @@ import { isApproval, isIf, isRepeat } from '../../shared/model/queue';
 import type { QueueItem } from '../../shared/model/queue';
 import { entityOf, itemKey, nodeKey } from '../../shared/model/rows';
 import type { EntityKey, ItemRow, LinkRow, NodeRow } from '../../shared/model/rows';
+import { containersOf, teamOf } from '../../shared/model/queries';
 import { andList } from '../../shared/model/words';
 import { CORRALLM_MCP_SERVER, CORRALLM_AGENT_MCP_SERVER } from '../../shared/session';
 import type { AgentSettings } from '../../shared/session';
@@ -375,12 +376,14 @@ export interface ChangeCheckDeps {
   held: (canvas: CanvasId) => ReadonlySet<EntityKey>;
   /** How many live agents `party` created: on `canvas`, or on every canvas the core keeps. */
   created: (
-    party: PartyId,
+    party: PartyId | readonly PartyId[],
     canvas?: CanvasId,
     removing?: Pick<ChangeSet, 'canvas' | 'removed'>,
   ) => number;
   /** The most live agents a token's party may have created (R11): MAX_CREATED_AGENTS. */
   maxCreated: () => number;
+  /** Whether `agent` leads on `canvas` now (B24): R11 counts a lead's team. None: no one does. */
+  isLead?: (canvas: CanvasId, agent: string) => boolean;
 }
 
 /**
@@ -407,6 +410,7 @@ export function changeChecks({
   held,
   created,
   maxCreated,
+  isLead,
 }: ChangeCheckDeps): ChangeChecks {
   /** What an agent runs, as the one resolver reads it: unchosen is no endpoint but itself. */
   const runs = (row: Pick<NodeRow, 'adapter' | 'connection'>): AgentEndpoint =>
@@ -532,6 +536,69 @@ export function changeChecks({
       }
       return undefined;
     },
+    // R10 (B24 C8): a lead's change reaches its own team alone: the agents nested inside it, the
+    // lead, and what the change itself created inside it. A node outside the team whose only change
+    // is where it sits (arrange lays the whole canvas out) is ignored; the canvas's meta is never a
+    // lead's.
+    team: (change, { caller }) => {
+      if (caller.kind !== 'agent' || caller.canvas !== change.canvas) return undefined;
+      const lead = caller.agent;
+      // The lead and everything nested inside it, frames too.
+      const inTeam = new Set(
+        change.before.nodes.flatMap((node) =>
+          node.id === lead || containersOf(change.before.nodes, node.id).includes(lead)
+            ? [node.id]
+            : [],
+        ),
+      );
+      for (const id of change.created) inTeam.add(id);
+      const outside = (what: string, id: string) => ({
+        refuse: `A lead changes only its own team: ${what} ${nameOf(change.after.nodes.some((node) => node.id === id) ? change.after.nodes : change.before.nodes, id)} is outside ${nameOf(change.before.nodes, lead)}’s.`,
+      });
+      for (const [key, { before, after }] of change.entities) {
+        switch (entityOf(key)) {
+          case 'meta':
+            return { refuse: 'A lead never changes the canvas itself: only the user does.' };
+          case 'node': {
+            const [was, is] = [before as NodeRow | null, after as NodeRow | null];
+            const id = (is ?? was)?.id;
+            if (id === undefined) break;
+            if (was === null && is !== null) {
+              // Created: nested inside the lead; or a frame holding team members alone (a group
+              // the lead made around itself and its team).
+              if (containersOf(change.after.nodes, id).includes(lead)) break;
+              const held = change.after.nodes.filter((node) =>
+                containersOf(change.after.nodes, node.id).includes(id),
+              );
+              if (
+                is.kind === 'frame' &&
+                held.length > 0 &&
+                held.every((node) => inTeam.has(node.id))
+              ) {
+                break;
+              }
+              return outside('adding', id);
+            }
+            if (inTeam.has(id)) break;
+            // Outside the team: only its place or position may differ (a relayout).
+            if (is !== null && was !== null && sameJson(laidOut(was), laidOut(is))) break;
+            return outside(is === null ? 'removing' : 'changing', id);
+          }
+          case 'link': {
+            const { a, b } = (after ?? before) as LinkRow;
+            if (!inTeam.has(a)) return outside('linking', a);
+            if (!inTeam.has(b)) return outside('linking', b);
+            break;
+          }
+          case 'item': {
+            const { agent } = (after ?? before) as ItemRow;
+            if (!inTeam.has(agent)) return outside('queueing for', agent);
+            break;
+          }
+        }
+      }
+      return undefined;
+    },
     // R11: a new agent runs an adapter and connection this build has (B12 C3: never unchosen,
     // copy or not), as its adapter's first connection does, in its user's own default mode, unless
     // it copies the agent it was spawned from; and its party keeps at most maxCreated() live agents
@@ -591,10 +658,29 @@ export function changeChecks({
       const most = maxCreated();
       const everywhere = caller.kind === 'outside';
       const live = created(change.by, everywhere ? undefined : change.canvas, change);
-      if (live + change.created.size <= most) return undefined;
-      return {
-        refuse: `${partyText(change.before.nodes, change.by)} keeps at most ${String(most)} live agents it created ${everywhere ? 'across its canvases' : 'on its canvas'}, and has ${String(live)}: only the user adds more, unless one of them is deleted.`,
-      };
+      if (live + change.created.size > most) {
+        return {
+          refuse: `${partyText(change.before.nodes, change.by)} keeps at most ${String(most)} live agents it created ${everywhere ? 'across its canvases' : 'on its canvas'}, and has ${String(live)}: only the user adds more, unless one of them is deleted.`,
+        };
+      }
+      // B24 C8: a lead's cap counts its whole team's creations, for each lead the creator is, or is
+      // nested in (agents you create count toward no one).
+      if (caller.kind !== 'agent' || caller.canvas !== change.canvas || isLead === undefined) {
+        return undefined;
+      }
+      const creator = caller.agent;
+      for (const lead of [creator, ...containersOf(change.before.nodes, creator)]) {
+        if (!isLead(change.canvas, lead)) continue;
+        const parties = [lead, ...teamOf(change.before.nodes, lead)].map(
+          (id): PartyId => `agent:${id}`,
+        );
+        const team = created(parties, change.canvas, change);
+        if (team + change.created.size <= most) continue;
+        return {
+          refuse: `${nameOf(change.before.nodes, lead)}’s team keeps at most ${String(most)} live agents it created, and has ${String(team)}: only the user adds more, unless one of them is deleted.`,
+        };
+      }
+      return undefined;
     },
     // R12: the role of an agent that existed. One created in the same change may be given one.
     role: (change) => {
@@ -667,6 +753,15 @@ function keptAgents(change: ChangeSet): [string, NodeRow, NodeRow][] {
     if (was?.kind === 'agent' && is?.kind === 'agent') kept.push([is.id, was, is]);
   }
   return kept;
+}
+
+/** A node's row without where it sits: what a relayout leaves alone. */
+function laidOut(row: NodeRow): Partial<NodeRow> {
+  const rest: Partial<NodeRow> = { ...row };
+  delete rest.x;
+  delete rest.y;
+  delete rest.place;
+  return rest;
 }
 
 /** Agent `id`'s queue in `document`, if it is an agent there. */

@@ -615,36 +615,45 @@ export class Documents {
    * those of changes past their checks on their way to disk included.
    */
   created(
-    party: PartyId,
+    party: PartyId | readonly PartyId[],
     canvas?: CanvasId,
     removing?: Pick<ChangeSet, 'canvas' | 'removed'>,
   ): number {
     const { store } = this.#deps;
+    const parties: readonly PartyId[] = typeof party === 'string' ? [party] : party;
+    if (parties.length === 0) return 0;
+    const marks = parties.map(() => '?').join(', ');
     const kept =
       canvas === undefined
         ? store
-            .prepare(`SELECT count(*) AS n FROM node WHERE created_by = ? AND kind = 'agent'`)
-            .get(party)
+            .prepare(
+              `SELECT count(*) AS n FROM node WHERE created_by IN (${marks}) AND kind = 'agent'`,
+            )
+            .get(...parties)
         : store
             .prepare(
               `SELECT count(*) AS n FROM node
-               WHERE created_by = ? AND kind = 'agent' AND canvas_id = ?`,
+               WHERE created_by IN (${marks}) AND kind = 'agent' AND canvas_id = ?`,
             )
-            .get(party, canvas);
+            .get(...parties, canvas);
     let count = Number(kept?.n ?? 0);
     if (
       removing !== undefined &&
       removing.removed.size > 0 &&
       (canvas === undefined || canvas === removing.canvas)
     ) {
-      // Only this party's rows on the changed canvas count as removals: ids may repeat elsewhere.
+      // Only these parties' rows on the changed canvas count as removals: ids may repeat elsewhere.
       const owned = store
-        .prepare(`SELECT id FROM node WHERE created_by = ? AND kind = 'agent' AND canvas_id = ?`)
-        .all(party, removing.canvas);
+        .prepare(
+          `SELECT id FROM node WHERE created_by IN (${marks}) AND kind = 'agent' AND canvas_id = ?`,
+        )
+        .all(...parties, removing.canvas);
       count -= owned.filter((row) => removing.removed.has(String(row.id))).length;
     }
     for (const one of this.#creating) {
-      if (one.by === party && (canvas === undefined || one.canvas === canvas)) count += one.count;
+      if (parties.includes(one.by) && (canvas === undefined || one.canvas === canvas)) {
+        count += one.count;
+      }
     }
     return count;
   }

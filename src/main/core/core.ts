@@ -1485,6 +1485,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
     created: (party, canvas, removing) => documents.created(party, canvas, removing),
     maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
+    isLead,
   });
   const dispatcher = createDispatcher(
     {
