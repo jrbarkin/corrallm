@@ -1911,6 +1911,22 @@ describe('migration 14', () => {
     expect(connection.prepare('SELECT * FROM outside_grant').all()).toEqual([]);
   });
 
+  it('raises the oldest reader to 15 for a lead’s copies and notices, keeping every message', () => {
+    migrate(connection, MIGRATIONS.slice(0, 14));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 15));
+
+    expect(schemaOf(connection)).toBe(15);
+    // A corrallm of schema 14 would leave a pending copy of a prompt no core holds any more to be
+    // delivered, and never withdraw it: none older may open the database once this ran.
+    expect(minReaderOf(connection)).toBe(15);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(before);
+  });
+
   it('keeps one lead an agent of a canvas, its grants and fingerprint as JSON, held only for what changed, and forgets it with its canvas', () => {
     migrate(connection);
     connection.exec('PRAGMA foreign_keys = ON');

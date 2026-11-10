@@ -174,6 +174,11 @@ export interface PromptOwnerDeps {
    * who it moved from and to (none: to you alone), and why.
    */
   routed?: (change: RouteChange) => void;
+  /**
+   * B24 C9: an outside orchestrator you let answer approvals is woken, once, as one it may answer
+   * is admitted, and told once more if it ends unanswered by it (a record for its `wait`).
+   */
+  wake?: (wake: { canvas: CanvasId; need: string; name: string; type: 'raised' | 'ended' }) => void;
 }
 
 /** A prompt's route moving, as the copy path hears it. */
@@ -186,6 +191,8 @@ export interface RouteChange {
   /** Why it moved: or `ended`, with `how` it ended. */
   why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'ended';
   how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you';
+  /** When the lead it moved to may answer until (epoch ms). */
+  until?: number;
 }
 
 /** The lead a prompt waits on now, and until when it may answer. */
@@ -229,6 +236,8 @@ interface Occurrence {
   route?: Route;
   /** The leads that handed it back or ran out of time: never offered it again (R28). */
   readonly passed: Set<string>;
+  /** The outside orchestrators woken for it (C9), by token name. */
+  readonly woken: Set<string>;
 }
 
 /** How a prompt no longer live ended, kept to say so to a later reply. */
@@ -453,6 +462,14 @@ export class PromptOwner implements PromptSink {
     return [...(this.#canvases.get(canvas)?.live.values() ?? [])].map(({ prompt }) => prompt);
   }
 
+  /** The lead the prompt `need` is routed to now, if it still waits. */
+  routeOf(canvas: CanvasId, need: string): string | undefined {
+    for (const occurrence of this.#canvases.get(canvas)?.live.values() ?? []) {
+      if (occurrence.need === need) return occurrence.route?.lead;
+    }
+    return undefined;
+  }
+
   /** Whether `to` names a live prompt here: what the reply router's prompt handler answers. */
   owns(canvas: CanvasId, to: string): boolean {
     return this.#resolve(canvas, to) !== undefined;
@@ -617,9 +634,19 @@ export class PromptOwner implements PromptSink {
       need: occurrence.need,
       ...(from === undefined ? {} : { from }),
       ...(lead === undefined ? {} : { to: lead }),
+      ...(occurrence.route === undefined ? {} : { until: occurrence.route.until }),
       why,
     });
     this.#deps.changed(occurrence.canvas, occurrence.agent);
+  }
+
+  /** The outside orchestrators you let answer this prompt are woken, once each (C9). */
+  #wake(occurrence: Occurrence): void {
+    for (const name of this.#deps.grantees?.(occurrence.canvas) ?? []) {
+      if (!answerable(this.#may(occurrence, `outside:${name}`))) continue;
+      occurrence.woken.add(name);
+      this.#deps.wake?.({ canvas: occurrence.canvas, need: occurrence.need, name, type: 'raised' });
+    }
   }
 
   /** The route ends with the prompt: its timer stopped, the copy path told once. */
@@ -968,6 +995,7 @@ export class PromptOwner implements PromptSink {
       bytes,
       state: { at: 'open' },
       passed: new Set(),
+      woken: new Set(),
     };
     prompts.live.set(built.id, occurrence);
     this.#keys.set(keyOf(at, key), occurrence);
@@ -985,6 +1013,7 @@ export class PromptOwner implements PromptSink {
       },
     });
     this.#route(occurrence, 'raised');
+    this.#wake(occurrence);
     this.#deps.changed(at.canvas, at.agent);
   }
 
@@ -1119,6 +1148,9 @@ export class PromptOwner implements PromptSink {
     if (prompts.live.get(occurrence.prompt.id) !== occurrence) return;
     prompts.live.delete(occurrence.prompt.id);
     this.#unroute(occurrence, ended);
+    for (const name of occurrence.woken) {
+      this.#deps.wake?.({ canvas: occurrence.canvas, need: occurrence.need, name, type: 'ended' });
+    }
     this.#keys.delete(keyOf(occurrence, occurrence.key));
     this.#bytes -= occurrence.bytes;
     prompts.ended.set(occurrence.need, ended);

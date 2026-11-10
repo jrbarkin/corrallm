@@ -38,3 +38,5 @@ The core's silent-turn watchdog also runs under `serve`. Its regular local inter
 Server discovery verifies api.json’s OS process identity with the same reader as core.lock and CLI cleanup (`src/main/core/process-identity.ts`). On Linux an address holding only a wall-clock start is not used: it cannot identify the server reliably after a clock step.
 
 B21's pure agent API contracts are prepared in `src/shared/api/agent-api.ts` and `src/main/sessions/connector.ts`; every native connection's route is on since B21 C7, so agents run under `serve` get corrallm's MCP as in the app, and ask and complete are registered (B21 C4, C5). They change neither outside-token issuance nor the CLI's tools. The shared test client (`src/main/sessions/fake-mcp-client.mjs`) uses only a fake's delivered HTTP route or bound channel; it discovers no server and reads no credentials from files or the environment.
+
+An outside orchestrator you let answer approvals (`outside.setGrant`, never a `serve` or `corrallm token` flag) is woken by a `notice` record for its `wait` when an approval it may answer waits, and told once more when that ends unanswered by it.

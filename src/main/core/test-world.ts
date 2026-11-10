@@ -982,6 +982,10 @@ export async function startWorld(): Promise<{
 }
 
 /** A request id for each fixture that writes, so that a call repeated through another transport dedupes. */
+/** R10's fixtures' request ids (B24 C8): apart from every other fixture's. */
+const teamRequest = (n: number) =>
+  `2c3d4e5f-6071-4829-9bac-1d2e3f4a5c${String(n).padStart(2, '0')}`;
+
 const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).padStart(2, '0')}`;
 /** B21's asks' and their answers' request ids. */
 const asked = (n: number) => `5d4e5f60-7182-4930-8bad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
@@ -1303,6 +1307,13 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         adapter: 'codex',
         request: request(27),
       },
+      // R10: at a point outside the lead's frame, so nested in no agent of its team.
+      team: {
+        canvas: CANVAS,
+        at: { x: -4000, y: -4000 },
+        adapter: 'codex',
+        request: teamRequest(2),
+      },
     },
   },
   'canvas.spawnAgent': {
@@ -1318,6 +1329,8 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     meetsRule: {
       'new-agent': { canvas: CANVAS, from: 'helper', relation: 'peer', request: request(28) },
+      // R10: a peer of the lead itself stands outside it.
+      team: { canvas: CANVAS, from: 'lead', relation: 'peer', request: teamRequest(3) },
     },
   },
   'canvas.link': {
@@ -1921,6 +1934,12 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         canvas: CANVAS,
         ops: [{ op: 'canvas.addAgent', args: { at: { x: 3300, y: 0 }, adapter: 'codex' } }],
         request: request(83),
+      },
+      // R10: a batch reaching outside the lead's team.
+      team: {
+        canvas: CANVAS,
+        ops: [{ op: 'canvas.spawnAgent', args: { from: 'lead', relation: 'peer' } }],
+        request: teamRequest(6),
       },
       role: {
         canvas: CANVAS,

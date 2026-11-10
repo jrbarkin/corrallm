@@ -9,6 +9,8 @@ import type { LeadGrants } from '../../shared/api/ops/leads';
 import type { OpName } from '../../shared/api/surface';
 import type { TopicSnapshot } from '../../shared/api/topics';
 import type { CanvasId } from '../../shared/canvas';
+import { listTools } from '../api/mcp';
+import { toolName } from '../../shared/api/registry';
 import { fakeConnector } from '../sessions/test-fake';
 import type { AgentCaller, Caller } from './caller';
 import { createCore } from './core';
@@ -190,6 +192,20 @@ describe('agent.setLead', () => {
     expect(rows()).toEqual([]);
     expect(await teamWrite()).toMatchObject({ ok: false, error: { code: 'forbidden' } });
     expect(await leadsOf()).toEqual({ leads: [], outside: [] });
+  });
+
+  it('lists a lead’s team tools to its CLI when it lists again, and none once demoted (B24 C8)', async () => {
+    const listed = () => listTools(core, LEAD).map((tool) => tool.name);
+    // A worker's list holds the conversation tools it needs to answer, and no team write.
+    expect(listed()).toContain(toolName('needs'));
+    expect(listed()).toContain(toolName('reply'));
+    expect(listed()).not.toContain(toolName('queue.add'));
+    await setLead('lead');
+    // Its grants work at once; the team writes appear in the list its CLI asks for next.
+    expect(listed()).toContain(toolName('queue.add'));
+    expect(listed()).toContain(toolName('canvas.addAgent'));
+    await setLead('lead', null);
+    expect(listed()).not.toContain(toolName('queue.add'));
   });
 
   it('refuses a lead’s call already on its way that reaches its scope once it is no lead', async () => {

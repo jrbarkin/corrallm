@@ -119,6 +119,7 @@ import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import { StalledTurns } from './stalled';
+import { LeadCopies } from './delivery/lead-copies';
 import { PromptOwner } from './prompts/owner';
 import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
@@ -683,6 +684,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const conversations = { ...createConversations(), ...config.sessions?.conversations };
   // The core's prompt owner (B13 C3): what each canvas's sessions raise, in its live index, and
   // the one answer each takes, on the session that raised it.
+  const leadCopies = new LeadCopies({
+    messages: (canvas) => engines.canvas(canvas)?.messages,
+    schedule: (canvas) => {
+      engines.canvas(canvas)?.delivery.schedule();
+    },
+    routeOf: (canvas, need) => prompts.routeOf(canvas, need),
+  });
   const prompts: PromptOwner = new PromptOwner({
     catalog: CATALOG,
     canvas: (canvas) => {
@@ -692,6 +700,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         : { messages: open.messages, nodes: open.document.nodes };
     },
     generationOf: (canvas, agent) => sessions.generationOf(canvas, agent),
+    // B24 C5: a prompt's route moving, or ending, is told to its lead by a host-built copy or notice.
+    routed: (change) => {
+      leadCopies.routed(change);
+    },
+    wake: (wake) => {
+      leadCopies.wake(wake);
+    },
     // B24 C3: who leads now and what it may answer, and the outside parties you let answer
     // approvals, read on every use.
     leads: { grantsOf: (canvas, agent) => leadStore.grantsOf(canvas, agent) },
@@ -1163,6 +1178,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
   });
   const engines: Engines = new Engines({
+    leadCopy: {
+      live: (message) => leadCopies.live(message),
+      refused: () => {
+        leadCopies.refused();
+      },
+    },
     processes: children,
     engineCatalog: engineCatalog(CATALOG),
     sessions,

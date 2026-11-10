@@ -81,3 +81,5 @@ A slow output pipe pins its read view (the owner's writes still continue) and is
 A successful export of a superseded handoff still updates the last-copy path and hash, retaining the newer handoff and leaving its export status alone. The per-agent export lane records that proof durably before attempting the newer copy.
 
 C3’s additive `handoff.accepted_turns` column keeps the 64 newest accepted request turn ids per agent as JSON (ids only), written with the reply and retained across handoff replacement and message pruning so resumed conversations cannot preview those replies in summaries.
+
+Migration 15 (B24 C3) changes no table: it raises `meta.min_reader` to 15, because a lead's copy and notice are messages whose `purpose` (`lead-copy`, `lead-notice`, each with its Need item) an older reader would take for none, leaving a pending copy of a prompt no core holds any more to be delivered and never withdrawn.

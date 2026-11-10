@@ -744,6 +744,15 @@ export const MIGRATIONS: readonly Migration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    // B24 C3: a lead's copy of a routed prompt, and its notice, are messages whose purpose the core
+    // minted (src/shared/model/purpose.ts). A corrallm of schema 14 would read them as no purpose
+    // at all: a copy whose prompt no core holds any more, pending, delivered to a lead as its own
+    // turn and never withdrawn. Nothing changes in the tables; only an older reader is turned away.
+    version: 15,
+    minReader: 15,
+    sql: 'SELECT 1;',
+  },
 ];
 
 /** The schema this code makes and reads. */
