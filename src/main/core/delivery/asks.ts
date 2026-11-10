@@ -141,6 +141,10 @@ export class Asks {
     this.#started = true;
     this.sweep();
     this.#expire();
+    // B24: who leads may have changed while this canvas's engine was closed (or a crash fell
+    // between a demotion and its re-addressing): manager rows move away from a recipient that lost
+    // the authority, before delivery sends anything.
+    this.readdress();
   }
 
   /** As delivery stops: nothing is watched for any more (the asks stay open, on disk). */

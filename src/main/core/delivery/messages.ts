@@ -636,7 +636,12 @@ export class MessageStore {
     const was = message.to;
     const moved = this.update(id, { to, state: to === 'you' ? 'delivered' : 'pending' });
     const now = this.#kept.get(id);
-    if (withdrawal !== undefined && now !== undefined)
+    // A note its first recipient was not yet told is never overwritten by a second move's.
+    if (
+      withdrawal !== undefined &&
+      now !== undefined &&
+      (now.withdrawal === undefined || now.withdrawal.told === true)
+    )
       this.#keep({ ...now, withdrawal: { text: withdrawal, for: was } });
     return moved;
   }

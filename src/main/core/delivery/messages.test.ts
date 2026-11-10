@@ -1500,6 +1500,24 @@ describe('readdress (B24 C4)', () => {
     expect(loaded.withdrawals('agent:lead')).toEqual([{ id: ask.id, text: 'Question was moved.' }]);
   });
 
+  it('keeps a first lead’s untold note when the row moves again', async () => {
+    const messages = await store();
+    const ask = messages.add({
+      ...draft('agent:worker', 'agent:a', 'delivered'),
+      kind: 'prompt',
+      ask: { ...question, via: 'manager' },
+    });
+    messages.readdress(ask.id, 'agent:b', 'Moved off the first.');
+    messages.update(ask.id, { state: 'delivered' });
+    messages.readdress(ask.id, 'you', 'Moved off the second.');
+    expect(messages.withdrawals('agent:a')).toEqual([{ id: ask.id, text: 'Moved off the first.' }]);
+    // Once it is told, a later move may leave its own.
+    messages.toldWithdrawals([ask.id]);
+    messages.update(ask.id, { to: 'agent:c', state: 'delivered' });
+    messages.readdress(ask.id, 'you', 'Moved off the third.');
+    expect(messages.withdrawals('agent:c')).toEqual([{ id: ask.id, text: 'Moved off the third.' }]);
+  });
+
   it('sends a row to another agent back to pending', async () => {
     const messages = await store();
     const ask = messages.add({
