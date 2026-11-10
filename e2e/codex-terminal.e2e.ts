@@ -254,8 +254,15 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
   // Listed in Needs you, to answer in its terminal.
   await openNeeds(page);
   const needs = page.getByRole('complementary', { name: 'Needs you' });
+  // Held through its hook (Codex hides its approval meanwhile): answerable in corrallm alone,
+  // with a countdown, until it is handed back to the terminal.
+  const asked = needs.getByRole('group', { name: /asks$/ });
+  await expect(asked).toContainText('Codex wants to run a command');
+  await expect(asked.getByRole('timer')).toContainText('Moves to its terminal in');
+  await asked.getByRole('button', { name: 'Answer in terminal', exact: true }).click();
+  // Handed back: the same ask, now the terminal's own.
   await expect(needs.getByRole('group', { name: /asks, in its terminal$/ })).toContainText(
-    'Codex needs you: see its terminal.',
+    'Codex wants to run a command',
   );
 
   // The session ran on with its view closed; opened again, it shows the same terminal.
@@ -281,7 +288,7 @@ test('Not waiting settles only the owner observation, and a later terminal wait 
   await chooseProject();
   const { view, terminal } = await openShop();
   await codexReady();
-  await typeIn(terminal, 'ask to run echo', 'Enter');
+  await typeIn(terminal, 'patch the file', 'Enter');
   await expect(status(view)).toHaveText('Needs you, in the terminal');
   await expect.poll(async () => (await promptEntries()).length).toBe(1);
   const first = (await promptEntries())[0];
@@ -294,7 +301,7 @@ test('Not waiting settles only the owner observation, and a later terminal wait 
     .poll(async () => (await promptEntries())[0])
     .toMatchObject({ id: first.id, outcome: { type: 'dismissed' } });
   expect((await logged()).filter((row) => row.event === 'answer')).toEqual([]);
-  expect(await prompts()).toEqual(['ask to run echo']);
+  expect(await prompts()).toEqual(['patch the file']);
   await queues.getByRole('button', { name: 'Open Shop', exact: true }).click();
   await expect(status(view)).toHaveText('Needs you, in the terminal');
   await expect(view.getByRole('button', { name: 'Not waiting', exact: true })).toHaveCount(0);
@@ -302,7 +309,7 @@ test('Not waiting settles only the owner observation, and a later terminal wait 
   await expect(status(view)).toHaveText('Idle');
   expect((await logged()).filter((row) => row.event === 'answer')).toHaveLength(1);
 
-  await typeIn(terminal, 'ask again', 'Enter');
+  await typeIn(terminal, 'patch again', 'Enter');
   await expect(view.getByRole('button', { name: 'Not waiting', exact: true })).toBeVisible();
   await expect.poll(async () => (await promptEntries()).length).toBe(2);
   const next = (await promptEntries())[1];
@@ -317,7 +324,7 @@ test('Not waiting settles only the owner observation, and a later terminal wait 
     outcome: { type: 'dismissed' },
   });
   expect((await logged()).filter((row) => row.event === 'answer')).toHaveLength(2);
-  expect(await prompts()).toEqual(['ask to run echo', 'ask again']);
+  expect(await prompts()).toEqual(['patch the file', 'patch again']);
 });
 
 test('the fake preserves text and bracketed paste coalesced with terminal reports', async () => {
@@ -480,4 +487,71 @@ test('resumes the agent’s Codex session after the app restarts', async () => {
   await openShop(2);
   await expect.poll(starts).toHaveLength(2);
   expect((await starts()).at(-1)?.slice(0, 2)).toEqual(['resume', session]);
+});
+
+/** The decisions the fake's held PermissionRequest hook was answered with. */
+async function decisions() {
+  return (await logged()).flatMap((entry) =>
+    entry.event === 'hook-decision'
+      ? [(entry as unknown as { decision: Record<string, unknown> }).decision]
+      : [],
+  );
+}
+
+test('answers a held command approval from Needs through its hook, never by typing', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  await codexReady();
+  await typeIn(terminal, 'ask to run echo', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  const needs = page.getByRole('complementary', { name: 'Needs you' });
+  const asked = needs.getByRole('group', { name: /asks$/ });
+  await asked.getByRole('button', { name: 'Yes, proceed', exact: true }).click();
+  await expect.poll(decisions).toEqual([{ behavior: 'allow' }]);
+  await expect(needs).toHaveCount(0);
+
+  // Deny with words: Codex is told them, framed as the user's.
+  await page.locator('.react-flow__node').dblclick();
+  await typeIn(terminal, 'ask again', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  await asked
+    .getByRole('button', { name: 'No, and tell Codex what to do differently', exact: true })
+    .click();
+  await asked.getByRole('textbox', { name: 'Feedback' }).fill('use a branch');
+  await asked.getByRole('button', { name: 'Send feedback' }).click();
+  await expect.poll(async () => (await decisions()).length).toBe(2);
+  expect((await decisions())[1]).toMatchObject({
+    behavior: 'deny',
+    message: 'The user declined this and said: use a branch',
+  });
+  // Nothing was typed into the terminal for either answer.
+  expect((await logged()).filter((row) => row.event === 'answer')).toEqual([]);
+});
+
+test('moves an unanswered held approval to its terminal at the deadline, where it is answered', async () => {
+  test.setTimeout(90_000);
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  await codexReady();
+  await typeIn(terminal, 'ask to run echo', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  const needs = page.getByRole('complementary', { name: 'Needs you' });
+  await expect(needs.getByRole('group', { name: /asks$/ })).toBeVisible();
+  // Nobody answers: corrallm lets the request go at 20 s, and the approval is the terminal's.
+  await expect(needs.getByRole('group', { name: /asks, in its terminal$/ })).toBeVisible({
+    timeout: 40_000,
+  });
+  await page.locator('.react-flow__node').dblclick();
+  await typeIn(terminal, 'y');
+  await expect(status(view)).toHaveText('Idle');
+  expect(await decisions()).toEqual([]);
+  expect((await logged()).filter((row) => row.event === 'answer')).toHaveLength(1);
 });

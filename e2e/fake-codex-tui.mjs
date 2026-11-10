@@ -325,15 +325,20 @@ function runTui() {
     draw();
     writeFileSync(path.join(home, sessionId), 'thread\n');
     await hook('UserPromptSubmit', { turn_id: turnId, prompt });
-    if (prompt.startsWith('ask')) {
+    // "patch …" asks for approval with no PermissionRequest hook (as for an edit, which corrallm
+    // does not hold): its approval is drawn at once.
+    if (prompt.startsWith('ask') || prompt.startsWith('patch')) {
       // Its PermissionRequest hook runs first; while it does, only "Running hook" is drawn.
-      const held = hooks.some((one) => one.event === 'PermissionRequest') && untrusted.length === 0;
+      const held =
+        prompt.startsWith('ask') &&
+        hooks.some((one) => one.event === 'PermissionRequest') &&
+        untrusted.length === 0;
       if (held) {
         state = 'hook';
         title(`${'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'[0]} Working`);
         draw();
       }
-      const printed = await hook('PermissionRequest', {
+      const printed = await hook(prompt.startsWith('ask') ? 'PermissionRequest' : 'None', {
         turn_id: turnId,
         tool_name: 'Bash',
         tool_input: { command: 'echo hello', description: 'Say hello' },
