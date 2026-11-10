@@ -227,3 +227,50 @@ it('types the connection’s Shift+Enter once, on keydown; the terminal’s own 
   screen.setKeys({ shiftEnter: null });
   expect(shiftEnter(element, typed)).toEqual(['\r']);
 });
+
+it('leaves every other Enter to the terminal with keys declared: plain, keyup alone, Ctrl+Shift and Cmd+Shift', () => {
+  const press = (
+    element: HTMLElement,
+    typed: string[],
+    types: string[],
+    modifiers: KeyboardEventInit,
+  ) => {
+    typed.length = 0;
+    const target = element.querySelector('textarea');
+    if (!target) throw new Error('no terminal');
+    for (const type of types) {
+      target.dispatchEvent(
+        new KeyboardEvent(type, {
+          key: 'Enter',
+          code: 'Enter',
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        }),
+      );
+    }
+    return [...typed];
+  };
+  const cases: [string, string[], KeyboardEventInit][] = [
+    ['plain Enter', ['keydown', 'keyup'], {}],
+    ['a Shift+Enter keyup alone', ['keyup'], { shiftKey: true }],
+    ['Ctrl+Shift+Enter', ['keydown', 'keyup'], { ctrlKey: true, shiftKey: true }],
+    ['Cmd+Shift+Enter', ['keydown', 'keyup'], { metaKey: true, shiftKey: true }],
+  ];
+  for (const [name, types, modifiers] of cases) {
+    const native = make();
+    const declared = make();
+    const nativeTyped: string[] = [];
+    const declaredTyped: string[] = [];
+    native.screen.onInput((data) => nativeTyped.push(data));
+    declared.screen.onInput((data) => declaredTyped.push(data));
+    declared.screen.setKeys({ shiftEnter: '\x1b[13;2u' });
+    const expected = press(native.element, nativeTyped, types, modifiers);
+    const got = press(declared.element, declaredTyped, types, modifiers);
+    // As the terminal does it on its own, and never the declared sequence.
+    expect(got, name).toEqual(expected);
+    expect(got, name).not.toContain('\x1b[13;2u');
+    if (name === 'plain Enter') expect(got).toEqual(['\r']);
+  }
+});

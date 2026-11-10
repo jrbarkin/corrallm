@@ -52,7 +52,7 @@ export type TerminalRecord = { t: number } & (
   | { kind: 'out'; data: string }
   /** Its window title changed (also in what it printed). */
   | { kind: 'title'; data: string }
-  /** Keys sent to it: text pasted, or a key ("\\r" is Enter). */
+  /** Keys sent to it: text pasted, or a key (a carriage return, "\r" in JSON, is Enter). */
   | { kind: 'in'; data: string }
   /** A hook it ran, and the event it posted. */
   | { kind: 'hook'; data: { ok: boolean; ev: Record<string, unknown> } }
