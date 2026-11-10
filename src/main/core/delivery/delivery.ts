@@ -405,10 +405,10 @@ export class Delivery {
   #unrecordable: (() => void) | undefined;
   readonly #images = new Map<string, NonNullable<UserMessage['images']>>();
   /**
-   * B19 C1: the owners and recipients (`owner\0to`) whose hand-off waited unsent for room in the
-   * recipient's line (MAX_WAITING): the run is told once there is.
+   * B19 C1: the senders and recipients whose hand-off waited unsent for room in the recipient's
+   * line (MAX_WAITING), keyed by the JSON pair of their ids: the run is told once there is.
    */
-  readonly #full = new Set<string>();
+  readonly #full = new Map<string, { from: PartyId; to: string }>();
   /**
    * B19 C2: the slot of each agent whose next native turn delivery holds (RunStore.reserve, or a gap
    * it took), by agent: the token it holds it under, and the message it delivers in it, once one.
@@ -605,7 +605,7 @@ export class Delivery {
     const { store } = this.#deps;
     const from = agentParty(owner);
     if (this.waitingFrom(to, from) >= MAX_WAITING) {
-      this.#full.add(`${owner}\u0000${to}`);
+      this.#full.set(JSON.stringify([owner, to]), { from, to });
       return undefined;
     }
     const message = store.add({
@@ -1694,11 +1694,16 @@ export class Delivery {
   /** B19 C1: tells the run once a recipient whose line was full has room for an owner's hand-off. */
   #roomFor(waiting: ReadonlyMap<string, readonly Message[]>): void {
     let room = false;
-    for (const key of [...this.#full]) {
-      const [owner = '', to = ''] = key.split('\u0000');
-      const from = agentParty(owner);
-      const line = waiting.get(to) ?? [];
-      if (line.filter((message) => message.from === from).length >= MAX_WAITING) continue;
+    const counts = new Map<string, Map<PartyId, number>>();
+    for (const [key, { from, to }] of this.#full) {
+      let bySender = counts.get(to);
+      if (bySender === undefined) {
+        bySender = new Map<PartyId, number>();
+        counts.set(to, bySender);
+        for (const { from: sender } of waiting.get(to) ?? [])
+          bySender.set(sender, (bySender.get(sender) ?? 0) + 1);
+      }
+      if ((bySender.get(from) ?? 0) >= MAX_WAITING) continue;
       this.#full.delete(key);
       room = true;
     }

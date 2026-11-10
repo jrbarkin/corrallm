@@ -21,7 +21,7 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-it.each([9, 10, 11, 12, 14])(
+it.each([9, 10, 11, 12, 14, 15])(
   'requires reader %i after upgrading, leaving the store intact on refusal',
   async (version) => {
     const connection = madeAtSchema(profile, version - 1);
