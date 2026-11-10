@@ -8,8 +8,9 @@ import { foreignRequest } from '../../loopback';
 /*
  * The local server terminal CLIs' hooks report to: JSON events, routed by the session's bearer
  * token (read from its private header file). It only listens, answering with no decision. A foreign
- * Host or any Origin is refused before the token (loopback.ts); no media type is checked until
- * a recording says what the CLIs' HTTP hooks send (Build Plan Q26).
+ * Host or any Origin is refused before the token (loopback.ts); no media type is checked yet. The
+ * recordings (`hook-holds.jsonl` beside each adapter's fixtures) show both CLIs' hooks send
+ * `application/json`.
  */
 
 /** The old secret variable: stripped from every Terminal child's environment. */
