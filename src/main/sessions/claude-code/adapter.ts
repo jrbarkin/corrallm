@@ -147,7 +147,7 @@ export const claudeCode: Adapter = {
         // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl): B13 C4.
         signals: true,
         context: true,
-        // corrallm's agent API: its host-registered channel (recorded on SDK 0.3.306).
+        // corrallm's agent API: its host-registered channel (recorded on SDK 0.3.319).
         api: 'channel',
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
