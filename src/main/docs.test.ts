@@ -47,7 +47,7 @@ describe('repository instructions and architecture docs', () => {
   });
 
   it.each([
-    ['README.md', 'Local CI '],
+    ['README.md', 'GitHub CI '],
     ['docs/architecture/toolchain.md', 'corrallm.mjs (`pnpm corrallm`)'],
   ])('names every local gate script where %s introduces them', (file, start) => {
     const line = readFileSync(path.join(ROOT, file), 'utf8')
