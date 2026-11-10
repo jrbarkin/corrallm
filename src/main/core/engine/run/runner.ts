@@ -1318,13 +1318,17 @@ export class RunStore {
       if (this.#busy.get(agent) === token) this.#busy.delete(agent);
     }
     // B19 C1: nor does one whose hand-off waits (delivery withdraws what it sent as it goes).
-    for (const [agent, { token }] of this.#handing) {
-      if (nodes.some((node) => node.id === agent && node.type === 'agent')) continue;
+    const withdrawn: TaskMessage[] = [];
+    for (const [agent, { token, task }] of this.#handing) {
+      if (this.#byId.has(agent)) continue;
       this.#handing.delete(agent);
       if (this.#busy.get(agent) === token) this.#busy.delete(agent);
+      withdrawn.push(task);
     }
     const changed = this.#applyPauses();
     this.#releasePending();
+    // All removed attempts and the new pauses stand before a synchronous take-back callback.
+    for (const task of withdrawn) this.#io.handOffs?.withdraw(task);
     if (this.#run.running) this.#settle(this.#unrefuse() || changed);
     else if (changed) this.#set({ ...this.#run });
   }

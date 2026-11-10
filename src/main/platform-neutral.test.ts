@@ -31,8 +31,6 @@ const NAMES = /claude|codex|anthropic|openai|chatgpt|(['"])(?:sdk|app-server)\1/
 
 /** Today's offenders, by file: how many names each has. */
 const ALLOWED: Readonly<Record<string, number>> = {
-  // B16: NEW_LINE still encodes one native Shift+Enter binding; only recorded per-connection keys can replace it without guessing input bytes.
-  'src/renderer/terminal/screen.ts': 4,
   // B15: native permission/mode unions still validate session events and changes; replacing them needs the mode authority/confirmation contract, not a type alias rename.
   'src/shared/session.ts': 5,
 };

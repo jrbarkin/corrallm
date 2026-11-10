@@ -32,6 +32,10 @@ import { Screen } from '../../terminal/screen';
  *   The hooks' times are lined up with the keys by the first prompt, to within a second. The
  *   token counts beside it in the tests (the session's own `token_count` records, numbers only)
  *   are what its rollout file held for the same session.
+ * - multiline (Codex 0.162.1, B16 X2; /work/smoke/x2): its TUI in a pseudo-terminal of 100×30 with
+ *   a stub model API (no real usage), a throwaway home and the per-run flags of the adapter (no
+ *   hooks): "line one", Shift+Enter as CSI-u, "line two", then Enter. Notes: the draft before Enter,
+ *   and the model API's first request (a message of two lines), which came after Enter alone.
  * - Codex 0.162.1 (B13 C13), against a local stub of the model API in a throwaway CODEX_HOME,
  *   with corrallm's per-run flags (no daemon, the folder trusted, plain command hooks and their
  *   trust, its window title) in a pseudo-terminal of 100×30 unless said; the folder reads
@@ -58,7 +62,8 @@ export type TerminalFixture =
   | 'approvals'
   | 'approvals-small'
   | 'question'
-  | 'plan';
+  | 'plan'
+  | 'multiline';
 
 /** The recorded sessions' ids (their threads'): prompts' (and resume's), and turns'. */
 export const RECORDED_SESSION = '01a13450-a090-78e2-aba2-01792d6d732d';
@@ -71,7 +76,7 @@ export type TerminalRecord = { t: number } & (
   | { kind: 'out'; data: string }
   /** Its window title changed (also in what it printed). */
   | { kind: 'title'; data: string }
-  /** Keys sent to it: text pasted, or a key ("\\r" is Enter). */
+  /** Keys sent to it: text pasted, or a key (a carriage return, "\r" in JSON, is Enter). */
   | { kind: 'in'; data: string }
   /** A hook it ran, and the event it posted. */
   | { kind: 'hook'; data: { ok: boolean; ev: Record<string, unknown> } }
