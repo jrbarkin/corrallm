@@ -192,3 +192,38 @@ it('says so too when the GPU loses its context and no new WebGL2 context can be 
   screen.dispose();
   expect(within(element).queryByRole('alert')).toBeNull();
 });
+
+/** Presses Shift+Enter in the terminal (a keydown, then a keyup); what it typed meanwhile. */
+function shiftEnter(element: HTMLElement, typed: string[]): string[] {
+  typed.length = 0;
+  const target = element.querySelector('textarea');
+  if (!target) throw new Error('no terminal');
+  for (const type of ['keydown', 'keyup']) {
+    target.dispatchEvent(
+      new KeyboardEvent(type, {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }
+  return [...typed];
+}
+
+it('types the connection’s Shift+Enter once, on keydown; the terminal’s own Enter where none is declared', () => {
+  const { element, screen } = make();
+  const typed: string[] = [];
+  screen.onInput((data) => typed.push(data));
+  // Nothing is declared yet: the terminal does as it does, whatever another CLI binds.
+  expect(shiftEnter(element, typed)).toEqual(['\r']);
+  screen.setKeys({ shiftEnter: '\x1b[13;2u' });
+  expect(shiftEnter(element, typed)).toEqual(['\x1b[13;2u']);
+  // A real switch replaces it; null hands the key back to the terminal.
+  screen.setKeys({ shiftEnter: '\x1b\r' });
+  expect(shiftEnter(element, typed)).toEqual(['\x1b\r']);
+  screen.setKeys({ shiftEnter: null });
+  expect(shiftEnter(element, typed)).toEqual(['\r']);
+});
