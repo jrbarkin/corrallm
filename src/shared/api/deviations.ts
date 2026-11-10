@@ -38,6 +38,7 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'session.continueIn': 'permissions',
   'session.viewCommand': 'view',
   'settings.set': 'consent',
+  'app.command': 'consent',
   'agent.setType': 'permissions',
   'agent.setConnection': 'permissions',
   'agent.setFallback': 'permissions',

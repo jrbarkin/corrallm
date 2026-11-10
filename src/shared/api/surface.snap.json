@@ -3,6 +3,7 @@
     "api.topics.subscribe",
     "api.topics.unsubscribe",
     "api.app.info",
+    "api.app.command",
     "api.catalog.get",
     "api.catalog.installed",
     "api.templates.list",
@@ -288,6 +289,7 @@
     "session.continueIn": "permissions",
     "session.viewCommand": "view",
     "settings.set": "consent",
+    "app.command": "consent",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "agent.setFallback": "permissions",
@@ -313,7 +315,7 @@
   "schemas": {
     "topics.subscribe": {
       "input": "8c5be84f0a1a163a",
-      "output": "e435673d006d713b"
+      "output": "4d269e043c146951"
     },
     "topics.unsubscribe": {
       "input": "8c5be84f0a1a163a",
@@ -323,9 +325,13 @@
       "input": "e5fa5cc18e054cdd",
       "output": "fb1ca6c18e59cdb2"
     },
+    "app.command": {
+      "input": "d787e15172d5fafa",
+      "output": "f7ea657b1a2c0232"
+    },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "d28bfe74cb85a517"
+      "output": "cf133a1264e97481"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -613,7 +619,7 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "dfeb369fa9284423"
+      "output": "893ccf767cd72a55"
     },
     "settings.set": {
       "input": "6cbffd087130017f",

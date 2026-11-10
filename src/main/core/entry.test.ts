@@ -141,6 +141,7 @@ async function start() {
         distribution: 'local',
         locale: 'en-US',
         fakeSessions: true,
+        launcher: null,
       });
       if (answer.ok) initialized = true;
       return answer;

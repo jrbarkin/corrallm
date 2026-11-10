@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { CanvasId } from '../../shared/canvas';
 import { serveTokenSocket } from '../core/token-socket';
 import type { TokenRequest, TokenSocket } from '../core/token-socket';
 import { keepCanvases } from '../core/store/test-store';
@@ -58,7 +59,7 @@ beforeEach(async () => {
               name: request.name,
               access: 'write',
               expires: Date.now() + 3600_000,
-              canvases: [{ id: CANVAS, file }],
+              canvases: [{ id: CANVAS as CanvasId, file }],
               url: URL,
             },
       );

@@ -10,6 +10,7 @@ import type { CoreInit, CoreSide } from './core/protocol';
 import { PROD_CSP } from './csp';
 import { QuitCoordinator } from './host/closing';
 import { forkCore } from './host/core-process';
+import { packagedLauncher } from './host/launcher';
 import { CorePorts } from './host/ports';
 import { hostServices } from './host/services';
 import { CoreSupervisor } from './host/supervisor';
@@ -120,6 +121,10 @@ function main(): void {
         distribution: CORRALLM_DISTRIBUTION,
         locale: app.getLocale(),
         fakeSessions,
+        launcher: packagedLauncher({
+          packaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+        }),
       };
       let updates: AppUpdates | undefined = undefined;
       const notifications = new Set<NativeNotifications>();

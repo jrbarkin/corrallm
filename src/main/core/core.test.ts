@@ -75,6 +75,9 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
   return core;
 }
 
+/** What you read of the command's link where the host has no launcher (B30 C2). */
+const NO_COMMAND = { state: 'unavailable', sentence: expect.any(String) as unknown };
+
 describe('createCore', () => {
   it('checks saved conversation ids with the registry’s stricter adapter shape', async () => {
     const nativeId = 'session:one';
@@ -247,6 +250,7 @@ describe('createCore', () => {
         api: { state: 'stopped', port: null },
         notifications: { enabled: true, lastDelivery: null },
         links: { state: 'ready', sites: [], builtIn: ['https://github.com'] },
+        command: NO_COMMAND,
       },
     });
   });
@@ -684,6 +688,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
         api: API,
         notifications: { enabled: false, lastDelivery: null },
         links: { state: 'ready', sites: [SECRET, LOCAL], builtIn: ['https://github.com'] },
+        command: NO_COMMAND,
       },
     });
     for (const party of READERS) {
@@ -700,7 +705,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
       () => undefined,
     );
     followed.stop();
-    expect(JSON.stringify(followed.snapshot)).not.toMatch(/intranet|notifications|links/);
+    expect(JSON.stringify(followed.snapshot)).not.toMatch(/intranet|notifications|links|command/);
     const yours = await started.topics.follow(CALLERS.you, 'settings', () => undefined);
     yours.stop();
     expect(JSON.stringify(yours.snapshot)).toContain(SECRET);
@@ -724,6 +729,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
               state: 'unavailable',
               sentence: 'corrallm couldn’t read the sites you said to open without asking.',
             },
+            command: NO_COMMAND,
           },
         });
         expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({

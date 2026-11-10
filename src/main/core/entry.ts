@@ -138,7 +138,7 @@ const link = new CoreLink<CoreSide, HostSide>(
       let core: Core;
       try {
         held = await lockProfile(config.profile, 'app');
-        core = await createCore({ ...config, check }, appHost(link));
+        core = await createCore({ ...config, check }, appHost(link, config.launcher));
       } catch (error) {
         release();
         composed = false;
