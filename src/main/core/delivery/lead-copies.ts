@@ -61,7 +61,8 @@ export class LeadCopies {
   routed(change: RouteChange & { until?: number }): void {
     const messages = this.#deps.messages(change.canvas);
     if (messages === undefined) return;
-    if (change.from !== undefined) {
+    // The party that answered or handed back already had that occurrence's result: no notice.
+    if (change.from !== undefined && change.by !== agentParty(change.from)) {
       this.#away(
         messages,
         change.need,

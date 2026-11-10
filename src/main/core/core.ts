@@ -1044,6 +1044,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // Each commit to a canvas's document: its agents, how they run, who reaches what.
   documents.subscribe(({ canvas, by }) => {
     workspaceDirectories.changed(canvas);
+    // A commit may change who is nested in whom (B24 R10): routed prompts are checked again.
+    prompts.reroute(canvas);
     engines.canvas(canvas)?.delivery.asks.readdress();
     topics.changed(`needs:${canvas}`, by);
     engines.needsChanged(canvas);

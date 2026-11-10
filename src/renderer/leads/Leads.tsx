@@ -178,6 +178,20 @@ export function LeadSection({
             Where its worker’s CLI sends no signal, a lead can only reject or hand back. You can
             answer any of its team’s requests first.
           </p>
+          {lead.held === null && (
+            <>
+              <p className="agent-settings-help">Its lead tools appear when it next starts.</p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  void perform(() => client.sessionRestart({ canvas, agent }));
+                }}
+              >
+                Restart
+              </button>
+            </>
+          )}
           <button
             type="button"
             disabled={busy}

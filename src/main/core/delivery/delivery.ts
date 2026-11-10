@@ -2389,7 +2389,13 @@ export class Delivery {
       }
     });
     // A reply never makes a reply; nor does an answer, or an ask's end, its asker was sent.
-    if (message.turn === undefined && message.kind === 'text' && message.ask === undefined) {
+    // A lead's copy or notice makes no reply either (B24 C5): nothing is owed to corrallm.
+    if (
+      message.turn === undefined &&
+      message.kind === 'text' &&
+      message.ask === undefined &&
+      !isLeadTurn(message)
+    ) {
       store.add({
         from: message.to,
         to: message.from,

@@ -206,6 +206,27 @@ describe('a lead’s copy', () => {
     expect(notices()).toHaveLength(1);
   });
 
+  it('sends the lead that answered, or handed back, no notice of it', async () => {
+    const need = raise(KEY);
+    const [copy] = copies();
+    if (copy === undefined) throw new Error('no copy');
+    messages.update(copy.id, { state: 'delivered' });
+    const as = (by: `agent:${string}`) =>
+      ({
+        by,
+        caller: { kind: 'agent', agent: by.slice(6) },
+        signal: new AbortController().signal,
+        noReturn: () => undefined,
+      }) as never;
+    await owner.answer(CANVAS, need, { choice: 'hand-back' }, as('agent:mid'));
+    expect(notices()).toEqual([]);
+    const top = copies().find(({ to }) => to === 'agent:top');
+    if (top === undefined) throw new Error('no copy for top');
+    messages.update(top.id, { state: 'delivered' });
+    await owner.answer(CANVAS, need, { choice: 'yes' }, as('agent:top'));
+    expect(notices()).toEqual([]);
+  });
+
   it('offers a lead no more than MAX_WAITING open copies', () => {
     for (let n = 0; n < 25; n += 1) {
       raise(`${String(n).padStart(8, '0')}-3c4d-4e5f-8a9b-0c1d2e3f4a5b`);

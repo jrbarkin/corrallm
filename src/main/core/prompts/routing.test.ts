@@ -384,6 +384,83 @@ describe('hand back and the deadline', () => {
   });
 });
 
+describe('a route when the ancestry or the grants change', () => {
+  const moveWork = (parentId?: string) => {
+    nodes = nodes.map((node) =>
+      node.id === 'work'
+        ? { id: node.id, type: node.type, data: node.data, ...(parentId ? { parentId } : {}) }
+        : node,
+    ) as NodeLike[];
+  };
+
+  it('stops the old lead answering a worker moved off its team, and re-routes to the new team’s lead', () => {
+    const { id } = raise('work');
+    moveWork('free');
+    grants.set('free', ALL);
+    // At once, before any reroute: the old lead is no longer above the worker.
+    expect(owner.refusal(CANVAS, id, 'agent:mid', { choice: 'yes' })).toBeDefined();
+    expect(seenBy('agent:mid', id)?.choices).toEqual([]);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you']);
+    owner.reroute(CANVAS);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you', 'agent:free']);
+    expect(moves.at(-1)).toMatchObject({ from: 'mid', to: 'free', why: 'authority' });
+    expect(owner.refusal(CANVAS, id, 'agent:free', { choice: 'yes' })).toBeUndefined();
+  });
+
+  it('goes to you alone when the worker leaves every team', () => {
+    const { id } = raise('work');
+    moveWork();
+    owner.reroute(CANVAS);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you']);
+    expect(owner.items(CANVAS)[0]?.routed).toBeUndefined();
+    expect(owner.refusal(CANVAS, id, 'agent:top', { choice: 'yes' })).toBeDefined();
+  });
+
+  it('keeps a route where it is when a nearer lead is granted later (routes only go up)', () => {
+    grants.delete('mid');
+    raise('work');
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you', 'agent:top']);
+    const before = moves.length;
+    grants.set('mid', ALL);
+    owner.reroute(CANVAS);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you', 'agent:top']);
+    expect(moves).toHaveLength(before);
+  });
+
+  it('never routes back to a lead it left, even when its grant returns', () => {
+    raise('work');
+    grants.delete('mid');
+    owner.reroute(CANVAS);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you', 'agent:top']);
+    grants.delete('top');
+    owner.reroute(CANVAS);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you']);
+    grants.set('top', ALL);
+    grants.set('mid', ALL);
+    owner.reroute(CANVAS);
+    expect(owner.items(CANVAS)[0]?.by).toEqual(['you']);
+  });
+
+  it('tells the copy path who answered or handed back', async () => {
+    const { id } = raise('work');
+    await reply(id, { choice: 'yes' }, 'agent:mid');
+    expect(moves.at(-1)).toMatchObject({
+      why: 'ended',
+      how: 'answered',
+      from: 'mid',
+      by: 'agent:mid',
+    });
+    const second = raise('work');
+    await reply(second.id, { choice: HAND_BACK }, 'agent:mid');
+    expect(moves.at(-1)).toMatchObject({
+      why: 'handed-back',
+      from: 'mid',
+      to: 'top',
+      by: 'agent:mid',
+    });
+  });
+});
+
 describe('LEAD_DENIALS', () => {
   async function refuseOne() {
     const { id } = raise('work');

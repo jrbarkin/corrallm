@@ -119,3 +119,16 @@ it('offers no grant to a gone token that has none', async () => {
   ).toBe(true);
   expect(core.operations).toEqual([]);
 });
+
+it('says a lead’s tools appear when it next starts, and restarts it with exactly one operation', async () => {
+  const core = await setup([{ agent: 'boss', grants: QUESTIONS, held: null }]);
+  expect(screen.getByText('Its lead tools appear when it next starts.')).toBeTruthy();
+  expect(core.operations).toEqual([]);
+  await events.click(screen.getByRole('button', { name: 'Restart' }));
+  expectOneOp(core, 'session.restart', { canvas, agent: 'boss' });
+});
+
+it('offers no restart for an agent that leads nobody, or is held', async () => {
+  await setup([{ agent: 'boss', grants: QUESTIONS, held: 'role' }]);
+  expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull();
+});

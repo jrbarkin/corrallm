@@ -192,6 +192,8 @@ export interface RouteChange {
   /** Why it moved: or `ended`, with `how` it ended. */
   why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'ended';
   how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you';
+  /** Who answered it or handed it back (the party it already told), if a party did. */
+  by?: PartyId;
   /** When the lead it moved to may answer until (epoch ms). */
   until?: number;
 }
@@ -237,6 +239,8 @@ interface Occurrence {
   route?: Route;
   /** The leads that handed it back or ran out of time: never offered it again (R28). */
   readonly passed: Set<string>;
+  /** The leads that lost their authority over it: never routed to again (R28). */
+  readonly left: Set<string>;
   /** The outside orchestrators woken for it (C9), by token name. */
   readonly woken: Set<string>;
 }
@@ -419,7 +423,7 @@ export class PromptOwner implements PromptSink {
   #seenBy(occurrence: Occurrence, need: NeedsItem, party?: PartyId): NeedsItem {
     const by: PartyId[] = ['you'];
     const { route } = occurrence;
-    if (route !== undefined) by.push(route.party);
+    if (route !== undefined && this.#leads(occurrence, route.lead)) by.push(route.party);
     for (const name of this.#deps.grantees?.(occurrence.canvas) ?? []) {
       const outside: PartyId = `outside:${name}`;
       if (answerable(this.#may(occurrence, outside))) by.push(outside);
@@ -544,7 +548,7 @@ export class PromptOwner implements PromptSink {
   #answerer(occurrence: Occurrence, by: PartyId): Answerer | undefined {
     if (by === 'you') return { kind: 'you' };
     const { route } = occurrence;
-    if (by === route?.party) {
+    if (by === route?.party && this.#leads(occurrence, route.lead)) {
       const grants = this.#deps.leads?.grantsOf(occurrence.canvas, route.lead);
       return grants === undefined ? undefined : { kind: 'lead', grants };
     }
@@ -566,18 +570,51 @@ export class PromptOwner implements PromptSink {
   }
 
   /**
-   * Routes every open prompt on the canvas again (B24 C3): after who leads, or who is nested in
-   * whom, changed. A prompt moves only away from a party that lost its authority, or to the next
-   * one above; never to one it already passed.
+   * Routes every open prompt on the canvas again (B24 C3): after who leads, who is nested in whom,
+   * or the document changed. A prompt moves only away from a party that lost its authority, to the
+   * nearest one above that it has not left or passed; otherwise it stays where it is.
    */
   reroute(canvas: CanvasId): void {
     for (const occurrence of this.#live(canvas)) this.#route(occurrence, 'authority');
   }
 
+  /** Whether `lead` is still above the prompt's worker and has an API route to answer by. */
+  #leads(occurrence: Occurrence, lead: string): boolean {
+    const nodes = this.#nodes(occurrence.canvas);
+    if (ancestorsOf(nodes, occurrence.agent)?.includes(lead) !== true) return false;
+    const node = nodes.find((one) => one.id === lead);
+    const endpoint =
+      node?.type === 'agent'
+        ? agentEndpoint(node.data as EndpointData, this.#deps.catalog)
+        : undefined;
+    return (
+      endpoint?.kind === 'known' &&
+      connectionIn(this.#deps.catalog, endpoint.connection)?.connection.api != null
+    );
+  }
+
+  /** Whether `lead` may hold the prompt now: above, routable, granted its kind, not cut off. */
+  #holds(occurrence: Occurrence, lead: string): boolean {
+    if (occurrence.prompt.answerIn === 'terminal') return false;
+    if (!this.#leads(occurrence, lead)) return false;
+    const grants = this.#deps.leads?.grantsOf(occurrence.canvas, lead);
+    if (grants === undefined) return false;
+    if (this.#cut(occurrence, lead)) return false;
+    const signals =
+      connectionIn(this.#deps.catalog, occurrence.connection)?.connection.signals === true;
+    return answerable(allowance(occurrence.prompt, signals, { kind: 'lead', grants }));
+  }
+
+  #cut(occurrence: Occurrence, lead: string): boolean {
+    return (
+      (this.#denials.get(denialKey(occurrence.canvas, lead, occurrence.agent)) ?? 0) >= LEAD_DENIALS
+    );
+  }
+
   /**
-   * The lead `occurrence` routes to now (R28: strictly above whoever passed it, never itself, a
-   * loop in the ancestry none), if any is granted its kind on a connection with an API route and
-   * has something to answer, and hasn't been cut off for this worker.
+   * The lead `occurrence` routes to now (R28: strictly above whoever passed it, never itself, never
+   * one it left, a loop in the ancestry none), if any is granted its kind on a connection with an
+   * API route and has something to answer, and hasn't been cut off for this worker.
    */
   #pick(occurrence: Occurrence): string | undefined {
     if (occurrence.prompt.answerIn === 'terminal') return undefined;
@@ -585,32 +622,26 @@ export class PromptOwner implements PromptSink {
     const chain = ancestorsOf(nodes, occurrence.agent);
     if (chain === undefined) return undefined;
     const last = Math.max(-1, ...[...occurrence.passed].map((lead) => chain.indexOf(lead)));
-    const signals =
-      connectionIn(this.#deps.catalog, occurrence.connection)?.connection.signals === true;
     for (const lead of chain.slice(last + 1)) {
-      const grants = this.#deps.leads?.grantsOf(occurrence.canvas, lead);
-      if (grants === undefined) continue;
-      const cut = this.#denials.get(denialKey(occurrence.canvas, lead, occurrence.agent)) ?? 0;
-      if (cut >= LEAD_DENIALS) return undefined;
-      const node = nodes.find((one) => one.id === lead);
-      const endpoint =
-        node?.type === 'agent'
-          ? agentEndpoint(node.data as EndpointData, this.#deps.catalog)
-          : undefined;
-      if (
-        endpoint?.kind !== 'known' ||
-        connectionIn(this.#deps.catalog, endpoint.connection)?.connection.api == null
-      ) {
-        continue;
+      if (occurrence.left.has(lead)) continue;
+      if (this.#holds(occurrence, lead)) return lead;
+      // A granted lead cut off for this worker ends the search.
+      if (this.#cut(occurrence, lead) && this.#deps.leads?.grantsOf(occurrence.canvas, lead)) {
+        return undefined;
       }
-      if (answerable(allowance(occurrence.prompt, signals, { kind: 'lead', grants }))) return lead;
     }
     return undefined;
   }
 
-  #route(occurrence: Occurrence, why: RouteChange['why']): void {
+  #route(occurrence: Occurrence, why: RouteChange['why'], by?: PartyId): void {
     const state = stateOf(occurrence);
     if (state.at !== 'open' && state.at !== 'answering') return;
+    const holder = occurrence.route?.lead;
+    if (holder !== undefined && (why === 'authority' || why === 'denials')) {
+      // Only a holder that lost its authority loses the route (R28: routes only go up).
+      if (this.#holds(occurrence, holder)) return;
+      occurrence.left.add(holder);
+    }
     const lead = this.#pick(occurrence);
     if (lead === occurrence.route?.lead) return;
     const from = occurrence.route?.lead;
@@ -636,6 +667,7 @@ export class PromptOwner implements PromptSink {
       ...(from === undefined ? {} : { from }),
       ...(lead === undefined ? {} : { to: lead }),
       ...(occurrence.route === undefined ? {} : { until: occurrence.route.until }),
+      ...(by === undefined ? {} : { by }),
       why,
     });
     this.#deps.changed(occurrence.canvas, occurrence.agent);
@@ -662,6 +694,7 @@ export class PromptOwner implements PromptSink {
       need: occurrence.need,
       from,
       why: 'ended',
+      ...(ended.by === undefined ? {} : { by: ended.by }),
       how:
         ended.reason === 'answered'
           ? ended.by === 'you'
@@ -689,7 +722,7 @@ export class PromptOwner implements PromptSink {
             : `${who(open.nodes, party)} handed back ${name}’s request.`,
       });
     }
-    this.#route(occurrence, why);
+    this.#route(occurrence, why, why === 'handed-back' ? `agent:${lead}` : undefined);
   }
 
   /** The routed lead's Hand back: settles nothing, records no decision, moves the route up. */
@@ -996,6 +1029,7 @@ export class PromptOwner implements PromptSink {
       bytes,
       state: { at: 'open' },
       passed: new Set(),
+      left: new Set(),
       woken: new Set(),
     };
     prompts.live.set(built.id, occurrence);

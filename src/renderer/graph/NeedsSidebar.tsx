@@ -38,6 +38,11 @@ function NeedDetail({ text }: { text: string }) {
   return <p className="graph-question-detail">{text}</p>;
 }
 
+/** A party as a card names it: an agent by its name, anyone else as given. */
+function partyName(nodes: readonly CanvasNode[], party: string): string {
+  return party.startsWith('agent:') ? agentName(nodes, party.slice('agent:'.length)) : party;
+}
+
 /** What a card is, in a chip above it. */
 function headerOf(item: CoreNeed, nodes: readonly CanvasNode[]): string {
   if (item.kind === 'file') return 'File review';
@@ -251,6 +256,23 @@ export function NeedsSidebar({
                     {agentName(nodes, item.agent)}
                   </button>
                 )}
+                {item.routed !== undefined && (
+                  <p className="graph-question-detail">
+                    Lead may answer until{' '}
+                    {new Date(item.routed.until).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}{' '}
+                    ({partyName(nodes, item.routed.to)})
+                  </p>
+                )}
+                {item.by
+                  .filter((party) => party.startsWith('outside:'))
+                  .map((party) => (
+                    <p key={party} className="graph-question-detail">
+                      {party.slice('outside:'.length)} may also answer
+                    </p>
+                  ))}
                 {isAsk(item) && item.for.startsWith('agent:') && (
                   <p className="graph-question-detail">
                     For {agentName(nodes, item.for.slice('agent:'.length))}
