@@ -100,6 +100,7 @@ Read [security mechanisms](docs/architecture/security.md) before touching these 
 - Every new TypeScript file must belong to a tsconfig `include`: node (main/preload/shared), web (renderer/shared), or tooling (configs/e2e). Keep strict base options and solution references.
 - Keep TypeScript `~6.0.3` (typescript-eslint does not support 7), node-pty `1.2.0-beta.14`, and the Node/pnpm pins above. pnpm workspace settings/build approvals live in `pnpm-workspace.yaml`; retain strict `minimumReleaseAge: 1440`, wait for too-new packages, and treat exclusions as a red flag. Keep the intentional electron-winstaller peer dependency.
 - Only unbundled native modules belong in dependencies; Vite-bundled packages belong in devDependencies. Follow [native modules](docs/architecture/native-modules.md) for externals, packing, rebuilds and install approvals; exercise each in packaged/main/core/CLI self-tests. Keep Windows ConPTY settings and close every pty before quit.
+- Releases are made only by `scripts/release.sh`, from a clean clone of a commit on main that CI passed, signed and checked byte for byte; it makes a draft, and only you publish it.
 - SQLite is reached only through `sqlite.ts`; writes acknowledge only after the log flush. A failed flush fails the store closed. The checkpointer is the only other writing connection.
 
 ## Adding things

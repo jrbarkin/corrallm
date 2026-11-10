@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { cp, mkdir, readdir } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,7 @@ import { FuseVersion } from '@electron/fuses';
 
 import { FUSES } from './build/fuses.js';
 import { rpmVersion } from './build/linux-version.js';
+import { joinNotices, NOTICES_CACHE } from './build/notices.js';
 import { copyNativeModule, NATIVE_MODULES } from './build/native-modules.js';
 import { shipCli, LINUX_CLI_BIN } from './build/shipped-cli.js';
 
@@ -32,10 +33,14 @@ const viteCli = path.join(path.dirname(require.resolve('vite/package.json')), 'b
 
 // extraResource keeps notices visible outside app.asar. Stage the SDK's installed license under
 // its own name on every build, so upgrades cannot leave a stale checked-in copy behind.
-const agentSdkLicense = path.join(
-  projectDir,
-  'node_modules/.cache/corrallm-licenses/claude-agent-sdk-LICENSE.md',
-);
+const licenseCache = path.join(projectDir, 'node_modules/.cache/corrallm-licenses');
+const agentSdkLicense = path.join(licenseCache, 'claude-agent-sdk-LICENSE.md');
+// The bundled packages' notices, joined from what each Vite bundle recorded (build/notices.ts).
+const thirdPartyNotices = path.join(licenseCache, 'THIRD-PARTY-NOTICES.txt');
+// Electron's own license files, taken from the Electron build being packaged (packageAfterExtract).
+// macOS leaves them beside the .app, outside the zip and the dmg: they ship in the resources.
+const electronLicense = path.join(licenseCache, 'electron-LICENSE');
+const chromiumLicenses = path.join(licenseCache, 'LICENSES.chromium.html');
 
 // ---------------------------------------------------------------------------------------------
 // Code signing: enabled only when credentials are present in the environment (see .env.example).
@@ -121,12 +126,16 @@ const windowsCertificate =
     : undefined;
 
 // ---------------------------------------------------------------------------------------------
+// The deb and rpm install this icon into hicolor, which the desktop entry's Icon=corrallm
+// resolves. A size-keyed object does that; a bare path would go to pixmaps instead. Forge's types
+// name only the bare path, hence the cast.
+const linuxIcon = {
+  '512x512': path.join(projectDir, 'build/icons/corrallm-512.png'),
+} as unknown as string;
+
 // electron-installer-redhat 4.0.0's default spec fails on rpmbuild >= 4.20; build/rpm.spec.ejs
 // carries the fix. Forge's option type omits specTemplate and desktopTemplate, which the
 // installer still honors. The desktop entry opens the app, not the command linked in /usr/bin.
-// The deb and rpm install this into hicolor (a bare path would go to pixmaps), which the desktop entry's Icon=corrallm resolves.
-const linuxIcon = { '512x512': path.join(projectDir, 'build/icons/corrallm-512.png') };
-
 const rpmOptions: MakerRpmConfigOptions & { specTemplate: string; desktopTemplate: string } = {
   categories: ['Development'],
   // A prerelease's rpm must sort before its release (build/linux-version.ts).
@@ -145,6 +154,9 @@ const config = {
       path.join(projectDir, 'NOTICE'),
       path.join(projectDir, 'LICENSE'),
       agentSdkLicense,
+      thirdPartyNotices,
+      electronLicense,
+      chromiumLicenses,
       path.join(projectDir, 'build/presence'),
     ],
     asar: {
@@ -170,6 +182,9 @@ const config = {
   },
   hooks: {
     generateAssets: async () => {
+      // The Vite builds that follow record the packages they bundle: start from none, so a record
+      // from an earlier build cannot stand in for one that did not run.
+      await rm(NOTICES_CACHE, { recursive: true, force: true });
       await mkdir(path.dirname(agentSdkLicense), { recursive: true });
       await cp(
         path.join(projectDir, 'node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md'),
@@ -187,7 +202,15 @@ const config = {
       for (const name of SIGNING_ENV) Reflect.deleteProperty(process.env, name);
       return Promise.resolve();
     },
+    packageAfterExtract: async (_config, extractPath) => {
+      await mkdir(licenseCache, { recursive: true });
+      await cp(path.join(extractPath, 'LICENSE'), electronLicense);
+      await cp(path.join(extractPath, 'LICENSES.chromium.html'), chromiumLicenses);
+    },
     packageAfterCopy: async (_config, buildPath, _electronVersion, platform, arch) => {
+      // Refuses the build for a bundled package with no license file or an unlisted license.
+      await mkdir(licenseCache, { recursive: true });
+      await writeFile(thirdPartyNotices, await joinNotices());
       for (const [name, module] of Object.entries(NATIVE_MODULES)) {
         await copyNativeModule(name, module, buildPath, platform, arch);
       }

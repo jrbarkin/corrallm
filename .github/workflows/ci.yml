@@ -22,6 +22,31 @@ env:
   HUSKY: '0'
 
 jobs:
+  # Every commit of a pull request from a fork carries its author's Signed-off-by (CONTRIBUTING.md).
+  # Branches of this repository are the copyright holder's own and run as pushes, which skip this.
+  # Nothing privileged runs: read-only contents and no secrets. A fork can edit this job in its own
+  # pull request; the diff of this file shows that before anything is merged.
+  dco:
+    name: DCO
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Check sign-offs
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-dco.mjs "$BASE" "$HEAD"
+
   build:
     name: ${{ matrix.os }}
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
@@ -84,6 +109,8 @@ jobs:
       # clone, so Apple's Git 2.50.1 (the laptop's) comes first. The snapshot loop budget is wider
       # for the 3-core runner (see testing.md).
       - name: Unit tests
+        # bash on every OS: Windows' default shell would try to parse the `if` below as PowerShell.
+        shell: bash
         run: |
           if [ "$RUNNER_OS" = macOS ]; then export PATH="/usr/bin:$PATH"; export CORRALLM_SNAPSHOT_LOOP_BUDGET_MS=250; fi
           pnpm run test

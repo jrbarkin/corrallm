@@ -16,12 +16,14 @@ const redhatUtil = (await import(
   ).href
 )) as { replaceInvalidVersionCharacters: (version: string) => string };
 const redhatVersion = redhatUtil.replaceInvalidVersionCharacters;
+// @ts-expect-error - the package has no types
 const debian = (await import('electron-installer-debian')) as {
   transformVersion: (version: string) => string;
 };
 const debVersion = debian.transformVersion;
 
 import { rpmVersion } from '../../build/linux-version';
+import { debVersion as releaseDebVersion } from '../../build/release';
 
 /** The order of the characters in one non-digit run, as Debian and rpm both rank them. */
 function rank(char: string | undefined, debian: boolean): number {
@@ -108,6 +110,15 @@ describe('a prerelease sorts before its release', () => {
     expect(rpmVersion('0.1.0')).toBe('0.1.0');
     expect(rpmCompare(rpmVersion('0.1.1'), rpmVersion('0.1.0-beta.9'))).toBe(1);
   });
+});
+
+describe('the release’s asset names', () => {
+  it.each(['0.1.0', '0.1.0-beta.1', '1.2.3-beta.12'])(
+    'convert %s as the deb installer does',
+    (version) => {
+      expect(releaseDebVersion(version)).toBe(debVersion(version));
+    },
+  );
 });
 
 describe('the comparison itself', () => {

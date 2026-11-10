@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type * as Files from 'node:fs/promises';
+import type * as Notices from '../../build/notices';
 import { createRequire } from 'node:module';
 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -26,6 +27,7 @@ const fakes = vi.hoisted(() => ({
   }),
   copy: vi.fn(() => Promise.resolve()),
   ship: vi.fn(() => Promise.resolve()),
+  notices: vi.fn(() => Promise.resolve('notices')),
   readdir: vi.fn(() => Promise.resolve(['corrallm.app'])),
 }));
 vi.mock('electron', () => ({}));
@@ -37,6 +39,10 @@ vi.mock('node:fs/promises', async (original) => ({
 vi.mock('../../build/native-modules', () => ({
   NATIVE_MODULES: { 'node-pty': { files: [], buildOnlyDependencies: [] } },
   copyNativeModule: fakes.copy,
+}));
+vi.mock('../../build/notices', async (original) => ({
+  ...(await original<typeof Notices>()),
+  joinNotices: fakes.notices,
 }));
 vi.mock('../../build/shipped-cli', () => ({
   LINUX_CLI_BIN: 'resources/bin/corrallm',
@@ -88,6 +94,8 @@ it('builds the CLI before packaging, then stages its external files beside Resou
     'arm64',
   ]);
   expect(fakes.ship).toHaveBeenCalledWith('/tmp/example/Resources/app', 'darwin', 'arm64');
+  // The bundled packages' notices are joined (and a missing license refuses the build) here.
+  expect(fakes.notices).toHaveBeenCalledOnce();
 });
 
 it.each([

@@ -3,6 +3,7 @@ import { builtinModules } from 'node:module';
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 
+import { noticesPlugin } from './build/notices.ts';
 import { mainDefine, NATIVE_EXTERNALS } from './vite.main.config.mts';
 
 /**
@@ -19,7 +20,7 @@ export default defineConfig({
     conditions: ['node'],
     mainFields: ['module', 'jsnext:main', 'jsnext'],
   },
-  plugins: [noElectron()],
+  plugins: [noElectron(), noticesPlugin('corrallm')],
   build: {
     outDir: 'dist-cli',
     emptyOutDir: true,
