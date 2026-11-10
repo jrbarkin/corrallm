@@ -84,6 +84,20 @@ export async function dump(file: string, print: (line: string) => Promise<void>)
               }
             : {}),
           ...(schema < 3 ? {} : workspacesOf(reader, id)),
+          // Schema 14's (B24): who leads, and the outside orchestrators granted approvals.
+          ...(schema < 14
+            ? {}
+            : {
+                leads: rows(
+                  reader,
+                  'SELECT * FROM lead WHERE canvas_id = ? ORDER BY agent_id',
+                  id,
+                  ['grants', 'fingerprint'],
+                ),
+                outsideGrants: reader
+                  .prepare('SELECT * FROM outside_grant WHERE canvas_id = ? ORDER BY name')
+                  .all(id),
+              }),
         }),
       );
     }

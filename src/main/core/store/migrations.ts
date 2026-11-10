@@ -710,6 +710,40 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE message ADD COLUMN about TEXT CHECK (about IS NULL OR json_valid(about));
     `,
   },
+  {
+    // B24's leads (B24 Design §3, C1, C2): who you made a lead of the agents nested in it, kept on
+    // this machine and never in a canvas file, and the outside orchestrators you let answer
+    // approvals (Q3). A corrallm without them would remove a lead's agent, or change its role and
+    // back again, with its lead none the wiser, so none older may open the database once this ran.
+    version: 14,
+    minReader: 14,
+    sql: `
+      -- An agent you made a lead of the agents nested in it: what it may answer for them (grants:
+      -- v, questions, plans, approvals), what it was when you did (fingerprint: v, its role's
+      -- SHA-256 or none, its adapter and connection), what of that changed since, holding it until
+      -- you confirm it (held: its adapter, its connection or its role; none while it leads), and
+      -- when you last changed it. Its agent's removal deletes it in the same write.
+      CREATE TABLE lead (
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+        grants TEXT NOT NULL CHECK (json_valid(grants)),
+        fingerprint TEXT NOT NULL CHECK (json_valid(fingerprint)),
+        held TEXT CHECK (held IS NULL OR held IN ('adapter', 'connection', 'role')),
+        changed_at INTEGER NOT NULL,
+        PRIMARY KEY (canvas_id, agent_id)
+      ) STRICT, WITHOUT ROWID;
+
+      -- An outside orchestrator, by its token's name, that you let answer ordinary approvals on
+      -- this canvas, once each (Q3), and when you did. Never set by a token, a file or a command
+      -- line; kept when its token expires or is revoked, until you remove it.
+      CREATE TABLE outside_grant (
+        canvas_id TEXT NOT NULL REFERENCES canvas (id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        changed_at INTEGER NOT NULL,
+        PRIMARY KEY (canvas_id, name)
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];
 
 /** The schema this code makes and reads. */
