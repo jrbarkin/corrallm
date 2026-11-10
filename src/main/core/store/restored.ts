@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { Purpose } from '../../../shared/model/purpose';
 import type { Connection } from './sqlite';
 
 /*
@@ -14,7 +15,7 @@ import type { Connection } from './sqlite';
 export function settleRestored(connection: Connection, now: number): void {
   const waited = connection
     .prepare(
-      "SELECT id, canvas_id, from_party FROM message WHERE kind = 'text' AND state = 'pending' ORDER BY seq",
+      "SELECT id, canvas_id, from_party, purpose FROM message WHERE kind = 'text' AND state = 'pending' ORDER BY seq",
     )
     .all();
   const unresolve = connection.prepare(
@@ -25,11 +26,23 @@ export function settleRestored(connection: Connection, now: number): void {
        state, sent_at)
      VALUES (?, ?, 'corrallm', ?, 'notice', 'party', ?, ?, ?, 'delivered', ?)`,
   );
-  for (const { id, canvas_id: canvas, from_party: from } of waited) {
+  for (const { id, canvas_id: canvas, from_party: from, purpose } of waited) {
+    // Only a purpose this core understands may be settled. Evidence is never pending work.
+    let handoff = false;
+    if (purpose !== null) {
+      try {
+        const read = Purpose.safeParse(JSON.parse(String(purpose)));
+        if (!read.success || read.data.type !== 'handoff') continue;
+        handoff = true;
+      } catch {
+        continue;
+      }
+    }
     const body = `Your message ${String(id)} won’t be sent: corrallm’s database was restored from a snapshot taken while it waited, so whether it went since is unknown.`;
     const turn = JSON.stringify({ status: 'failed', reason: 'error', message: body });
     unresolve.run(turn, id ?? null);
-    if (from !== 'corrallm') {
+    // The run restores its hand-off's item uncertain; no party's notice is made of its work.
+    if (from !== 'corrallm' && !handoff) {
       tell.run(randomUUID(), canvas ?? null, from ?? null, body, id ?? null, turn, now);
     }
   }

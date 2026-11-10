@@ -3,7 +3,7 @@ import { NEW_SESSION } from '../../shared/model/session';
 import { Prompt, PromptId } from '../../shared/model/prompts';
 import { expectOneOp } from '../test-api';
 import { renderReady, events } from '../test-render';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SettingsOptions } from '../../shared/session';
@@ -16,6 +16,8 @@ import type { FakeCanvas } from '../test-canvas';
 import type { Graph, GraphNode } from '../graph/flow';
 import { OpenLinkContext } from '../open-link';
 import { fakeSessions } from '../test-sessions';
+import type { TerminalKeys } from './screen';
+import { TerminalPane } from './TerminalPane';
 import { fakeScreens, fakeTerminals, keyboardLayout, macKeyboard } from './test-screen';
 import { graphOf } from '../test-graph-data';
 
@@ -1185,6 +1187,64 @@ describe('the Option key in a Terminal agent’s terminal', () => {
   it('is no choice off a Mac, where Alt is Meta anyway', async () => {
     const { view } = await open();
     expect(view.queryByRole('button', { name: 'Option as Meta' })).toBeNull();
+  });
+});
+
+describe('Shift+Enter in a Terminal agent’s terminal', () => {
+  it('types what its own connection declares, and nothing it was not given', async () => {
+    const claude = await open();
+    expect(fakeScreens.latest().keys).toEqual({ shiftEnter: '\x1b\r' });
+    claude.show(SCREEN);
+    act(() => {
+      fakeScreens.latest().finish();
+    });
+    fakeScreens.latest().pressShiftEnter();
+    expect(claude.terminals.backend.write).toHaveBeenCalledWith('a', '\x1b\r');
+    fakeScreens.made.length = 0;
+    cleanup();
+
+    const codex = await open({ data: { adapter: 'codex', connection: 'codex.terminal' } });
+    // The binding recorded on Codex's own TUI (codex/terminal/fixtures/multiline.jsonl).
+    expect(fakeScreens.latest().keys).toEqual({ shiftEnter: '\x1b[13;2u' });
+    codex.show(SCREEN);
+    act(() => {
+      fakeScreens.latest().finish();
+    });
+    fakeScreens.latest().pressShiftEnter();
+    expect(codex.terminals.backend.write).toHaveBeenCalledWith('a', '\x1b[13;2u');
+    expect(codex.terminals.backend.write).not.toHaveBeenCalledWith('a', '\x1b\r');
+  });
+
+  it('follows the displayed connection: a real switch replaces the binding, and a late snapshot does not bring the old one back', () => {
+    const terminals = fakeTerminals();
+    const pane = (keys: TerminalKeys) => (
+      <TerminalPane
+        agentId="a"
+        backend={terminals.backend}
+        session={NEW_SESSION}
+        note=""
+        keys={keys}
+        onStart={() => undefined}
+        onUnqueue={() => undefined}
+        screens={fakeScreens.create}
+      />
+    );
+    const { rerender } = render(pane({ shiftEnter: '\x1b\r' }));
+    const shown = fakeScreens.latest();
+    expect(shown.keys).toEqual({ shiftEnter: '\x1b\r' });
+    rerender(pane({ shiftEnter: null }));
+    // The same terminal, now of a connection that declares none.
+    expect(fakeScreens.latest()).toBe(shown);
+    expect(shown.keys).toEqual({ shiftEnter: null });
+    // A snapshot of main's screen, however late, changes no key.
+    act(() => {
+      terminals.emit('a', SCREEN);
+    });
+    expect(shown.keys).toEqual({ shiftEnter: null });
+    const typed: string[] = [];
+    shown.onInput((data) => typed.push(data));
+    shown.pressShiftEnter();
+    expect(typed).toEqual(['\r']);
   });
 });
 

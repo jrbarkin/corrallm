@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 
 import type { TerminalEvent } from '../../shared/terminal';
 import type { TerminalBackend } from './backend';
-import type { Screen, Snapshot } from './screen';
+import type { Screen, Snapshot, TerminalKeys } from './screen';
 
 /*
  * For tests: a terminal (screen.ts) without xterm.js, which jsdom cannot draw, and main's
@@ -24,6 +24,11 @@ export class FakeScreen implements Screen {
   redraws = 0;
   /** Whether Option works as Meta in it (see Screen.setOptionIsMeta). */
   optionIsMeta = false;
+  /**
+   * The keys it was last given (see Screen.setKeys): none declared until the view says, so that a
+   * screen never types for a connection it was not given.
+   */
+  keys: TerminalKeys = { shiftEnter: null };
   /** Snapshots written and not yet done (see `finish`). */
   readonly #pending: (() => void)[] = [];
   readonly #inputs: ((data: string) => void)[] = [];
@@ -61,6 +66,10 @@ export class FakeScreen implements Screen {
     this.optionIsMeta = on;
   }
 
+  setKeys(keys: TerminalKeys): void {
+    this.keys = keys;
+  }
+
   focus(): void {
     this.focused = true;
   }
@@ -80,6 +89,14 @@ export class FakeScreen implements Screen {
   /** The user opens a link shown in it (Cmd-clicks it). */
   openLink(url: string): void {
     for (const listener of this.#links) listener(url);
+  }
+
+  /**
+   * The user presses Shift+Enter in it: what the connection declares is typed once; where none is,
+   * the terminal's own Enter is (as xterm.js types it).
+   */
+  pressShiftEnter(): void {
+    this.type(this.keys.shiftEnter ?? '\r');
   }
 
   /** The user types `data` in it (or it answers a query). */

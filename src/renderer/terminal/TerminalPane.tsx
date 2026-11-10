@@ -11,7 +11,7 @@ import { isMac, useOptionIsMeta } from './keyboard';
 import { TerminalLink } from './link';
 import type { LinkState } from './link';
 import { createScreen } from './screen';
-import type { Screen, ScreenFactory } from './screen';
+import type { Screen, ScreenFactory, TerminalKeys } from './screen';
 import './TerminalPane.css';
 import { WorkspaceWait } from '../workspaces/Workspace';
 import { useWorkspace, workspaceAttention } from '../workspaces/state';
@@ -48,6 +48,7 @@ export function TerminalPane({
   backend,
   session,
   note,
+  keys,
   ask,
   above,
   onStart,
@@ -62,6 +63,8 @@ export function TerminalPane({
   session: Session;
   /** How the session runs, and where (or what it needs to). */
   note: string;
+  /** The keys its connection declares (the catalog's): the terminal types for no other's. */
+  keys: TerminalKeys;
   /** What the queues' run asks of the user, if anything: in the bar with its answers. */
   ask?: ReactNode;
   /** What sits in the bar (the queue's ⊕). */
@@ -91,6 +94,15 @@ export function TerminalPane({
   /** The terminal shown, and the Option key's setting as it last was (for a new terminal). */
   const shown = useRef<Screen>(undefined);
   const meta = useRef(optionIsMeta);
+  /** The displayed connection's keys, as they last were (for a new terminal). */
+  const declared = useRef(keys);
+  const { shiftEnter } = keys;
+
+  useEffect(() => {
+    // A real switch of connection replaces them; nothing a screen later shows brings the old back.
+    declared.current = { shiftEnter };
+    shown.current?.setKeys(declared.current);
+  }, [shiftEnter]);
 
   useEffect(() => {
     meta.current = optionIsMeta;
@@ -107,6 +119,7 @@ export function TerminalPane({
       links.current(url);
     });
     screen.setOptionIsMeta(meta.current);
+    screen.setKeys(declared.current);
     shown.current = screen;
     const link = new TerminalLink(agentId, backend, screen, (next) => {
       setState(next);
