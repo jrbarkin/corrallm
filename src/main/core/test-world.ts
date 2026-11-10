@@ -1013,6 +1013,9 @@ const BRANCH_MERGE = {
 /** A request id for each fixture of the worktrees' setup that writes. */
 const setupRequest = (n: number) =>
   `4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d${String(n).padStart(2, '0')}`;
+/** A request id for each fixture of who leads that writes (B24 C1). */
+const leadRequest = (n: number) =>
+  `7f8091a2-b3c4-4d5e-8f60-7b8c9d0e1f${String(n).padStart(2, '0')}`;
 
 /** A target the lead's team holds (its helper, and its own group), and every outside token reaches. */
 const TARGETS = [
@@ -1615,6 +1618,63 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         request: request(58),
       },
     },
+  },
+  // B24 C1: yours alone (the permissions deviation). You make the stranger a lead, then no lead,
+  // so the world reads as it began; its leads as the world says them (`leads`) are unchanged.
+  'agent.setLead': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: true, plans: false, approvals: true } },
+        request: leadRequest(0),
+      },
+      { canvas: CANVAS, agent: 'stranger', lead: null, request: leadRequest(1) },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { canvas: CANVAS, agent: 'stranger' },
+      { canvas: CANVAS, agent: '', lead: null },
+      { canvas: CANVAS, agent: 'stranger', lead: true },
+      { canvas: CANVAS, agent: 'stranger', lead: { grants: { questions: true } } },
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: 'yes', plans: false, approvals: false } },
+      },
+      // No grant beyond the three (Q17), and none "always".
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: true, plans: true, approvals: true, roles: true } },
+      },
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: true, plans: true, approvals: true }, always: true },
+      },
+      { canvas: 'nope', agent: 'stranger', lead: null },
+    ],
+  },
+  // B24 C1 (Q3): yours alone. Taking back what the world never granted changes nothing; granting
+  // needs a live write token of that name, which no caller the world makes up has.
+  'outside.setGrant': {
+    valid: [{ canvas: CANVAS, name: 'orchestrator', approvals: false, request: leadRequest(2) }],
+    fresh: ['revs'],
+    invalid: [
+      { canvas: CANVAS, name: 'orchestrator' },
+      { canvas: CANVAS, name: '', approvals: true },
+      { canvas: CANVAS, name: '-orchestrator', approvals: true },
+      { canvas: CANVAS, name: 'x'.repeat(33), approvals: true },
+      { canvas: CANVAS, name: 'orchestrator', approvals: 'yes' },
+      { canvas: CANVAS, name: 'orchestrator', approvals: true, hours: 12 },
+      { canvas: CANVAS, token: 'orchestrator', approvals: true },
+      { canvas: 'nope', name: 'orchestrator', approvals: false },
+    ],
+  },
+  'leads.get': {
+    valid: [{ canvas: CANVAS }],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, agent: 'lead' }, 'text', null],
   },
   'agent.setSettings': {
     valid: [

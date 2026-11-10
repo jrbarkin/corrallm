@@ -41,6 +41,9 @@
     "api.agent.setConnection",
     "api.agent.setFallback",
     "api.agent.setHandoff",
+    "api.agent.setLead",
+    "api.outside.setGrant",
+    "api.leads.get",
     "api.agent.setSettings",
     "api.agent.setRole",
     "api.queue.add",
@@ -292,6 +295,9 @@
     "agent.setConnection": "permissions",
     "agent.setFallback": "permissions",
     "agent.setHandoff": "permissions",
+    "agent.setLead": "permissions",
+    "outside.setGrant": "permissions",
+    "leads.get": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -312,11 +318,11 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "8c5be84f0a1a163a",
-      "output": "e435673d006d713b"
+      "input": "80cfdb6b5191e399",
+      "output": "9d74ca466c472266"
     },
     "topics.unsubscribe": {
-      "input": "8c5be84f0a1a163a",
+      "input": "80cfdb6b5191e399",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
@@ -474,6 +480,18 @@
     "agent.setRole": {
       "input": "9ec5f7819f183ec2",
       "output": "647bbd6cc7b4f077"
+    },
+    "agent.setLead": {
+      "input": "f1fab7178a335132",
+      "output": "647bbd6cc7b4f077"
+    },
+    "outside.setGrant": {
+      "input": "32e7fb28167a51b8",
+      "output": "647bbd6cc7b4f077"
+    },
+    "leads.get": {
+      "input": "41356bc15da6df1b",
+      "output": "ffe492600e4787cf"
     },
     "queue.add": {
       "input": "6c0526a84b580c24",

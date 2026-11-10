@@ -179,7 +179,7 @@ export type Implementation = (args: never, ctx: OpContext) => unknown;
 /**
  * The topics a write's receipt may name besides a document's (`canvas:<c>`, which its commit
  * reaches): the app's settings (B12 C2: `settings.set`), and a canvas's run, sessions, messages,
- * Needs and worktrees (B11 §5, B9a §7).
+ * Needs, worktrees and leads (B11 §5, B9a §7, B24 C1).
  */
 export type ReceiptTopic =
   | 'settings'
@@ -187,7 +187,8 @@ export type ReceiptTopic =
   | `sessions:${CanvasId}`
   | `messages:${CanvasId}`
   | `needs:${CanvasId}`
-  | `worktrees:${CanvasId}`;
+  | `worktrees:${CanvasId}`
+  | `leads:${CanvasId}`;
 
 /**
  * What publishes topics, as core.call asks it for an op's receipts: a mark of where publication is

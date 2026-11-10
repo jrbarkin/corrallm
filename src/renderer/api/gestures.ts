@@ -6,4 +6,10 @@ export const NO_GESTURE = {
   status:
     'The run, session summaries and Needs topics supply status; no renderer gesture polls it.',
   'canvas.batch': 'Several edits as one commit, for tokens: no gesture of the window’s is one.',
+  // B24 C1 registers them; their sheets are B24 X2's (the settings sheet's Lead section) and X3's
+  // (the canvas menu's outside orchestrators), which remove these rows.
+  'agent.setLead':
+    'The settings sheet’s Lead section (B24 X2) is its gesture; until it lands, none calls it.',
+  'outside.setGrant':
+    'The canvas menu’s outside orchestrators sheet (B24 X3) is its gesture; until it lands, none calls it.',
 } satisfies Partial<Record<GuiOp, string>>;

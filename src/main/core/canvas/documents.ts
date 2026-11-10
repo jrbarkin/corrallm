@@ -35,6 +35,7 @@ import { writeWhole } from '../../whole-file';
 import { OpFailure } from '../call';
 import type { TrustedPath } from '../host';
 import type { Staged } from '../delivery/messages';
+import type { LeadStore } from '../leads';
 import type { Database } from '../store/store';
 import { safeRemovals } from '../workspaces/planner';
 import type { Forks, Losses, Made, Removals, WorkspacePlanner } from '../workspaces/planner';
@@ -130,6 +131,13 @@ export interface DocumentsDeps {
    * document's tests).
    */
   workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within' | 'removed' | 'made'>;
+  /**
+   * Who leads (B24 C1, leads.ts), whatever made a commit: within its write, the row of a lead whose
+   * agent it removes deleted, and one whose adapter, connection or role it changes held; and as a
+   * canvas's document loads, the rows of agents it doesn't have deleted, and those changed since
+   * held. Without it, none (a document's tests).
+   */
+  leads?: Pick<LeadStore, 'within' | 'loaded'>;
   now?: () => number;
   /** A test seam: how many revisions are kept and how often the rest are trimmed. */
   trim?: { kept: number; every: number };
@@ -778,6 +786,8 @@ export class Documents {
       this.#lives.set(canvas, kept);
       if (kept.writingHash !== undefined) await this.#settle(canvas, kept, opened?.text);
       await this.#review(kept, opened && { name: opened.name, text: opened.text });
+      // Who leads, of the agents it has (B24 C1): no row outlives its agent.
+      await this.#deps.leads?.loaded(canvas, kept.document);
       return kept;
     }
     let text = opened?.text;
@@ -790,6 +800,7 @@ export class Documents {
     const live = emptyLive(canvas);
     if (text === undefined || document === undefined) {
       this.#lives.set(canvas, live);
+      await this.#deps.leads?.loaded(canvas, live.document);
       return live;
     }
     // Read from its file: kept in rows from now on, under its own id, its hashes with them.
@@ -803,6 +814,7 @@ export class Documents {
       { hashes },
     );
     this.#lives.set(canvas, live);
+    await this.#deps.leads?.loaded(canvas, live.document);
     return live;
   }
 
@@ -1049,6 +1061,7 @@ export class Documents {
     const creators = creatorsAfter(live, rows, changed, creator);
     let staged: Staged | undefined;
     let made: Made | undefined;
+    let led: Staged | undefined;
     try {
       await this.#deps.store.write(() => {
         this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
@@ -1066,10 +1079,14 @@ export class Documents {
           { canvas: next.id, before: live.document, after: next, copies, forks },
           removals,
         );
+        // Who leads, in the same write (B24 C1): a lead's row goes with its agent, and one whose
+        // agent's adapter, connection or role changed is held, whatever made the change.
+        led = this.#deps.leads?.within(next.id, next);
         // Last, so that nothing after it fails the write once it has staged what it holds.
         staged = within?.();
       });
     } catch (error) {
+      led?.undo();
       staged?.undo();
       throw new CommitFailed(error);
     }
@@ -1092,6 +1109,8 @@ export class Documents {
       live.fileHash = hashes.file;
       live.writingHash = undefined;
     }
+    // Who leads as the document now is, before anyone hears of the commit.
+    led?.reveal();
     const commit = { canvas: next.id, rev, by: revision.by, changed, renumbered, live };
     for (const listener of this.#listeners) {
       try {

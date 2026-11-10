@@ -1268,6 +1268,26 @@ export function partsOf(
         ],
       };
     }
+    if (topic.startsWith('leads:')) {
+      // B24's who leads: each lead by its agent, then each outside orchestrator by its name.
+      const value = state as {
+        leads: readonly { agent: string }[];
+        outside: readonly { name: string }[];
+      };
+      return {
+        summary: {},
+        entries: [
+          ...value.leads.map((lead) => ({
+            key: `lead/${encodeURIComponent(lead.agent)}`,
+            value: lead,
+          })),
+          ...value.outside.map((one) => ({
+            key: `outside/${encodeURIComponent(one.name)}`,
+            value: one,
+          })),
+        ],
+      };
+    }
     if (topic === 'canvases' || topic.startsWith('needs:')) {
       const items = (state as { items: readonly { canvas?: string; id?: string }[] }).items;
       return {

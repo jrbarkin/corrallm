@@ -111,6 +111,8 @@ import { answerTokenRequest } from './token-requests';
 import { privateTokenProfile } from './token-profile';
 import type { TokenAnswer, TokenRequest } from './token-socket';
 import { TokenStore } from './tokens';
+import { LeadStore } from './leads';
+import { leadsListing } from './ops/leads';
 import { RuntimeSource } from './runtime-topics';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
@@ -156,8 +158,9 @@ export interface CoreConfig {
   /** The locale what the core says tells times of day in (the host's): Node's own, when none. */
   locale?: string;
   /**
-   * Which agents are leads now. None is until leads are kept on this machine (B24); tests say
-   * which, to call as a lead.
+   * For tests: which agents are leads now, instead of the leads kept on this machine (B24 C1:
+   * leads.ts, which agent.setLead writes), to call as a lead without making one. Production
+   * composes none.
    */
   leads?: (canvas: CanvasId, agent: string) => boolean;
   /**
@@ -509,6 +512,19 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     provisioner,
     make: (tree) => workspaceDirectories.provision(tree.canvas, tree.owner),
   });
+  // Who leads (B24 C1): kept in the core's database, read once now, never from a canvas file; its
+  // rows go with their agents and are held as their agents change, at every commit.
+  const leadStore = new LeadStore({
+    store,
+    memory,
+    catalog: CATALOG,
+    document: (canvas) => documents.loaded(canvas)?.document,
+    changed: (canvas) => {
+      leadsChanged(canvas);
+    },
+  });
+  leadStore.load();
+  if (leadStore.warning !== undefined) console.error(leadStore.warning);
   const documents: Documents = new Documents({
     store,
     memory,
@@ -516,6 +532,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
 
     reviews,
     workspaces: planner,
+    leads: leadStore,
     baselineChanged: (canvas) => {
       void states.refresh(canvas).catch((error: unknown) => {
         console.error('Could not publish the canvas’s saved baseline:', error);
@@ -924,7 +941,20 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const canvasFiles = new CanvasFiles({ host, memory, documents });
   const terminals = new TerminalEvents(windows);
-  const isLead = config.leads ?? (() => false);
+  // Whether an agent leads now, read on every call (B24 C1): as the lead store keeps it, unless a
+  // test says which.
+  const isLead =
+    config.leads ?? ((canvas: CanvasId, agent: string) => leadStore.isLead(canvas, agent));
+  /**
+   * Who leads on a canvas, or may answer there, changed (B24 C1): its topic and Needs read again,
+   * and what its runtime topics' copies may see checked again. C2 routes its prompts again here.
+   */
+  const leadsChanged = (canvas: CanvasId) => {
+    topics.changed(`leads:${canvas}`, 'corrallm');
+    topics.changed(`needs:${canvas}`, 'corrallm');
+    engines.needsChanged(canvas);
+    runtime.documentChanged(canvas);
+  };
   // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the
   // list of them, which changes as canvas memory, the journal and the windows do.
   const states = new CanvasStates({
@@ -954,14 +984,18 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         all: seesAll(caller, reach),
       };
     },
-    // B9a §7: worktrees and Needs kept at every change, a window watching or not.
+    // B9a §7: worktrees and Needs kept at every change, a window watching or not; and B24's
+    // leads, yours alone.
     canonical: {
-      of: (topic) => topic.startsWith('worktrees:') || topic.startsWith('needs:'),
+      of: (topic) =>
+        topic.startsWith('worktrees:') || topic.startsWith('needs:') || topic.startsWith('leads:'),
       initial: (topic) => (topic.startsWith('needs:') ? { items: [] } : undefined),
       read: async (topic) => {
         const canvas = canvasOfTopic(topic);
         if (canvas === undefined || !states.keeps(canvas)) return undefined;
         if (topic.startsWith('needs:')) return { items: waitingFor(canvas) };
+        if (topic.startsWith('leads:'))
+          return leadsListing({ leads: leadStore, documents, states, tokens }, canvas);
         return worktreeListing(canvas, { kind: 'you' });
       },
     },
@@ -1008,6 +1042,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   usage.subscribe((_state, by) => {
     topics.changed('usage', by);
+  });
+  // A token made, renewed or revoked: which outside orchestrators a shown or running canvas's
+  // leads topic offers grants to, and whether each has a live token (B24 C1).
+  tokens.subscribe(() => {
+    for (const canvas of new Set([...engines.opened(), ...windows.canvases()]))
+      topics.changed(`leads:${canvas}`, 'you');
   });
   /** Each change of `notifying`: a re-read begun before the latest change applies nothing. */
   let preference = 0;
@@ -1518,6 +1558,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           reviews,
           needOf,
           isLead,
+          leads: leadStore,
           host,
           tokens,
           listed: (canvas, agent) => authority.hasListed(canvas, agent),

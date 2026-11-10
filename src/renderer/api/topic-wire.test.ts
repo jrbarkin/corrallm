@@ -21,6 +21,22 @@ describe('a chunked worktrees snapshot (B9a §7)', () => {
   });
 });
 
+describe('a chunked leads snapshot (B24 C1)', () => {
+  it('is assembled as the core divides it: each lead by its agent, then each outside name', () => {
+    const leads = [
+      { agent: 'b', grants: { questions: true, plans: false, approvals: true }, held: null },
+      { agent: 'a/b', grants: { questions: false, plans: false, approvals: true }, held: 'role' },
+    ];
+    const outside = [{ name: 'orchestrator', approvals: true, live: false }];
+    expect(
+      assembledState(`leads:${CANVAS}`, {}, [
+        ...leads.map((lead) => [`lead/${encodeURIComponent(lead.agent)}`, lead] as const),
+        ...outside.map((one) => [`outside/${encodeURIComponent(one.name)}`, one] as const),
+      ]),
+    ).toEqual({ leads, outside });
+  });
+});
+
 describe('a chunked settings snapshot (B12 C2)', () => {
   it('keeps the default agent, none included, and where the MCP server listens', () => {
     const api = { state: 'listening', port: 4242, url: 'http://127.0.0.1:4242/mcp' };
