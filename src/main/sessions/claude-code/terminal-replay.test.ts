@@ -147,8 +147,35 @@ describe('what the real Claude Code waits on in its terminal (2.1.321), raised t
         tool: 'Bash',
         input: { command: 'touch made.txt', description: 'Make a file' },
       },
-      answerIn: 'terminal',
-      choices: [],
+      answerIn: 'both',
+      omitted: true,
+      until: expect.any(Number) as number,
+      choices: [
+        {
+          value: 'allow',
+          label: 'Yes',
+          hint: 'allow_once',
+          effects: {},
+          endsTurn: false,
+          feedback: 'none',
+        },
+        {
+          value: 'deny',
+          label: 'No',
+          hint: 'reject_once',
+          effects: {},
+          endsTurn: true,
+          feedback: 'none',
+        },
+        {
+          value: 'deny-feedback',
+          label: 'No, and tell Claude what to do differently',
+          hint: 'reject_once',
+          effects: {},
+          endsTurn: false,
+          feedback: 'required',
+        },
+      ],
     });
     // Seconds after its report, with the dialog still up: "Claude needs your permission".
     const run = runs[0];
@@ -177,7 +204,8 @@ describe('what the real Claude Code waits on in its terminal (2.1.321), raised t
     expect(onlyOpen()[1]).toEqual({
       kind: 'question',
       title: 'Which color should the header be?',
-      answerIn: 'terminal',
+      answerIn: 'both',
+      until: expect.any(Number) as number,
       questions: [
         {
           id: 'q1',
