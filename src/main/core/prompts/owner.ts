@@ -203,7 +203,7 @@ export interface RouteChange {
   to?: string;
   /** Why it moved: or `ended`, with `how` it ended. */
   why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'unreachable' | 'ended';
-  how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you';
+  how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you' | 'in-terminal';
   /** Who answered it or handed it back (the party it already told), if a party did. */
   by?: PartyId;
   /** When the lead it moved to may answer until (epoch ms). */
@@ -728,7 +728,9 @@ export class PromptOwner implements PromptSink {
             : 'answered'
           : ended.reason === 'dismissed'
             ? 'by-you'
-            : ended.reason,
+            : ended.reason === 'moved'
+              ? 'in-terminal'
+              : ended.reason,
     });
   }
 
