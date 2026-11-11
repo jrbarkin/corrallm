@@ -127,7 +127,7 @@ async function fixture(arch = 'arm64') {
   // The seeding build and the headless round trip are other gates' work (headless-smoke.test.ts
   // pins them): here they are stood in for, and only what they were asked is kept.
   const steps = path.join(folder, 'steps.log');
-  await mkdir(path.join(folder, 'scripts/lib'));
+  await mkdir(path.join(folder, 'scripts/lib'), { recursive: true });
   await writeFile(
     path.join(folder, 'scripts/lib/headless-smoke.sh'),
     `#!/bin/sh\nprintf 'smoke %s\\n' "$*" >> "${steps}"\n`,
