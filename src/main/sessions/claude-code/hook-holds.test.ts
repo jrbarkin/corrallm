@@ -12,6 +12,7 @@ import {
   holdRecords,
   hookRequests,
   recordedHoldCases,
+  reports,
   screens,
 } from '../terminal/hook-recorded';
 import type { HoldRecord } from '../terminal/hook-recorded';
@@ -596,5 +597,190 @@ describe('what Claude Code · Terminal holds (B23 C2)', () => {
       }
     }
     expect(() => held?.reply(choice('always'))).toThrow();
+  });
+});
+
+/*
+ * B23 E1: what Claude Code reports (Program Status) while its PermissionRequest hook is held,
+ * recorded with a terminal that answers its probe, as corrallm's screen does. Held, its dialog is
+ * drawn at once and it reports `blocked` with the wait's kind and words; a terminal answer or Esc
+ * ends the wait as it always does, and the held request is not what tells it.
+ */
+describe('what Claude Code reports while its PermissionRequest hook is held (B23 E1)', () => {
+  const heldRequest = (name: string, tool: string) =>
+    first(hookRequests(recorded(name), 'PermissionRequest', tool));
+  /** The reports from `t` on, as `state`, or `state/kind` for a block. */
+  const statesFrom = (name: string, t: number) =>
+    reports(recorded(name))
+      .filter((one) => one.t >= t)
+      .map(({ report }) =>
+        report.kind === undefined ? report.state : `${report.state}/${report.kind}`,
+      );
+  /** The key that answers Yes in the terminal: choosing option 1 is the answer, with no Enter. */
+  const userAnswer = (name: string) =>
+    first(
+      holdRecords(recorded(name), 'in')
+        .filter(({ data }) => data === '1')
+        .reverse(),
+      'the terminal answer',
+    );
+  const blockOf = (name: string, tool: string) => {
+    const request = heldRequest(name, tool);
+    const block = first(
+      reports(recorded(name)).filter(
+        ({ t, report }) => report.state === 'blocked' && t >= request.t - 50,
+      ),
+      'blocked report',
+    );
+    return { request, block };
+  };
+
+  it('asked whether the terminal reports before any report came, and the reports followed it', () => {
+    for (const name of [...cases.keys()].filter((one) => one.startsWith('e1-'))) {
+      const probe = first(holdRecords(recorded(name), 'probe'), 'probe');
+      expect(probe.data, name).toBe('?');
+      expect(first(reports(recorded(name))).t, name).toBeGreaterThanOrEqual(probe.t);
+    }
+  });
+
+  it('reports blocked on a permission within a moment of the held Bash request, while it is held', () => {
+    const { request, block } = blockOf('e1-bash-held-terminal-answer', 'Bash');
+    expect(block.report).toMatchObject({
+      state: 'blocked',
+      kind: 'permission',
+      msg: 'approve Bash: echo hi > hi.txt',
+    });
+    expect(block.t - request.t).toBeLessThan(500);
+    // The request was still unanswered, and the dialog drawn.
+    const closed = closedAt('e1-bash-held-terminal-answer', request.data.id);
+    expect(block.t).toBeLessThan(closed.t);
+    expect(screenText('e1-bash-held-terminal-answer')[1]).toContain('Do you want to proceed?');
+  });
+
+  it('keeps reporting blocked, and nothing else, the whole hold: through to its 30 s cut and past it', () => {
+    const name = 'e1-bash-held-cut-30s';
+    const { request, block } = blockOf(name, 'Bash');
+    const closed = closedAt(name, request.data.id);
+    expect(closed.data.answered).toBe(false);
+    // The HTTP hook's timeout is 30 s (an idle machine measured 29.99 s).
+    expect(closed.t - request.t).toBeGreaterThan(29_000);
+    expect(closed.t - request.t).toBeLessThan(31_500);
+    const answer = userAnswer(name);
+    const between = reports(recorded(name)).filter(({ t }) => t > block.t && t < answer.t);
+    expect(between).toEqual([]);
+    // The cut changed nothing on the terminal: the dialog stood, and the user's Yes went through.
+    const [, , , afterCut, afterAnswer] = screenText(name);
+    expect(afterCut).toContain('Do you want to proceed?');
+    expect(afterAnswer).not.toContain('Do you want to proceed?');
+    expect(statesFrom(name, answer.t)).toEqual(['working', 'done']);
+  });
+
+  it('goes working, then done, when the terminal answers; the held request stays open after', () => {
+    const name = 'e1-bash-held-terminal-answer';
+    const { request, block } = blockOf(name, 'Bash');
+    const yes = userAnswer(name);
+    expect(statesFrom(name, block.t)).toEqual(['blocked/permission', 'working', 'done']);
+    const working = first(
+      reports(recorded(name)).filter(({ t, report }) => t > yes.t && report.state === 'working'),
+    );
+    expect(working.t - yes.t).toBeLessThan(500);
+    // No signal on the request: it is open until its timeout, long after the turn is done.
+    const stop = first(hookRequests(recorded(name), 'Stop'));
+    const closed = closedAt(name, request.data.id);
+    expect(closed.data.answered).toBe(false);
+    expect(closed.t).toBeGreaterThan(stop.t + 15_000);
+  });
+
+  it('goes idle, not working or done, when Esc cuts the held request', () => {
+    const name = 'e1-bash-held-esc';
+    const { request, block } = blockOf(name, 'Bash');
+    const esc = first(holdRecords(recorded(name), 'in').filter(({ data }) => data === '\u001b'));
+    expect(statesFrom(name, block.t)).toEqual(['blocked/permission', 'idle']);
+    const idle = first(
+      reports(recorded(name)).filter(({ t, report }) => t > esc.t && report.state === 'idle'),
+    );
+    expect(idle.t - esc.t).toBeLessThan(500);
+    const closed = closedAt(name, request.data.id);
+    expect(closed.data.answered).toBe(false);
+    expect(Math.abs(closed.t - esc.t)).toBeLessThan(500);
+  });
+
+  it('reports a held question as blocked on a question, with its words, and the terminal answers it', () => {
+    const name = 'e1-ask-held-terminal-answer';
+    const { request, block } = blockOf(name, 'AskUserQuestion');
+    expect(block.report).toMatchObject({ state: 'blocked', kind: 'question' });
+    expect(block.report.msg).toContain('Pick a color');
+    expect(block.t - request.t).toBeLessThan(500);
+    expect(statesFrom(name, block.t)).toEqual(['blocked/question', 'working', 'done']);
+    expect(toolResults(name).join('\n')).toContain('"Pick a color"="Blue"');
+  });
+
+  it('goes idle when Esc cuts a held question', () => {
+    const name = 'e1-ask-held-esc';
+    const { block } = blockOf(name, 'AskUserQuestion');
+    expect(block.report).toMatchObject({ state: 'blocked', kind: 'question' });
+    expect(statesFrom(name, block.t)).toEqual(['blocked/question', 'idle']);
+  });
+
+  it('answers a multi-select question with two picks as the string the CLI passes on, joined with ", "', () => {
+    const name = 'e1-ask-multiselect-answered';
+    const { request, block } = blockOf(name, 'AskUserQuestion');
+    expect(block.report).toMatchObject({ state: 'blocked', kind: 'question' });
+    expect(request.data.body.tool_input).toMatchObject({
+      questions: [{ question: 'Pick colors', multiSelect: true }],
+    });
+    const reply = first(
+      holdRecords(recorded(name), 'hook-res').filter(({ data }) => data.id === request.data.id),
+    );
+    expect(JSON.parse(reply.data.body)).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest',
+        decision: { behavior: 'allow', updatedInput: { answers: { 'Pick colors': 'Red, Blue' } } },
+      },
+    });
+    expect(toolResults(name).join('\n')).toContain('"Pick colors"="Red, Blue"');
+    expect(statesFrom(name, block.t)).toEqual(['blocked/question', 'working', 'done']);
+  });
+
+  it('is blocked on a Write the hook then allows, which is written', () => {
+    const name = 'e1-write-allowed';
+    const { request, block } = blockOf(name, 'Write');
+    expect(block.report).toMatchObject({ state: 'blocked', kind: 'permission' });
+    expect(block.report.msg).toBe('approve Write: /tmp/rec/work/w.txt');
+    expect(request.data.body.tool_input).toMatchObject({ content: 'written\n' });
+    const reply = first(
+      holdRecords(recorded(name), 'hook-res').filter(({ data }) => data.id === request.data.id),
+    );
+    expect(JSON.parse(reply.data.body)).toMatchObject({
+      hookSpecificOutput: { decision: { behavior: 'allow' } },
+    });
+    expect(String(toolResults(name)[0])).toContain('File created successfully');
+    expect(statesFrom(name, block.t)).toEqual(['blocked/permission', 'working', 'done']);
+  });
+
+  it('is blocked on an MCP tool the hook then allows, and then on the server’s own form', () => {
+    const name = 'e1-mcp-allowed';
+    const { request, block } = blockOf(name, 'mcp__form__ask');
+    expect(block.report).toMatchObject({
+      state: 'blocked',
+      kind: 'permission',
+      msg: 'approve form - ask (MCP)',
+    });
+    const reply = first(
+      holdRecords(recorded(name), 'hook-res').filter(({ data }) => data.id === request.data.id),
+    );
+    expect(JSON.parse(reply.data.body)).toMatchObject({
+      hookSpecificOutput: { decision: { behavior: 'allow' } },
+    });
+    // The allowed tool then asked its form: a second block, of a question, not of the hook.
+    expect(statesFrom(name, block.t)).toEqual([
+      'blocked/permission',
+      'working',
+      'blocked/question',
+      'working',
+      'done',
+    ]);
+    expect(screenText(name).join('\n')).toContain('Which deploy target?');
+    expect(JSON.stringify(toolResults(name))).toContain('cancel');
   });
 });

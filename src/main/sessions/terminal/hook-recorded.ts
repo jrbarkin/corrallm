@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 
+import { parseProgramStatus } from './status';
+import type { ProgramStatus } from './status';
+
 /*
  * For tests: how a Terminal CLI's hooks behaved when something held them, recorded from the real
  * CLI in a throwaway home against a local stub model, with a stub hook server that held, answered
@@ -13,6 +16,10 @@ import { readFileSync } from 'node:fs';
  *   order sent, and the JSON body), and hook-res what the server answered it, hook-hold that it
  *   left it unanswered, hook-conn-closed that the connection ended (`answered` is whether the
  *   server had replied first: false is the CLI cutting it short).
+ * - report: a Program Status report the CLI made (the data of its OSC 7501 sequence, its `msg`
+ *   base64 as sent), recorded with a terminal that answered the CLI's probe as corrallm's screen
+ *   does; title: the window title the CLI set (a spinner's frames recorded once); probe: the CLI
+ *   asked whether the terminal supports reports.
  * - in: keys sent to the terminal, screen: its visible rows then (blank and decoration rows left
  *   out), note: the recorder's own remark, model-req: what the stub model was asked (the tool
  *   results the CLI sent back are what a decision or an answer became).
@@ -40,6 +47,9 @@ export type HoldRecord = { t: number } & (
   | { kind: 'hook-res'; data: { id: string; status: number; body: string } }
   | { kind: 'hook-hold'; data: { id: string } }
   | { kind: 'hook-conn-closed'; data: { id: string; answered: boolean } }
+  | { kind: 'report'; data: string }
+  | { kind: 'title'; data: string }
+  | { kind: 'probe'; data: string }
   | { kind: 'in'; data: string }
   | { kind: 'screen'; data: { label: string; rows: string[] } }
   | { kind: 'note'; data: string }
@@ -86,6 +96,14 @@ export function hookRequests(
 /** The value of a header of a recorded request (names compared without case). */
 export function headerOf(request: RecordedHookRequest, name: string): string | undefined {
   return request.headers.find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+}
+
+/** A case's Program Status reports as the screen reads them, with when. */
+export function reports(records: readonly HoldRecord[]): { t: number; report: ProgramStatus }[] {
+  return holdRecords(records, 'report').flatMap(({ t, data }) => {
+    const report = parseProgramStatus(data);
+    return report === undefined ? [] : [{ t, report }];
+  });
 }
 
 /** The text on a case's screens, whole: what any of its screens showed. */
