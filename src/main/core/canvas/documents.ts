@@ -286,6 +286,26 @@ export class Documents {
   constructor(deps: DocumentsDeps) {
     this.#deps = deps;
     this.#now = deps.now ?? (() => Date.now());
+    // Canvas memory forgets the canvases used least recently with all it keeps of them: the
+    // document loaded of one goes too, once its document is done with what it was doing.
+    deps.memory.subscribe((canvas) => {
+      if (canvas === undefined) this.#letGoOfForgotten();
+    });
+  }
+
+  /** Drops the live document of every canvas kept in rows that canvas memory no longer keeps. */
+  #letGoOfForgotten(): void {
+    for (const [canvas, live] of this.#lives) {
+      if (!live.kept || this.#deps.memory.keeps(canvas)) continue;
+      void this.#queue(canvas, () => {
+        const current = this.#lives.get(canvas);
+        if (current?.kept === true && !this.#deps.memory.keeps(canvas)) {
+          this.#lives.delete(canvas);
+          this.#unsaved.delete(canvas);
+        }
+        return Promise.resolve();
+      });
+    }
   }
 
   /**
