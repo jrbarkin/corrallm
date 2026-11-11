@@ -77,6 +77,9 @@ test('an unchosen agent holds its work until the person chooses through its chip
     });
   }, file);
   await canvasAction(page, 'Open…');
+  // Open asks the dialog when the core gets to it, not when the button is pressed: the folder
+  // answer below replaces the file answer, so it waits until the file has opened.
+  await expect(node('Waiting')).toBeVisible();
   await app.evaluate(
     ({ dialog }, picked) => {
       Object.assign(dialog, {
