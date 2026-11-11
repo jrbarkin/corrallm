@@ -1,10 +1,32 @@
 #!/usr/bin/env bash
-# Build installers, then test installations in fresh Debian bookworm and Fedora 44 containers.
-# Defaults to arm64. x64 uses slow linux/amd64 emulation on Apple Silicon.
+# Build installers, then test installations in fresh Debian bookworm, Ubuntu 24.04 and Fedora 44
+# containers. Defaults to arm64. x64 uses slow linux/amd64 emulation on Apple Silicon.
+#   check-linux-packages.sh [arm64|x64] [--out <folder>]
+# --out keeps the exact installers that were installed and checked in <folder>, under the names
+# Forge gave them (a release publishes these bytes). Without it nothing is kept.
 # Runtime containers receive only installers and the check scripts, never the build image/Node.
 source "$(dirname "$0")/lib/linux-common.sh"
-linux_init "$@"
+out=
+args=()
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --out ]; then
+    [ "$#" -ge 2 ] && [ -z "$out" ] || { printf 'Usage: %s [arm64|x64] [--out <folder>]\n' "$0" >&2; exit 2; }
+    out=$2
+    shift
+  else
+    args+=("$1")
+  fi
+  shift
+done
+linux_init ${args[@]+"${args[@]}"}
+if [ -n "$out" ]; then
+  mkdir -p -- "$out"
+  out=$(cd -- "$out" && pwd -P)
+fi
 linux_build_image
+# The version every installed package must carry, as the installers convert it (build/release.ts).
+semver=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+read -r deb_version rpm_version < <(node scripts/release-decide.mjs versions "$semver")
 artifacts=$linux_image-packages-$$
 cleanup() {
   local code=$?
@@ -19,9 +41,14 @@ trap cleanup EXIT
 step 'Give build user the artifact volume' docker run --rm --platform "$linux_platform" \
   --user root --volume "$artifacts:/artifacts" "$linux_image" chown node:node /artifacts
 step "Build Linux $linux_arch installers" linux_workspace packages "$artifacts"
-for distro in debian:bookworm fedora:44; do
+for distro in debian:bookworm ubuntu:24.04 fedora:44; do
   step "Installed package checks ($distro, $linux_arch)" docker run --rm "${linux_docker[@]}" \
     --env CORRALLM_NO_UPDATE_CHECK=1 --volume "$artifacts:/checks:ro" \
-    "$distro" bash /checks/linux-installed.sh "$distro" "$linux_arch"
+    "$distro" bash /checks/linux-installed.sh "$distro" "$linux_arch" "$semver" "$deb_version" "$rpm_version"
 done
+if [ -n "$out" ]; then
+  step "Keep the checked installers in $out" docker run --rm --platform "$linux_platform" \
+    --volume "$artifacts:/checks:ro" --volume "$out:/out" \
+    debian:bookworm bash /checks/linux-keep.sh /checks /out
+fi
 printf '\nLinux %s: deb and rpm installations passed.\n' "$linux_arch"

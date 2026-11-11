@@ -195,7 +195,7 @@ export class SdkConnector implements Connector {
             ...(api === undefined
               ? {}
               : {
-                  // SDK 0.3.306 calls instance.connect; its public type names the high-level wrapper.
+                  // SDK 0.3.319 calls instance.connect; its public type names the high-level wrapper.
                   mcpServers: {
                     [api.server]: {
                       type: 'sdk' as const,

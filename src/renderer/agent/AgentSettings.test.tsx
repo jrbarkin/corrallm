@@ -157,11 +157,14 @@ describe('shared agent settings', () => {
     fireEvent.click(effort);
     expect(screen.getByRole('menuitemradio', { name: 'Careful work' })).toBeTruthy();
   });
-  it('shows the selected adapter’s logo in the CLI choice', () => {
+  it('shows the selected adapter’s first-letter mark in the CLI choice', () => {
     render(<Editor />);
     const { panel } = open();
     const choice = panel.getByRole('button', { name: /^Agent:/ });
-    expect(within(choice).getByRole('img', { name: 'Claude Code' }).tagName).toBe('IMG');
+    const logo = within(choice).getByRole('img', { name: 'Claude Code' });
+    expect(logo.tagName).toBe('SPAN');
+    expect(logo.textContent).toBe('C');
+    expect(choice.querySelector('img, svg')).toBeNull();
   });
 
   it('drafts the name until Enter and cancels a role draft with Escape without closing the sheet', () => {

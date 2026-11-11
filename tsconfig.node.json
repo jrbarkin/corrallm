@@ -5,7 +5,9 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "lib": ["ES2025"],
-    "types": ["node"]
+    "types": ["node"],
+    // build/release.ts runs under plain Node as well, which needs its imports' extensions.
+    "allowImportingTsExtensions": true
   },
   "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*"]
 }

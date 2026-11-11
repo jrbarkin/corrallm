@@ -35,7 +35,7 @@ describe("Claude Code's adapter", () => {
   it('routes the agent API on each connection as its recording proves it (B21 C7)', () => {
     // Terminal: the session's own --mcp-config entry over http, recorded with Claude Code 2.1.316
     // (fixtures/mcp-entry.json, replayed by mcp-entry.test.ts). The Agent SDK: its host-registered
-    // channel, recorded with SDK 0.3.306 (sdk/fixtures/mcp-entry.json, sdk/mcp-entry.test.ts).
+    // channel, recorded with SDK 0.3.319 (sdk/fixtures/mcp-entry.json, sdk/mcp-entry.test.ts).
     expect(connection('claude-code.terminal').api).toBe('http');
     expect(connection('claude-code.sdk').api).toBe('channel');
   });
@@ -150,11 +150,9 @@ describe("Claude Code's adapter", () => {
     expect([descriptor.role, descriptor.resume, descriptor.list]).toEqual(['append', true, true]);
   });
 
-  it('ships its logo, and how to register an outside MCP server', () => {
-    expect(descriptor.logo).toMatch(
-      /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[\s\S]*<\/svg>\n?$/,
-    );
-    expect(descriptor.logo).not.toMatch(/<script|on\w+=/i);
+  it('declares no logo, and says how to register an outside MCP server', () => {
+    // A look-alike of a vendor's mark is not ours to ship: the letter fallback draws instead.
+    expect(descriptor.logo).toBeUndefined();
     for (const placeholder of ['{server}', '{url}', '{var}']) {
       expect(descriptor.registerMcp).toContain(placeholder);
     }
