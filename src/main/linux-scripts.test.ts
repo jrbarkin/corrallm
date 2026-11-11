@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const exec = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '../..');
@@ -238,6 +238,20 @@ it.each(['arm64', 'x64'])(
   },
 );
 
+it('passes the package.json version and its deb and rpm conversions to every installed check', async () => {
+  const { env, commands } = await fixture();
+  await exec('bash', ['scripts/check-linux-packages.sh', 'arm64'], { cwd: root, env });
+  const version = (
+    JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as {
+      version: string;
+    }
+  ).version;
+  const converted = version.replace('-', '~');
+  const installs = (await commands()).filter((args) => args.includes('/checks/linux-installed.sh'));
+  expect(installs).toHaveLength(3);
+  for (const args of installs) expect(args.slice(-3)).toEqual([version, converted, converted]);
+});
+
 it('releases the artifact volume when an installed package check fails', async () => {
   const { env, commands } = await fixture();
   await expect(
@@ -252,6 +266,70 @@ it('releases the artifact volume when an installed package check fails', async (
   const calls = await commands();
   expect(calls.some((args) => args.includes('fedora:44'))).toBe(false);
   expect(calls.at(-1)?.slice(0, 2)).toEqual(['volume', 'rm']);
+});
+
+it('installs in Debian, then Ubuntu, then Fedora', async () => {
+  const { env, commands } = await fixture();
+  await exec('bash', ['scripts/check-linux-packages.sh', 'arm64'], { cwd: root, env });
+  const checked = (await commands())
+    .filter((args) => args[0] === 'run' && args.includes('bash'))
+    .map((args) => args.find((arg) => /^(debian|ubuntu|fedora):/.test(arg)))
+    .filter(Boolean);
+  expect(checked).toEqual(['debian:bookworm', 'ubuntu:24.04', 'fedora:44']);
+});
+
+describe('--out', () => {
+  it('keeps the checked installers in the folder, after every installation passed', async () => {
+    const { folder, env, commands } = await fixture();
+    const out = path.join(folder, 'kept installers');
+    await exec('bash', ['scripts/check-linux-packages.sh', '--out', out, 'x64'], {
+      cwd: root,
+      env,
+    });
+    const calls = await commands();
+    const keep = calls.find((args) => args.includes('/checks/linux-keep.sh'));
+    expect(keep).toEqual(expect.arrayContaining(['--platform', 'linux/amd64']));
+    expect(keep).toContain(`${await realpath(out)}:/out`);
+    expect(keep?.some((arg) => arg.endsWith(':/checks:ro'))).toBe(true);
+    expect(calls.indexOf(keep ?? [])).toBeGreaterThan(
+      calls.findLastIndex((args) => args.includes('fedora:44')),
+    );
+    expect(calls.at(-1)?.slice(0, 2)).toEqual(['volume', 'rm']);
+  });
+
+  it('is accepted after the architecture too, and keeps nothing without it', async () => {
+    const { folder, env, commands } = await fixture();
+    await exec(
+      'bash',
+      ['scripts/check-linux-packages.sh', 'arm64', '--out', path.join(folder, 'kept')],
+      { cwd: root, env },
+    );
+    expect((await commands()).some((args) => args.includes('/checks/linux-keep.sh'))).toBe(true);
+    await exec('bash', ['scripts/check-linux-packages.sh', 'arm64'], { cwd: root, env });
+    const second = (await commands()).slice(
+      (await commands()).findLastIndex((args) => args[0] === 'build'),
+    );
+    expect(second.some((args) => args.join(' ').includes('/out'))).toBe(false);
+  });
+
+  it('keeps nothing when an installation fails', async () => {
+    const { folder, env, commands } = await fixture();
+    await expect(
+      exec('bash', ['scripts/check-linux-packages.sh', '--out', path.join(folder, 'kept')], {
+        cwd: root,
+        env: { ...env, FAIL_DOCKER_ARG: 'ubuntu:24.04' },
+      }),
+    ).rejects.toMatchObject({ code: 19 });
+    expect((await commands()).some((args) => args.includes('/checks/linux-keep.sh'))).toBe(false);
+  });
+
+  it('refuses a missing or repeated folder before doing anything in Docker', async () => {
+    const { env } = await fixture();
+    for (const args of [['--out'], ['--out', 'a', '--out', 'b']])
+      await expect(
+        exec('bash', ['scripts/check-linux-packages.sh', ...args], { cwd: root, env }),
+      ).rejects.toMatchObject({ code: 2 });
+  });
 });
 
 it('runs every gate in order, including the e2e global build under xvfb, stopping on failure', async () => {
@@ -318,9 +396,12 @@ it('makes only the configured Linux makers and collects their installers and run
     await mkdir(out, { recursive: true });
     await writeFile(path.join(out, `test.${kind}`), kind);
   }
-  await writeFile(path.join(folder, 'pnpm'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$PNPM_LOG"\n', {
-    mode: 0o755,
-  });
+  await writeFile(
+    path.join(folder, 'pnpm'),
+    // `pnpm build:seed` makes the test-only seeding bundle the installed check carries along.
+    '#!/bin/bash\nprintf "%s\\n" "$*" >> "$PNPM_LOG"\n[ "$1" = build:seed ] && mkdir -p dist-check && printf seed > dist-check/seed-profile.cjs\nexit 0\n',
+    { mode: 0o755 },
+  );
   await exec(
     'bash',
     [path.join(root, 'scripts/lib/linux-workspace.sh'), 'packages', 'x64', artifacts],
@@ -332,8 +413,14 @@ it('makes only the configured Linux makers and collects their installers and run
   expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual([
     'install --frozen-lockfile',
     'exec install-electron',
+    'build:seed',
     'make --platform linux --arch x64 --targets deb,rpm',
   ]);
+  // The headless check and its test-only seeding bundle travel beside the installers.
+  expect(await readFile(path.join(artifacts, 'seed-profile.cjs'), 'utf8')).toBe('seed');
+  expect(await readFile(path.join(artifacts, 'headless-smoke.sh'), 'utf8')).toContain(
+    'Packaged headless check',
+  );
   expect(await readFile(path.join(artifacts, 'corrallm.deb'), 'utf8')).toBe('deb');
   expect(await readFile(path.join(artifacts, 'corrallm.rpm'), 'utf8')).toBe('rpm');
   expect(await readFile(path.join(artifacts, 'linux-installed.sh'), 'utf8')).toContain(

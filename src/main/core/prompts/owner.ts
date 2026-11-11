@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { agentEndpoint } from '../../../shared/model/catalog';
 import { connectionIn } from '../../../shared/adapter';
 import type { Catalog, ConnectionId } from '../../../shared/adapter';
 import type { CanvasId } from '../../../shared/canvas';
+import type { LeadGrants } from '../../../shared/api/ops/leads';
 import {
+  LEAD_ANSWER_SECONDS,
+  LEAD_DENIALS,
   MAX_CANVAS_PROMPTS,
   MAX_CORE_PROMPT_BYTES,
   MAX_PROMPT_TEXT_LENGTH,
@@ -13,7 +17,7 @@ import {
 } from '../../../shared/api/limits';
 import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
-import type { NeedsItem } from '../../../shared/model/needs';
+import type { NeedChoice, NeedsItem } from '../../../shared/model/needs';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
 import {
   ANSWER_IN_TERMINAL,
@@ -45,12 +49,22 @@ import type { PromptOrigin, PromptSink } from '../../sessions/manager';
 import { linkTarget } from '../../url-policy';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
-import { decidedOf, decisionWords, deciding, landed, withdrawnDecision } from '../decisions';
+import {
+  decided,
+  decidedOf,
+  decisionWords,
+  deciding,
+  landed,
+  withdrawnDecision,
+} from '../decisions';
+import { ancestorsOf } from '../ancestry';
 import type { MessageStore } from '../delivery/messages';
 import { nameOf, partyText } from '../parties';
 import { notFound } from '../replies';
 import type { ReplyResult } from '../replies';
 import { classify } from './classify';
+import { allowance, answerable, HAND_BACK } from './grants';
+import type { Answerer } from './grants';
 
 /*
  * The core's prompt owner (B13 Design §9.2 C2, C3, C6; §7's C3): every prompt an agent's session
@@ -149,6 +163,59 @@ export interface PromptOwnerDeps {
   /** The time now (epoch ms): when a prompt was raised. */
   now?: () => number;
   limits?: Partial<PromptLimits>;
+  /**
+   * B24 C3: who leads now and what it may answer (the lead store's, read on every use, so a
+   * demotion, a hold or a withdrawn grant takes effect at once). None: nobody leads.
+   */
+  leads?: { grantsOf(canvas: CanvasId, agent: string): LeadGrants | undefined };
+  /** B24 C9: the outside orchestrators you let answer approvals on the canvas, by token name. */
+  grantees?: (canvas: CanvasId) => readonly string[];
+  /** A timer that can be stopped (tests drive it): the lead's answer deadline. */
+  timer?: (run: () => void, ms: number) => () => void;
+  /**
+   * B24 C3: told as a prompt's route moves or ends, once each, for the copy and notice path:
+   * who it moved from and to (none: to you alone), and why.
+   */
+  routed?: (change: RouteChange) => void;
+  /**
+   * B24 C9: an outside orchestrator you let answer approvals is woken, once, as one it may answer
+   * is admitted, and told once more if it ends unanswered by it (a record for its `wait`).
+   */
+  wake?: (wake: {
+    canvas: CanvasId;
+    need: string;
+    name: string;
+    type: 'raised' | 'ended' | 'answered';
+  }) => void;
+  /**
+   * B24 C7: a lead was cut off from a worker's prompts after LEAD_DENIALS rejections in a row
+   * (`need` is the prompt whose answer made the last): the copy path tells it once.
+   */
+  cutOff?: (cut: { canvas: CanvasId; agent: string; need: string; lead: string }) => void;
+}
+
+/** A prompt's route moving, as the copy path hears it. */
+export interface RouteChange {
+  canvas: CanvasId;
+  agent: string;
+  need: string;
+  from?: string;
+  to?: string;
+  /** Why it moved: or `ended`, with `how` it ended. */
+  why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'unreachable' | 'ended';
+  how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you';
+  /** Who answered it or handed it back (the party it already told), if a party did. */
+  by?: PartyId;
+  /** When the lead it moved to may answer until (epoch ms). */
+  until?: number;
+}
+
+/** The lead a prompt waits on now, and until when it may answer. */
+interface Route {
+  readonly lead: string;
+  readonly party: PartyId;
+  readonly until: number;
+  readonly stop: () => void;
 }
 
 /** How an occurrence ended without an answer given here. */
@@ -180,6 +247,14 @@ interface Occurrence {
   readonly standIn: boolean;
   readonly bytes: number;
   state: State;
+  /** B24 C3: the lead it is routed to now. Held in memory alone, as open prompts are. */
+  route?: Route;
+  /** The leads that handed it back or ran out of time: never offered it again (R28). */
+  readonly passed: Set<string>;
+  /** The leads that lost their authority over it: never routed to again (R28). */
+  readonly left: Set<string>;
+  /** The outside orchestrators woken for it (C9), by token name. */
+  readonly woken: Set<string>;
 }
 
 /** How a prompt no longer live ended, kept to say so to a later reply. */
@@ -222,6 +297,8 @@ export class PromptOwner implements PromptSink {
    * said once (B13 C9's budgets under load), until the generation ends.
    */
   readonly #told = new Map<string, Set<Declined | 'key'>>();
+  /** Consecutive rejections by a lead of a worker's prompts, by canvas, lead and worker. */
+  readonly #denials = new Map<string, number>();
   #bytes = 0;
 
   constructor(deps: PromptOwnerDeps) {
@@ -327,8 +404,63 @@ export class PromptOwner implements PromptSink {
    * What waits on the canvas: each live prompt of an agent on it, as its Needs item, as `reader`
    * sees it (yours, unless said).
    */
-  items(canvas: CanvasId, reader: PromptReader = 'you'): NeedsItem[] {
-    return this.occurrences(canvas).map((occurrence) => promptNeed(occurrence, reader));
+  items(canvas: CanvasId, reader: PromptReader = 'you', party?: PartyId): NeedsItem[] {
+    return this.#live(canvas).map((occurrence) =>
+      this.#seenBy(
+        occurrence,
+        promptNeed(occurrenceOf(occurrence, this.#nodes(canvas)), reader),
+        party,
+      ),
+    );
+  }
+
+  /** The live occurrences on the canvas whose agents are agents there now. */
+  #live(canvas: CanvasId): Occurrence[] {
+    const nodes = this.#nodes(canvas);
+    return [...(this.#canvases.get(canvas)?.live.values() ?? [])].filter(({ agent }) =>
+      nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
+    );
+  }
+
+  #nodes(canvas: CanvasId): readonly NodeLike[] {
+    return this.#deps.canvas(canvas)?.nodes ?? [];
+  }
+
+  /**
+   * B24 C3: a prompt's Needs item with who may answer it now (you, the lead it is routed to, the
+   * outside orchestrators you let answer it) and until when, and, for `party` if it may answer, the
+   * choices its allowance gives (Hand back among them). Everyone else's choices stay as `need` has
+   * them: a token's none.
+   */
+  #seenBy(occurrence: Occurrence, need: NeedsItem, party?: PartyId): NeedsItem {
+    const by: PartyId[] = ['you'];
+    const { route } = occurrence;
+    if (route !== undefined && this.#leads(occurrence, route.lead)) by.push(route.party);
+    for (const name of this.#deps.grantees?.(occurrence.canvas) ?? []) {
+      const outside: PartyId = `outside:${name}`;
+      if (answerable(this.#may(occurrence, outside))) by.push(outside);
+    }
+    const seen: NeedsItem = {
+      ...need,
+      by,
+      ...(route === undefined ? {} : { routed: { to: route.party, until: route.until } }),
+    };
+    if (route !== undefined) seen.until = route.until;
+    if (party === undefined || party === 'you' || !by.includes(party)) return seen;
+    const may = this.#may(occurrence, party);
+    const yours = promptNeed(occurrenceOf(occurrence, this.#nodes(occurrence.canvas)), 'you');
+    return {
+      ...seen,
+      choices: [
+        ...yours.choices
+          .filter(({ value }) => may.choices.includes(value))
+          .map((choice) => ({ ...choice, feedback: 'none' as const })),
+        ...(may.handBack ? [HAND_BACK_CHOICE] : []),
+      ],
+      ...(may.answers && yours.questions !== undefined
+        ? { questions: yours.questions.map((question) => ({ ...question, other: false })) }
+        : {}),
+    };
   }
 
   /**
@@ -339,11 +471,7 @@ export class PromptOwner implements PromptSink {
   occurrences(canvas: CanvasId): PromptOccurrence[] {
     const nodes = this.#deps.canvas(canvas)?.nodes;
     if (nodes === undefined) return [];
-    return [...(this.#canvases.get(canvas)?.live.values() ?? [])]
-      .filter(({ agent }) =>
-        nodes.some((node) => node.id === agent && (node.type ?? 'agent') === 'agent'),
-      )
-      .map((occurrence) => occurrenceOf(occurrence, nodes));
+    return this.#live(canvas).map((occurrence) => occurrenceOf(occurrence, nodes));
   }
 
   /** How many prompts wait on `agent` (as `occurrences` lists them): what its counts add. */
@@ -354,6 +482,23 @@ export class PromptOwner implements PromptSink {
   /** The live prompts on the canvas, as raised and classified: what C7's selector reads. */
   prompts(canvas: CanvasId): readonly Prompt[] {
     return [...(this.#canvases.get(canvas)?.live.values() ?? [])].map(({ prompt }) => prompt);
+  }
+
+  /** The lead the prompt `need` is routed to now, if it still waits. */
+  routeOf(canvas: CanvasId, need: string): string | undefined {
+    return this.#resolve(canvas, need)?.route?.lead;
+  }
+
+  /**
+   * B24 C5: `lead` can't be sent its copy of the prompt `need` (it already has MAX_WAITING open,
+   * or its card is refused by its connection's checks): if it holds the route, the route is
+   * withdrawn from it and moves up, and it is never offered the prompt again (R28).
+   */
+  unreachable(canvas: CanvasId, need: string, lead: string): void {
+    const occurrence = this.#resolve(canvas, need);
+    if (occurrence?.route?.lead !== lead) return;
+    occurrence.passed.add(lead);
+    this.#route(occurrence, 'unreachable');
   }
 
   /** Whether `to` names a live prompt here: what the reply router's prompt handler answers. */
@@ -367,7 +512,7 @@ export class PromptOwner implements PromptSink {
     const nodes = this.#deps.canvas(canvas)?.nodes;
     return occurrence === undefined || nodes === undefined
       ? undefined
-      : promptNeed(occurrenceOf(occurrence, nodes), 'you');
+      : this.#seenBy(occurrence, promptNeed(occurrenceOf(occurrence, nodes), 'you'));
   }
 
   /**
@@ -404,11 +549,293 @@ export class PromptOwner implements PromptSink {
     return new OpFailure('conflict', endedSentence(to, ended.reason, nameOf(nodes, ended.agent)));
   }
 
+  /**
+   * Why `by` may not give `answer` to the prompt `to` names, if it may not: the one allowance
+   * (grants.ts) every boundary asks. None for you, or where no such prompt waits (the caller of
+   * this says so itself).
+   */
+  refusal(canvas: CanvasId, to: string, by: PartyId, answer: unknown): string | undefined {
+    const occurrence = this.#resolve(canvas, to);
+    return occurrence === undefined ? undefined : this.#refusal(occurrence, by, answer);
+  }
+
+  #refusal(occurrence: Occurrence, by: PartyId, answer: unknown): string | undefined {
+    if (by === 'you') return undefined;
+    if (this.#answerer(occurrence, by) === undefined) {
+      const route = occurrence.route === undefined ? '' : ' or the lead it waits on';
+      return `Only the user${route} may answer ${occurrence.need}:`;
+    }
+    return this.#may(occurrence, by).allows(answer)
+      ? undefined
+      : `You may only pick a once-only choice ${occurrence.need} offers you${by.startsWith('agent:') ? ', or hand it back' : ''}:`;
+  }
+
+  /** Who `by` answers as, if it may answer this prompt now: read afresh from who leads now. */
+  #answerer(occurrence: Occurrence, by: PartyId): Answerer | undefined {
+    if (by === 'you') return { kind: 'you' };
+    const { route } = occurrence;
+    if (by === route?.party && this.#leads(occurrence, route.lead)) {
+      const grants = this.#deps.leads?.grantsOf(occurrence.canvas, route.lead);
+      return grants === undefined ? undefined : { kind: 'lead', grants };
+    }
+    if (
+      by.startsWith('outside:') &&
+      this.#deps.grantees?.(occurrence.canvas).includes(by.slice('outside:'.length)) === true
+    ) {
+      return { kind: 'outside' };
+    }
+    return undefined;
+  }
+
+  #may(occurrence: Occurrence, by: PartyId) {
+    return allowance(
+      occurrence.prompt,
+      connectionIn(this.#deps.catalog, occurrence.connection)?.connection.signals === true,
+      this.#answerer(occurrence, by) ?? NOBODY,
+    );
+  }
+
+  /**
+   * Routes every open prompt on the canvas again (B24 C3): after who leads, who is nested in whom,
+   * or the document changed. A prompt moves only away from a party that lost its authority, to the
+   * nearest one above that it has not left or passed; otherwise it stays where it is.
+   */
+  reroute(canvas: CanvasId): void {
+    for (const occurrence of this.#live(canvas)) this.#route(occurrence, 'authority');
+  }
+
+  /** Whether `lead` is still above the prompt's worker and has an API route to answer by. */
+  #leads(occurrence: Occurrence, lead: string): boolean {
+    const nodes = this.#nodes(occurrence.canvas);
+    if (ancestorsOf(nodes, occurrence.agent)?.includes(lead) !== true) return false;
+    const node = nodes.find((one) => one.id === lead);
+    const endpoint =
+      node?.type === 'agent'
+        ? agentEndpoint(node.data as EndpointData, this.#deps.catalog)
+        : undefined;
+    return (
+      endpoint?.kind === 'known' &&
+      connectionIn(this.#deps.catalog, endpoint.connection)?.connection.api != null
+    );
+  }
+
+  /** Whether `lead` may hold the prompt now: above, routable, granted its kind, not cut off. */
+  #holds(occurrence: Occurrence, lead: string): boolean {
+    if (occurrence.prompt.answerIn === 'terminal') return false;
+    if (!this.#leads(occurrence, lead)) return false;
+    const grants = this.#deps.leads?.grantsOf(occurrence.canvas, lead);
+    if (grants === undefined) return false;
+    if (this.#cut(occurrence, lead)) return false;
+    const signals =
+      connectionIn(this.#deps.catalog, occurrence.connection)?.connection.signals === true;
+    return answerable(allowance(occurrence.prompt, signals, { kind: 'lead', grants }));
+  }
+
+  #cut(occurrence: Occurrence, lead: string): boolean {
+    return (
+      (this.#denials.get(denialKey(occurrence.canvas, lead, occurrence.agent)) ?? 0) >= LEAD_DENIALS
+    );
+  }
+
+  /**
+   * The lead `occurrence` routes to now (R28: strictly above whoever passed it, never itself, never
+   * one it left, a loop in the ancestry none), if any is granted its kind on a connection with an
+   * API route and has something to answer, and hasn't been cut off for this worker.
+   */
+  #pick(occurrence: Occurrence): string | undefined {
+    if (occurrence.prompt.answerIn === 'terminal') return undefined;
+    const nodes = this.#nodes(occurrence.canvas);
+    const chain = ancestorsOf(nodes, occurrence.agent);
+    if (chain === undefined) return undefined;
+    const last = Math.max(-1, ...[...occurrence.passed].map((lead) => chain.indexOf(lead)));
+    for (const lead of chain.slice(last + 1)) {
+      if (occurrence.left.has(lead)) continue;
+      if (this.#holds(occurrence, lead)) return lead;
+      // A granted lead cut off for this worker ends the search.
+      if (this.#cut(occurrence, lead) && this.#deps.leads?.grantsOf(occurrence.canvas, lead)) {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  #route(occurrence: Occurrence, why: RouteChange['why'], by?: PartyId): void {
+    const state = stateOf(occurrence);
+    if (state.at !== 'open' && state.at !== 'answering') return;
+    const holder = occurrence.route?.lead;
+    if (holder !== undefined && (why === 'authority' || why === 'denials')) {
+      // Only a holder that lost its authority loses the route (R28: routes only go up).
+      if (this.#holds(occurrence, holder)) return;
+      occurrence.left.add(holder);
+    }
+    const lead = this.#pick(occurrence);
+    if (lead === occurrence.route?.lead) return;
+    const from = occurrence.route?.lead;
+    occurrence.route?.stop();
+    delete occurrence.route;
+    if (lead !== undefined) {
+      const run = () => {
+        if (occurrence.route?.lead === lead) this.#handBack(occurrence, lead, 'deadline');
+      };
+      const ms = LEAD_ANSWER_SECONDS * 1000;
+      const stop = (this.#deps.timer ?? timer)(run, ms);
+      occurrence.route = {
+        lead,
+        party: `agent:${lead}`,
+        until: (this.#deps.now?.() ?? Date.now()) + ms,
+        stop,
+      };
+    }
+    this.#deps.routed?.({
+      canvas: occurrence.canvas,
+      agent: occurrence.agent,
+      need: occurrence.need,
+      ...(from === undefined ? {} : { from }),
+      ...(lead === undefined ? {} : { to: lead }),
+      ...(occurrence.route === undefined ? {} : { until: occurrence.route.until }),
+      ...(by === undefined ? {} : { by }),
+      why,
+    });
+    this.#deps.changed(occurrence.canvas, occurrence.agent);
+  }
+
+  /** The outside orchestrators you let answer this prompt are woken, once each (C9). */
+  #wake(occurrence: Occurrence): void {
+    for (const name of this.#deps.grantees?.(occurrence.canvas) ?? []) {
+      if (!answerable(this.#may(occurrence, `outside:${name}`))) continue;
+      occurrence.woken.add(name);
+      this.#deps.wake?.({ canvas: occurrence.canvas, need: occurrence.need, name, type: 'raised' });
+    }
+  }
+
+  /** The route ends with the prompt: its timer stopped, the copy path told once. */
+  #unroute(occurrence: Occurrence, ended: Ended): void {
+    const from = occurrence.route?.lead;
+    occurrence.route?.stop();
+    delete occurrence.route;
+    if (from === undefined) return;
+    this.#deps.routed?.({
+      canvas: occurrence.canvas,
+      agent: occurrence.agent,
+      need: occurrence.need,
+      from,
+      why: 'ended',
+      ...(ended.by === undefined ? {} : { by: ended.by }),
+      how:
+        ended.reason === 'answered'
+          ? ended.by === 'you'
+            ? 'by-you'
+            : 'answered'
+          : ended.reason === 'dismissed'
+            ? 'by-you'
+            : ended.reason,
+    });
+  }
+
+  /** The lead gave the prompt back, or its time ran out: the route moves up, and you are told. */
+  #handBack(occurrence: Occurrence, lead: string, why: 'handed-back' | 'deadline'): void {
+    occurrence.passed.add(lead);
+    const open = this.#deps.canvas(occurrence.canvas);
+    if (open !== undefined) {
+      const name = this.#name(occurrence.canvas, occurrence.agent);
+      const party: PartyId = `agent:${lead}`;
+      decided(open.messages, {
+        need: `${occurrence.need}~${why}`,
+        by: party,
+        words:
+          why === 'deadline'
+            ? `${who(open.nodes, party)} ran out of time on ${name}’s request.`
+            : `${who(open.nodes, party)} handed back ${name}’s request.`,
+      });
+    }
+    this.#route(occurrence, why, why === 'handed-back' ? `agent:${lead}` : undefined);
+  }
+
+  /** The routed lead's Hand back: settles nothing, records no decision, moves the route up. */
+  #handBackBy(occurrence: Occurrence, ctx: OpContext): ReplyResult {
+    const state = stateOf(occurrence);
+    const lead = occurrence.route?.lead;
+    if (state.at !== 'open' || lead === undefined) {
+      throw new OpFailure('conflict', `${occurrence.need} is being answered now.`);
+    }
+    ctx.noReturn();
+    this.#handBack(occurrence, lead, 'handed-back');
+    return { outcome: 'handed-back' };
+  }
+
+  /**
+   * A lead's answer counted (C7): rejections in a row cut that lead off from that worker's prompts
+   * at LEAD_DENIALS, and you are told once; anything else starts the count again.
+   */
+  #counted(occurrence: Occurrence, by: PartyId, settled: SettledDecision): void {
+    if (!by.startsWith('agent:')) return;
+    const key = denialKey(occurrence.canvas, by.slice('agent:'.length), occurrence.agent);
+    const { outcome } = settled;
+    if (outcome.type !== 'choice' || !outcome.hint.startsWith('reject_')) {
+      this.#denials.delete(key);
+      return;
+    }
+    const count = (this.#denials.get(key) ?? 0) + 1;
+    this.#denials.set(key, count);
+    if (count !== LEAD_DENIALS) return;
+    const open = this.#deps.canvas(occurrence.canvas);
+    if (open !== undefined) {
+      const name = this.#name(occurrence.canvas, occurrence.agent);
+      decided(open.messages, {
+        need: `${occurrence.need}~denials`,
+        by,
+        words: `${who(open.nodes, by)} refused ${String(LEAD_DENIALS)} of ${name}’s requests in a row, so its requests come to you alone.`,
+      });
+    }
+    // The lead is told too, once and value-free, as a copy's lead is told it no longer holds one.
+    this.#deps.cutOff?.({
+      canvas: occurrence.canvas,
+      agent: occurrence.agent,
+      need: occurrence.need,
+      lead: by.slice('agent:'.length),
+    });
+    // The route of the worker's other prompts moves once this answer has landed.
+    queueMicrotask(() => {
+      for (const one of this.#live(occurrence.canvas)) this.#route(one, 'denials');
+    });
+  }
+
+  /** Your answer to a worker's prompt starts every lead's count of it again. */
+  #forgiven(occurrence: Occurrence): void {
+    let any = false;
+    for (const key of [...this.#denials.keys()]) {
+      const [canvas, , worker] = key.split('\u0000');
+      if (canvas === occurrence.canvas && worker === occurrence.agent) {
+        this.#denials.delete(key);
+        any = true;
+      }
+    }
+    if (any) {
+      queueMicrotask(() => {
+        // Never the prompt you are answering: a lead it went to would be sent a copy and a notice.
+        for (const one of this.#live(occurrence.canvas)) {
+          if (one !== occurrence) this.#route(one, 'authority');
+        }
+      });
+    }
+  }
+
+  /** You confirmed or changed who leads (C7): the counts of `lead` (or of every lead) start again. */
+  forgive(canvas: CanvasId, lead?: string): void {
+    for (const key of [...this.#denials.keys()]) {
+      const [on, one] = key.split('\u0000');
+      if (on === canvas && (lead === undefined || one === lead)) this.#denials.delete(key);
+    }
+  }
+
   /** Why `answer` isn't one the prompt `to` names takes, if it isn't. */
-  fits(canvas: CanvasId, to: string, answer: unknown): string | undefined {
+  fits(canvas: CanvasId, to: string, answer: unknown, by: PartyId = 'you'): string | undefined {
     const occurrence = this.#resolve(canvas, to);
     if (occurrence === undefined) return `${to} isn’t open any more.`;
     try {
+      if (by !== 'you' && picks(answer, HAND_BACK) && this.#may(occurrence, by).allows(answer)) {
+        return undefined;
+      }
       if (notWaiting(occurrence, answer) || toTerminal(occurrence, answer)) return undefined;
       this.#check(occurrence, answer);
       return undefined;
@@ -425,13 +852,17 @@ export class PromptOwner implements PromptSink {
     if (open === undefined) {
       throw new OpFailure('unavailable', 'That canvas isn’t open in corrallm.');
     }
-    // Every native prompt is yours alone until B24's grants: no token answers as you. It is told
-    // what it may read of the prompt (B13 C11).
+    // Only the parties the prompt names may answer it, and a party other than you only within its
+    // allowance (B24 C4): the one predicate every boundary asks. It is told what it may read.
     if (ctx.by !== 'you') {
-      throw new OpFailure(
-        'refused',
-        `Only the user may answer ${to}: ${promptNeed(occurrenceOf(occurrence, open.nodes), 'token').title}`,
-      );
+      const why = this.#refusal(occurrence, ctx.by, given);
+      if (why !== undefined) {
+        throw new OpFailure(
+          'refused',
+          `${why} ${promptNeed(occurrenceOf(occurrence, open.nodes), 'token').title}`,
+        );
+      }
+      if (picks(given, HAND_BACK)) return this.#handBackBy(occurrence, ctx);
     }
     // Not waiting, before a terminal's answers are refused: settled at once, nothing recorded.
     if (notWaiting(occurrence, given)) return this.#dismiss(occurrence, ctx);
@@ -448,6 +879,8 @@ export class PromptOwner implements PromptSink {
     }
     // Reserved, with nothing awaited since it was checked: a second reply now is a conflict.
     occurrence.state = { at: 'answering', by: ctx.by };
+    // Your answer is valid and reserved: only now does it start the worker's counts again.
+    if (ctx.by === 'you') this.#forgiven(occurrence);
     const name = nameOf(open.nodes, occurrence.agent);
     const settled = settledOf(to, occurrence.prompt, answer);
     const link = occurrence.prompt.kind === 'form' && 'url' in occurrence.prompt.form;
@@ -474,11 +907,24 @@ export class PromptOwner implements PromptSink {
     // Still reserved, its generation still the agent's, and its canvas still run (B13 C9's close
     // barrier: one closing gives its sessions nothing more): an end meanwhile won.
     const now = stateOf(occurrence);
+    // B24 C3: and still one the party may give: a deadline, a hand-back by corrallm, the denials or
+    // a change of who leads may have moved the route while the record was written.
+    const moved = ctx.by !== 'you' && this.#refusal(occurrence, ctx.by, given) !== undefined;
     if (
+      moved ||
       now.at !== 'answering' ||
       this.#deps.generationOf(canvas, occurrence.agent) !== occurrence.generation ||
       this.#deps.canvas(canvas) === undefined
     ) {
+      if (moved && now.at === 'answering') {
+        this.#reopen(occurrence);
+        withdrawnDecision(open.messages, record.id, 'It moved to another first');
+        await open.messages.durable().catch(() => undefined);
+        throw new OpFailure(
+          'conflict',
+          `${to} moved on; you can no longer answer it: ${partyText(open.nodes, 'you')} or its next party does.`,
+        );
+      }
       const reason = now.at === 'ended' ? now.reason : 'withdrawn';
       if (now.at === 'answering') this.#end(occurrence, 'withdrawn');
       withdrawnDecision(open.messages, record.id, endedFirst(name, reason));
@@ -513,6 +959,7 @@ export class PromptOwner implements PromptSink {
       );
     }
     this.#settle(occurrence, ctx.by, settled);
+    if (ctx.by !== 'you') this.#counted(occurrence, ctx.by, settled);
     landed(open.messages, record.id);
     try {
       await open.messages.durable();
@@ -647,6 +1094,9 @@ export class PromptOwner implements PromptSink {
       standIn,
       bytes,
       state: { at: 'open' },
+      passed: new Set(),
+      left: new Set(),
+      woken: new Set(),
     };
     prompts.live.set(built.id, occurrence);
     this.#keys.set(keyOf(at, key), occurrence);
@@ -664,6 +1114,8 @@ export class PromptOwner implements PromptSink {
         ...(at.answers.release === undefined ? {} : { releasable: true as const }),
       },
     });
+    this.#route(occurrence, 'raised');
+    this.#wake(occurrence);
     this.#deps.changed(at.canvas, at.agent);
   }
 
@@ -805,6 +1257,16 @@ export class PromptOwner implements PromptSink {
     const prompts = this.#canvasOf(occurrence.canvas);
     if (prompts.live.get(occurrence.prompt.id) !== occurrence) return;
     prompts.live.delete(occurrence.prompt.id);
+    this.#unroute(occurrence, ended);
+    for (const name of occurrence.woken) {
+      // A successful answer acknowledges the existing wake durably without sending another.
+      this.#deps.wake?.({
+        canvas: occurrence.canvas,
+        need: occurrence.need,
+        name,
+        type: ended.by === `outside:${name}` ? 'answered' : 'ended',
+      });
+    }
     this.#keys.delete(keyOf(occurrence, occurrence.key));
     this.#bytes -= occurrence.bytes;
     prompts.ended.set(occurrence.need, ended);
@@ -845,6 +1307,32 @@ export class PromptOwner implements PromptSink {
   #name(canvas: CanvasId, agent: string): string {
     return nameOf(this.#deps.canvas(canvas)?.nodes ?? [], agent);
   }
+}
+
+/** What a node's data may say of the agent it runs (a canvas document's nodes do). */
+type EndpointData = Parameters<typeof agentEndpoint>[0];
+
+/** Nobody: the allowance of a party that may answer nothing here. */
+const NOBODY: Answerer = {
+  kind: 'lead',
+  grants: { questions: false, plans: false, approvals: false },
+};
+
+/** The core's own Hand back, among the choices of the lead a prompt is routed to. */
+const HAND_BACK_CHOICE: NeedChoice = { value: HAND_BACK, label: 'Hand back' };
+
+/** The key a lead's count of rejections of one worker's prompts is kept by. */
+function denialKey(canvas: CanvasId, lead: string, worker: string): string {
+  return [canvas, lead, worker].join('\u0000');
+}
+
+/** The default deadline timer: stopped by the function it returns, never holding the process. */
+function timer(run: () => void, ms: number): () => void {
+  const handle = setTimeout(run, ms);
+  handle.unref();
+  return () => {
+    clearTimeout(handle);
+  };
 }
 
 /** Own every admitted value, including JSON subjects, and keep every read immutable. */

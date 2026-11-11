@@ -118,6 +118,8 @@ export class TokenStore {
   /** The same, by hash, each with when it would have expired: dropped STALE_MS after that. */
   readonly #gone = new Map<string, number>();
   readonly #listeners = new Set<(id: string) => void>();
+  /** What hears each token made, renewed or revoked. */
+  readonly #changes = new Set<() => void>();
   #writing: Promise<void> = Promise.resolve();
 
   constructor(file: string, now: () => number = Date.now) {
@@ -168,6 +170,7 @@ export class TokenStore {
       expires: this.#now() + hours * HOUR,
     });
     await this.#write(true);
+    this.#changed();
     return token;
   }
 
@@ -194,6 +197,7 @@ export class TokenStore {
     }
     this.#prune();
     await this.#write(true);
+    this.#changed();
     return true;
   }
 
@@ -206,6 +210,30 @@ export class TokenStore {
     return kept === undefined
       ? undefined
       : { name, canvases: [...kept.canvases], access: kept.access, expires: kept.expires };
+  }
+
+  /**
+   * What every live token was made for, by name (B24 C1: the outside orchestrators a canvas's
+   * grants are offered to): never a hash or a value.
+   */
+  live(): KeptGrant[] {
+    const now = this.#now();
+    return [...this.#tokens.values()]
+      .filter((token) => now < token.expires)
+      .map(({ name, canvases, access, expires }) => ({
+        name,
+        canvases: [...canvases],
+        access,
+        expires,
+      }));
+  }
+
+  /** Hears each token made, renewed or revoked, once that is written down. */
+  subscribe(listener: () => void): () => void {
+    this.#changes.add(listener);
+    return () => {
+      this.#changes.delete(listener);
+    };
   }
 
   /**
@@ -270,6 +298,16 @@ export class TokenStore {
   /** Resolves once everything changed so far is written: when last used, too. */
   async flush(): Promise<void> {
     await this.#write();
+  }
+
+  #changed(): void {
+    for (const listener of this.#changes) {
+      try {
+        listener();
+      } catch (error) {
+        console.error('Could not tell of a token’s change:', error);
+      }
+    }
   }
 
   #revoke(hash: string): void {

@@ -45,7 +45,7 @@ import type { Answer, ReplyHandler, ReplyResult } from './replies';
 export interface RunRepliesDeps {
   engines: Pick<Engines, 'canvas'>;
   /** The core's prompt owner (B13 C3), whose prompts the prompt handler answers through it. */
-  prompts?: Pick<PromptOwner, 'current' | 'settled' | 'fits' | 'answer'>;
+  prompts?: Pick<PromptOwner, 'current' | 'settled' | 'fits' | 'answer' | 'refusal'>;
   /** The locale holds are worded in. */
   locale?: string;
 }
@@ -268,7 +268,8 @@ export function runReplies({ engines, prompts: owner, locale }: RunRepliesDeps):
     prefixes: ['prompt'],
     current: (canvas, to) => owner?.current(canvas, to),
     gone: (canvas, to, reader) => owner?.settled(canvas, to, reader),
-    fits: (item, answer) => owner?.fits(item.canvas, item.id, answer),
+    fits: (item, answer, by) => owner?.fits(item.canvas, item.id, answer, by),
+    permits: (canvas, item, answer, by) => owner?.refusal(canvas, item.id, by, answer),
     act: (canvas, item, answer, ctx) => {
       if (owner === undefined) throw new OpFailure('not-found', `${item.id} isn’t open any more.`);
       return owner.answer(canvas, item.id, answer, ctx);

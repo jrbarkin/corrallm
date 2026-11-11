@@ -364,6 +364,15 @@ describe('main’s files', () => {
     ]);
   });
 
+  it('keep test-only modules (test-*.ts) out of production main code', () => {
+    // test-seed-profile.ts is itself test-only (the headless smoke's seeding bundle); a
+    // production file importing any test-* module would pull a TrustedPath minter in.
+    const importers = mainFiles().filter((file) =>
+      importsOf(file).some((specifier) => /(^|\/)test-[^/]*$/.test(specifier)),
+    );
+    expect(importers).toEqual([]);
+  });
+
   it('mint trusted paths only from the host’s dialog answers in the core, the stores reading back what they wrote, and verified workspace checkouts', () => {
     const minting = mainFiles().filter((file) => read(file).includes('mintTrustedPath('));
     expect(minting.sort()).toEqual([

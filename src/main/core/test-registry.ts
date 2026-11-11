@@ -442,4 +442,5 @@ export const NO_DESKTOP: HostServices = {
   askOpenLink: () => Promise.resolve({ open: false, always: false }),
   openExternal: () => Promise.resolve(null),
   showFile: () => Promise.resolve(null),
+  launcher: () => null,
 };

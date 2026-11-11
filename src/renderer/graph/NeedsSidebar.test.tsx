@@ -252,6 +252,34 @@ it('shows one current review from pushed state and Keep alone for an invalid fil
   expect(within(sidebar).getByRole('button', { name: 'Keep' })).toBeTruthy();
 });
 
+it('says who may answer a routed prompt and until when', async () => {
+  const until = Date.UTC(2030, 0, 1, 12, 30);
+  const item: NeedsItem = {
+    ...proposal,
+    id: 'prompt/builder/1/11111111-1111-4111-8111-111111111111',
+    agent: 'builder',
+    kind: 'prompt',
+    title: 'Run it?',
+    by: ['you', 'agent:boss', 'outside:orchestrator'],
+    until,
+    routed: { to: 'agent:boss', until },
+    choices: [],
+  };
+  await setup(
+    [item],
+    [
+      { id: 'builder', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Builder' } },
+      { id: 'boss', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Boss' } },
+    ],
+  );
+  const line = await screen.findByText(/^Lead may answer until /);
+  expect(line.textContent).toContain('Boss');
+  expect(line.textContent).toContain(
+    new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  );
+  expect(screen.getByText(/orchestrator may also answer/)).toBeTruthy();
+});
+
 it('shows a stalled session with an Interrupt choice answered through one reply', async () => {
   const item: NeedsItem = {
     ...proposal,

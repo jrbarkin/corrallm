@@ -322,6 +322,8 @@ it('dumps a schema-2 database without migrating it: no workspace records, conver
     });
     expect(Object.keys(line ?? {})).not.toContain('worktrees');
     expect(Object.keys(line ?? {})).not.toContain('repository');
+    expect(Object.keys(line ?? {})).not.toContain('leads');
+    expect(Object.keys(line ?? {})).not.toContain('outsideGrants');
     expect(await readFile(file)).toEqual(before);
     const schema = connect(file, { readOnly: true });
     try {
@@ -476,6 +478,33 @@ it('dumps a record’s association decoded, as other JSON columns are (B19 C3)',
   expect(lines.map((line) => JSON.parse(line) as unknown).at(-1)).toMatchObject({
     type: 'message',
     data: { id: record.id, about },
+  });
+});
+
+it('dumps each canvas’s leads and outside grants, their JSON decoded (B24 C1)', async () => {
+  const grants = { v: 1, questions: true, plans: false, approvals: true };
+  const fingerprint = { v: 1, role: 'none', adapter: 'codex', connection: 'codex.app-server' };
+  await store.write(() => {
+    store
+      .prepare(
+        `INSERT INTO lead (canvas_id, agent_id, grants, fingerprint, held, changed_at)
+         VALUES (?, 'a', ?, ?, 'role', 5)`,
+      )
+      .run(canvas, JSON.stringify(grants), JSON.stringify(fingerprint));
+    store
+      .prepare(`INSERT INTO outside_grant (canvas_id, name, changed_at) VALUES (?, ?, 6)`)
+      .run(canvas, 'orchestrator');
+  });
+  const lines: string[] = [];
+  await dump(store.file, (line) => {
+    lines.push(line);
+    return Promise.resolve();
+  });
+  expect(lines.map((line) => JSON.parse(line) as unknown)[0]).toMatchObject({
+    type: 'canvas',
+    data: { id: canvas },
+    leads: [{ canvas_id: canvas, agent_id: 'a', grants, fingerprint, held: 'role', changed_at: 5 }],
+    outsideGrants: [{ canvas_id: canvas, name: 'orchestrator', changed_at: 6 }],
   });
 });
 

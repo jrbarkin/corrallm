@@ -145,3 +145,37 @@ it('cleans up a successful publication when stopped during it, without deliverin
   expect(existsSync(path.join(profile, 'api.json'))).toBe(false);
   expect(test.release).toHaveBeenCalledOnce();
 });
+
+it('refuses --new-token inside a corrallm agent: nothing locked, started or made', async () => {
+  const test = fixture();
+  let said = '';
+  const io: ServeIO = {
+    env: { CORRALLM_AGENT_PATHS: '{}', CORRALLM_AGENT_SESSION: '1' },
+    app: { name: 'corrallm', version: '1.0.0' },
+    stopped: new Promise(() => undefined),
+    stderr: {
+      isTTY: true,
+      write: (chunk: string | Uint8Array) => {
+        said += chunk.toString();
+        return true;
+      },
+    },
+  };
+  const code = await serveCommand(
+    {
+      command: 'serve',
+      canvases: ['team.corral'],
+      profile,
+      port: 0,
+      newToken: { name: 'orchestrator', hours: 1, access: 'write' },
+    },
+    io,
+  );
+  expect(code).toBe(1);
+  expect(said).toBe(
+    'corrallm serve: --new-token doesn’t run inside a corrallm agent: make tokens yourself, in your own terminal.\n',
+  );
+  expect(mocks.lockProfile).not.toHaveBeenCalled();
+  expect(test.core.deliver).not.toHaveBeenCalled();
+  expect(existsSync(path.join(profile, 'tokens.json'))).toBe(false);
+});

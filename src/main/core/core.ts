@@ -48,6 +48,7 @@ import { upgradeIdentities } from './workspaces/discovery';
 import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
+import { CommandLink } from './command-link';
 import { ADAPTERS, CATALOG, isConversationId } from '../sessions/adapters';
 import type { Conversations, OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
@@ -111,12 +112,16 @@ import { answerTokenRequest } from './token-requests';
 import { privateTokenProfile } from './token-profile';
 import type { TokenAnswer, TokenRequest } from './token-socket';
 import { TokenStore } from './tokens';
+import { LeadStore } from './leads';
+import { leadsListing } from './ops/leads';
 import { RuntimeSource } from './runtime-topics';
 import { Topics } from './topics';
 import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import { StalledTurns } from './stalled';
+import { managesQuestions as managesQuestionsIn } from './ancestry';
+import { LeadCopies } from './delivery/lead-copies';
 import { PromptOwner } from './prompts/owner';
 import type { WatchdogClock, WatchdogNetwork } from './stalled';
 import type { ChildSystem } from './children';
@@ -144,6 +149,8 @@ export interface CoreConfig {
   store?: StoreDeps;
   /** The profile folder, where the core keeps its stores. */
   profile: string;
+  /** For tests: the home folder the `corrallm` command is linked under, instead of the user's. */
+  home?: string;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
   /**
@@ -156,8 +163,9 @@ export interface CoreConfig {
   /** The locale what the core says tells times of day in (the host's): Node's own, when none. */
   locale?: string;
   /**
-   * Which agents are leads now. None is until leads are kept on this machine (B24); tests say
-   * which, to call as a lead.
+   * For tests: which agents are leads now, instead of the leads kept on this machine (B24 C1:
+   * leads.ts, which agent.setLead writes), to call as a lead without making one. Production
+   * composes none.
    */
   leads?: (canvas: CanvasId, agent: string) => boolean;
   /**
@@ -509,6 +517,19 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     provisioner,
     make: (tree) => workspaceDirectories.provision(tree.canvas, tree.owner),
   });
+  // Who leads (B24 C1): kept in the core's database, read once now, never from a canvas file; its
+  // rows go with their agents and are held as their agents change, at every commit.
+  const leadStore = new LeadStore({
+    store,
+    memory,
+    catalog: CATALOG,
+    document: (canvas) => documents.loaded(canvas)?.document,
+    changed: (canvas, lead) => {
+      leadsChanged(canvas, lead);
+    },
+  });
+  leadStore.load();
+  if (leadStore.warning !== undefined) console.error(leadStore.warning);
   const documents: Documents = new Documents({
     store,
     memory,
@@ -516,6 +537,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
 
     reviews,
     workspaces: planner,
+    leads: leadStore,
     baselineChanged: (canvas) => {
       void states.refresh(canvas).catch((error: unknown) => {
         console.error('Could not publish the canvas’s saved baseline:', error);
@@ -666,6 +688,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const conversations = { ...createConversations(), ...config.sessions?.conversations };
   // The core's prompt owner (B13 C3): what each canvas's sessions raise, in its live index, and
   // the one answer each takes, on the session that raised it.
+  const leadCopies = new LeadCopies({
+    messages: (canvas) => engines.canvas(canvas)?.messages,
+    schedule: (canvas) => {
+      engines.canvas(canvas)?.delivery.schedule();
+    },
+    routeOf: (canvas, need) => prompts.routeOf(canvas, need),
+    unreachable: (canvas, need, lead) => {
+      prompts.unreachable(canvas, need, lead);
+    },
+  });
   const prompts: PromptOwner = new PromptOwner({
     catalog: CATALOG,
     canvas: (canvas) => {
@@ -675,6 +707,20 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         : { messages: open.messages, nodes: open.document.nodes };
     },
     generationOf: (canvas, agent) => sessions.generationOf(canvas, agent),
+    // B24 C5: a prompt's route moving, or ending, is told to its lead by a host-built copy or notice.
+    routed: (change) => {
+      leadCopies.routed(change);
+    },
+    wake: (wake) => {
+      leadCopies.wake(wake);
+    },
+    cutOff: (cut) => {
+      leadCopies.cutOff(cut);
+    },
+    // B24 C3: who leads now and what it may answer, and the outside parties you let answer
+    // approvals, read on every use.
+    leads: { grantsOf: (canvas, agent) => leadStore.grantsOf(canvas, agent) },
+    grantees: (canvas) => leadStore.granted(canvas),
     // B13 C9: what it holds is published at once, whether or not a window watches: Needs, the
     // agent's summary and its count, and what delivery holds for it.
     changed: (canvas, agent) => {
@@ -914,6 +960,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await host.openExternal(url);
     },
   });
+  // The corrallm command's link (B30 C2): the launcher is the host's, given by the packaged app.
+  const command = new CommandLink({
+    home: config.home ?? homedir(),
+    searchPath: async () => (await environment()).PATH ?? '',
+    launcher: () => host.launcher(),
+    // The settings topic carries the link's state, for you alone.
+    changed: () => {
+      topics.changed('settings', 'you');
+    },
+  });
   const reveal = new FileRevealer({
     // Reveal the picked root, with the resolver excluding every unverified/foreign workspace.
     folderOf: (canvas) => directories.projectRoot(canvas),
@@ -924,7 +980,27 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   const canvasFiles = new CanvasFiles({ host, memory, documents });
   const terminals = new TerminalEvents(windows);
-  const isLead = config.leads ?? (() => false);
+  // Whether an agent leads now, read on every call (B24 C1): as the lead store keeps it, unless a
+  // test says which.
+  const isLead =
+    config.leads ?? ((canvas: CanvasId, agent: string) => leadStore.isLead(canvas, agent));
+  /**
+   * Who leads on a canvas, or may answer there, changed (B24 C1): its topic and Needs read again,
+   * and what its runtime topics' copies may see checked again. C2 routes its prompts again here.
+   */
+  const leadsChanged = (canvas: CanvasId, lead?: string) => {
+    // Its prompts are routed again, and the lead you made, confirmed or removed starts its
+    // refusals count again (§4.4: "confirm or change that lead"): no other lead's, and none for a
+    // grant to an outside orchestrator or a hold.
+    if (lead !== undefined) prompts.forgive(canvas, lead);
+    prompts.reroute(canvas);
+    // B24 C4: a manager's rows leave a lead that lost the authority to take them.
+    engines.canvas(canvas)?.delivery.asks.readdress();
+    topics.changed(`leads:${canvas}`, 'corrallm');
+    topics.changed(`needs:${canvas}`, 'corrallm');
+    engines.needsChanged(canvas);
+    runtime.documentChanged(canvas);
+  };
   // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the
   // list of them, which changes as canvas memory, the journal and the windows do.
   const states = new CanvasStates({
@@ -954,14 +1030,18 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         all: seesAll(caller, reach),
       };
     },
-    // B9a §7: worktrees and Needs kept at every change, a window watching or not.
+    // B9a §7: worktrees and Needs kept at every change, a window watching or not; and B24's
+    // leads, yours alone.
     canonical: {
-      of: (topic) => topic.startsWith('worktrees:') || topic.startsWith('needs:'),
+      of: (topic) =>
+        topic.startsWith('worktrees:') || topic.startsWith('needs:') || topic.startsWith('leads:'),
       initial: (topic) => (topic.startsWith('needs:') ? { items: [] } : undefined),
       read: async (topic) => {
         const canvas = canvasOfTopic(topic);
         if (canvas === undefined || !states.keeps(canvas)) return undefined;
         if (topic.startsWith('needs:')) return { items: waitingFor(canvas) };
+        if (topic.startsWith('leads:'))
+          return leadsListing({ leads: leadStore, documents, states, tokens }, canvas);
         return worktreeListing(canvas, { kind: 'you' });
       },
     },
@@ -986,6 +1066,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // Each commit to a canvas's document: its agents, how they run, who reaches what.
   documents.subscribe(({ canvas, by }) => {
     workspaceDirectories.changed(canvas);
+    // A commit may change who is nested in whom (B24 R10): routed prompts are checked again.
+    prompts.reroute(canvas);
+    engines.canvas(canvas)?.delivery.asks.readdress();
     topics.changed(`needs:${canvas}`, by);
     engines.needsChanged(canvas);
     runtime.documentChanged(canvas);
@@ -1008,6 +1091,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   usage.subscribe((_state, by) => {
     topics.changed('usage', by);
+  });
+  // A token made, renewed or revoked: which outside orchestrators a shown or running canvas's
+  // leads topic offers grants to, and whether each has a live token (B24 C1).
+  tokens.subscribe(() => {
+    for (const canvas of new Set([...engines.opened(), ...windows.canvases()]))
+      topics.changed(`leads:${canvas}`, 'you');
   });
   /** Each change of `notifying`: a re-read begun before the latest change applies nothing. */
   let preference = 0;
@@ -1115,7 +1204,23 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
     },
   });
+  // B24 C4: whether a lead may take its team's questions now: it leads, holds the questions
+  // grant, and its connection has an API route to answer them through.
+  const managesQuestions = (canvas: CanvasId, lead: string): boolean =>
+    managesQuestionsIn(
+      CATALOG,
+      leadStore.grantsOf(canvas, lead),
+      documents.loaded(canvas)?.document.nodes,
+      lead,
+    );
   const engines: Engines = new Engines({
+    manages: (canvas, lead) => managesQuestions(canvas, lead),
+    leadCopy: {
+      live: (message) => leadCopies.live(message),
+      refused: (message) => {
+        leadCopies.refused(message);
+      },
+    },
     processes: children,
     engineCatalog: engineCatalog(CATALOG),
     sessions,
@@ -1445,6 +1550,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     held: (canvas) => heldBy(engines.canvas(canvas)?.engine.run.snapshot()),
     created: (party, canvas, removing) => documents.created(party, canvas, removing),
     maxCreated: config.maxCreatedAgents ?? (() => MAX_CREATED_AGENTS),
+    isLead,
   });
   const dispatcher = createDispatcher(
     {
@@ -1492,6 +1598,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           directories,
           files,
           settings,
+          command,
           api: () => api,
           links,
           notifications: {
@@ -1518,6 +1625,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           reviews,
           needOf,
           isLead,
+          leads: leadStore,
           host,
           tokens,
           listed: (canvas, agent) => authority.hasListed(canvas, agent),
@@ -1535,7 +1643,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       },
       rules: {
         ...sessionRules(control),
-        ...ruleChecks(engines, CATALOG, needOf),
+        ...ruleChecks(engines, CATALOG, needOf, (canvas, to, by, answer) =>
+          prompts.refusal(canvas, to, by, answer),
+        ),
         discard: discardChecks({
           lifecycle,
           proposals,

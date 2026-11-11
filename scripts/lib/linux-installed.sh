@@ -3,6 +3,11 @@
 source /checks/linux-steps.sh
 distro=${1:?distribution required}
 arch=${2:?architecture required}
+semver=${3:?version required}
+deb_version=${4:?deb version required}
+rpm_version=${5:?rpm version required}
+source /checks/linux-versions.sh
+source /checks/notices-check.sh
 
 linked_libraries() {
   local file listing
@@ -14,8 +19,8 @@ linked_libraries() {
 }
 
 case "$distro" in
-  debian:bookworm)
-    step 'Refresh Debian package metadata' apt-get update
+  debian:bookworm|ubuntu:24.04)
+    step 'Refresh package metadata' apt-get update
     step 'Install deb (declared dependencies only)' \
       apt-get install --yes --no-install-recommends /checks/corrallm.deb
     step 'Check deb identity and architecture' dpkg-query -W -f='${Package} ${Architecture}\n' corrallm
@@ -41,6 +46,11 @@ case "$distro" in
   *) die "Unknown distribution: $distro" ;;
 esac
 
+step 'Check the shipped notices' check_shipped_notices /usr/lib/corrallm/resources
+step 'Check the hicolor icon is installed' test -s /usr/share/icons/hicolor/512x512/apps/corrallm.png
+step "Check the installed version is the release's ($semver)" \
+  check_installed_version "$distro" "$deb_version" "$rpm_version"
+step 'Check a prerelease sorts before its release' check_prerelease_tools "$distro"
 step 'Check launcher symlink' test "$(readlink -f /usr/bin/corrallm)" = /usr/lib/corrallm/resources/bin/corrallm
 step 'Validate desktop entry' desktop-file-validate /usr/share/applications/corrallm.desktop
 step 'Check desktop opens GUI' grep -Fx 'Exec=/usr/lib/corrallm/corrallm %U' /usr/share/applications/corrallm.desktop
@@ -50,7 +60,7 @@ if command -v node; then die 'Runtime image unexpectedly contains Node on PATH';
 step 'Create non-root test user' useradd --create-home tester
 step 'Test installed app and command as non-root' runuser -u tester -- \
   env HOME=/home/tester CORRALLM_NO_UPDATE_CHECK=1 \
-  bash /checks/linux-smoke.sh /usr/lib/corrallm/corrallm /usr/bin/corrallm
+  bash /checks/linux-smoke.sh /usr/lib/corrallm/corrallm /usr/bin/corrallm /checks/seed-profile.cjs
 
 case "$distro" in
   debian:bookworm) step 'Uninstall deb' apt-get purge --yes corrallm ;;

@@ -93,6 +93,17 @@ export interface AdapterDescriptor {
    */
   registerMcpHelper?: string;
   /**
+   * Where its registration goes, relative to the orchestrator's folder, when `registerMcp` (and
+   * `registerMcpHelper`) is text to add to a file there rather than a command to run: corrallm
+   * prints it and never writes it. None: each is a command.
+   */
+  registerMcpIn?: string;
+  /**
+   * Its client runs the headers helper again after a 401 (and at a reconnect), so a renewal into
+   * the token's file needs no restart. None: it must start again after a renewal.
+   */
+  registerMcpRenews?: true;
+  /**
    * The consents its connections ask you for (B22a C3), each by the key it is kept by: words for
    * the settings page alone, granting nothing. None where it asks for none.
    */

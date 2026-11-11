@@ -133,6 +133,34 @@ describe('the catalog', () => {
     expect(OPS['catalog.get'].output.safeParse(CATALOG).success).toBe(true);
   });
 
+  it('bounds where a registration goes and how long its templates are (B30 C4)', () => {
+    const accepts = (change: Partial<AdapterDescriptor>) =>
+      OPS['catalog.get'].output.safeParse({
+        ...CATALOG,
+        adapters: [{ ...CATALOG.adapters[0], ...change }],
+      }).success;
+    expect(accepts({ registerMcpIn: '.codex/config.toml' })).toBe(true);
+    expect(accepts({ registerMcpIn: 'config.toml' })).toBe(true);
+    for (const bad of [
+      '../config.toml',
+      '.codex/../config.toml',
+      '-config.toml',
+      '.codex/-x',
+      '/etc/config.toml',
+      '.codex//config.toml',
+      '.',
+      '..',
+      '',
+      'a b',
+      'a'.repeat(65),
+    ]) {
+      expect(accepts({ registerMcpIn: bad }), bad).toBe(false);
+    }
+    expect(accepts({ registerMcp: 'x'.repeat(2048) })).toBe(true);
+    expect(accepts({ registerMcp: 'x'.repeat(2049) })).toBe(false);
+    expect(accepts({ registerMcpHelper: 'x'.repeat(2049) })).toBe(false);
+  });
+
   it('asks, in a test build, each consent on the connections that declare it, through the core’s owner', async () => {
     const asked: string[] = [];
     const connectors = createConnectors({

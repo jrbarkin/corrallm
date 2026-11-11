@@ -10,8 +10,8 @@ import type { Connector, SessionHost } from '../sessions/connector';
 import { fakeConnector } from '../sessions/test-fake';
 import type { OutsideCaller } from './caller';
 import { createCore } from './core';
-import type { Core } from './core';
-import { keepCanvases, readOnDisk } from './store/test-store';
+import type { Core, CoreConfig } from './core';
+import { keepCanvases, readOnDisk, writeOnDisk } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { SYSTEM_DEPS } from './store/store';
 import type { StoreDeps } from './store/store';
@@ -118,6 +118,7 @@ async function start(
   codex: Connector<SessionMode>,
   claude: Connector<SessionMode>,
   store?: StoreDeps,
+  directoryResolver: NonNullable<CoreConfig['directoryResolver']> = legacyDirectories,
 ): Promise<Core> {
   const core = await createCore(
     {
@@ -125,7 +126,7 @@ async function start(
       app: { name: 'corrallm', version: '9.8.7' },
       check: true,
       distribution: 'local',
-      directoryResolver: legacyDirectories,
+      directoryResolver,
       ...(store === undefined ? {} : { store }),
       sessions: {
         connectors: { 'codex.app-server': codex, 'claude-code.terminal': claude },
@@ -161,6 +162,71 @@ const LIMIT = (resetsAt: number): TurnResult => ({
 });
 
 describe('the fallback chain through the core', () => {
+  it('starts the fallback target fresh in a workspace installed while preparing the switch', async () => {
+    const remembered = '0b3a7d52-6a0c-4f39-9c4e-2f8f0c1d9e32';
+    writeOnDisk(
+      profile,
+      `INSERT INTO conversation
+       (canvas_id, adapter, agent_id, workspace_key, native_id, role_fingerprint)
+       VALUES ('${CANVAS}', 'claude-code', 'worker', 'replacement', '${remembered}', NULL)`,
+    );
+    let workspace = 'original';
+    let moveOnNextLookup = false;
+    const listeners = new Set<() => void>();
+    const directoryResolver = (projects: Parameters<typeof legacyDirectories>[0]) => {
+      const base = legacyDirectories(projects);
+      return {
+        workingDirectory: async (...args: Parameters<typeof base.workingDirectory>) => {
+          const directory = await base.workingDirectory(...args);
+          const answer =
+            directory.state === 'ready'
+              ? { ...directory, workspace, generation: workspace === 'original' ? 1 : 2 }
+              : directory;
+          // The resolver answered for the prior binding; its change notification arrives before
+          // fresh's await of that answer completes.
+          if (moveOnNextLookup) {
+            moveOnNextLookup = false;
+            workspace = 'replacement';
+            for (const listener of listeners) listener();
+          }
+          return answer;
+        },
+        projectRoot: base.projectRoot.bind(base),
+        onAvailability: (canvas: CanvasId, listener: () => void) => {
+          listeners.add(listener);
+          const stop = base.onAvailability(canvas, listener);
+          return () => {
+            listeners.delete(listener);
+            stop();
+          };
+        },
+      };
+    };
+    const codex = heldConnector('codex');
+    const claude = heldConnector('claude-code');
+    const changing: Connector<SessionMode> = {
+      start: async (...args) => {
+        const session = await codex.connector.start(...args);
+        const close = session.close.bind(session);
+        session.close = async () => {
+          await close();
+          if (workspace === 'original') moveOnNextLookup = true;
+        };
+        return session;
+      },
+    };
+    const core = await start(changing, claude.connector, undefined, directoryResolver);
+    const engine = await core.engines.open(CANVAS);
+    engine.run.start();
+    await codex.received(1);
+    codex.end(LIMIT(Date.now() + 60 * 60_000));
+    await claude.received(1);
+    expect(claude.fake.started).toHaveLength(1);
+    expect(claude.fake.started[0]?.resume).toBeNull();
+    expect(engine.run.snapshot().agents.worker?.attempts?.hello).toHaveLength(2);
+    expect(revisions()).toEqual([{ op: 'fallback.switch', by_party: 'corrallm' }]);
+  });
+
   it('waits for the continuation send while its fallback write outlasts a polling interval', async () => {
     const gate = Promise.withResolvers<undefined>();
     const writing = Promise.withResolvers<undefined>();

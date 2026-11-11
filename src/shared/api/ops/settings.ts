@@ -4,6 +4,7 @@ import { ID_PATTERN } from '../../adapter';
 import { define } from '../define';
 import type { OpDef } from '../define';
 import { MAX_LINK_LENGTH, MAX_REMEMBERED_SITES } from '../limits';
+import { CommandStatus } from './app';
 import type { OpName } from '../surface';
 
 const Port = z.int().min(1).max(65_535);
@@ -78,7 +79,7 @@ export const settingsOps = {
     summary:
       'The agent corrallm adds when the user adds one (null: it asks each time; an id this build lacks counts as none), the consents the user has given for good, by adapter and key, and whether corrallm’s MCP server listens, and where.',
     input: z.strictObject({}),
-    // `notifications` and `links` are yours alone (`varies`): absent from every token's read.
+    // `notifications`, `links` and `command` are yours alone (`varies`): absent from every token's read.
     output: z.strictObject({
       defaultAdapter: CatalogId.nullable(),
       consents: z.record(
@@ -88,6 +89,7 @@ export const settingsOps = {
       api: ApiStatus,
       notifications: NotificationsView.optional(),
       links: LinksView.optional(),
+      command: CommandStatus.optional(),
     }),
   }),
   // B12 C2, B22a C1: yours alone (the consent deviation, Core Server D8). One intent a call, each

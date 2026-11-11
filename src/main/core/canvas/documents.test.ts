@@ -577,6 +577,26 @@ describe('a canvas’s document', () => {
     expect(documents.edited(canvas)).toBe(false);
   });
 
+  it('lets go of the live document of a canvas that canvas memory forgot as the oldest', async () => {
+    // Room for one canvas kept with a file: keeping the second forgets the first (never an
+    // unsaved one, which `spare` is asked for).
+    await memory.flush();
+    memory = new CanvasMemory(store, 1, (canvas) => documents.unsaved(canvas));
+    documents = documentsOf();
+    const old = newCanvasId();
+    await filed(canvasOf(old));
+    await documents.load(old);
+    expect(documents.loaded(old)).toBeDefined();
+    const recent = newCanvasId();
+    await filed(canvasOf(recent));
+    await memory.flush();
+    expect(memory.keeps(old)).toBe(false);
+    await expect.poll(() => documents.loaded(old)).toBeUndefined();
+    expect(documents.loaded(recent)).toBeUndefined();
+    await documents.load(recent);
+    expect(documents.loaded(recent)).toBeDefined();
+  });
+
   it('keeps nothing of a draft until it holds something', async () => {
     const draft = newCanvasId();
     expect((await documents.load(draft)).document).toEqual({

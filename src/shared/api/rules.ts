@@ -91,6 +91,13 @@ export const RULES = {
     sentence:
       'Only you change the adapter, the connection, the fallback chain or the handoff settings of an agent that exists.',
   },
+  // R10: whatever op builds a lead's change, it reaches only the lead's team and what it adds
+  // inside itself. Checked on every commit of a lead's.
+  team: {
+    kind: 'change',
+    sentence:
+      'A lead changes only its own team: the agents nested inside it, and what it adds inside itself.',
+  },
   // R11: a party's cap counts the live agents it created, whichever token it called with.
   'new-agent': {
     kind: 'change',

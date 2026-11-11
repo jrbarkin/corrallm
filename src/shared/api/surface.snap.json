@@ -3,6 +3,7 @@
     "api.topics.subscribe",
     "api.topics.unsubscribe",
     "api.app.info",
+    "api.app.command",
     "api.catalog.get",
     "api.catalog.installed",
     "api.templates.list",
@@ -41,6 +42,9 @@
     "api.agent.setConnection",
     "api.agent.setFallback",
     "api.agent.setHandoff",
+    "api.agent.setLead",
+    "api.outside.setGrant",
+    "api.leads.get",
     "api.agent.setSettings",
     "api.agent.setRole",
     "api.queue.add",
@@ -288,10 +292,14 @@
     "session.continueIn": "permissions",
     "session.viewCommand": "view",
     "settings.set": "consent",
+    "app.command": "consent",
     "agent.setType": "permissions",
     "agent.setConnection": "permissions",
     "agent.setFallback": "permissions",
     "agent.setHandoff": "permissions",
+    "agent.setLead": "permissions",
+    "outside.setGrant": "permissions",
+    "leads.get": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -312,20 +320,24 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "8c5be84f0a1a163a",
-      "output": "d8d72abcfd39241a"
+      "input": "80cfdb6b5191e399",
+      "output": "c3ce292383a83d4b"
     },
     "topics.unsubscribe": {
-      "input": "8c5be84f0a1a163a",
+      "input": "80cfdb6b5191e399",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
       "input": "e5fa5cc18e054cdd",
       "output": "fb1ca6c18e59cdb2"
     },
+    "app.command": {
+      "input": "d787e15172d5fafa",
+      "output": "f7ea657b1a2c0232"
+    },
     "catalog.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "d28bfe74cb85a517"
+      "output": "cf133a1264e97481"
     },
     "catalog.installed": {
       "input": "e5fa5cc18e054cdd",
@@ -475,6 +487,18 @@
       "input": "9ec5f7819f183ec2",
       "output": "647bbd6cc7b4f077"
     },
+    "agent.setLead": {
+      "input": "f1fab7178a335132",
+      "output": "647bbd6cc7b4f077"
+    },
+    "outside.setGrant": {
+      "input": "32e7fb28167a51b8",
+      "output": "647bbd6cc7b4f077"
+    },
+    "leads.get": {
+      "input": "41356bc15da6df1b",
+      "output": "ffe492600e4787cf"
+    },
     "queue.add": {
       "input": "6c0526a84b580c24",
       "output": "ebd0120825103788"
@@ -497,15 +521,15 @@
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "6d7e083505dd4133"
+      "output": "1579aa06b8fb35d0"
     },
     "needs": {
       "input": "41356bc15da6df1b",
-      "output": "bd2b51346028e19a"
+      "output": "43fe76931ec00d4d"
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
-      "output": "6ff43b8dfeb01fc8"
+      "output": "a78c15fca8fe5a37"
     },
     "message": {
       "input": "1bc3cefb59c8f144",
@@ -513,11 +537,11 @@
     },
     "wait": {
       "input": "d429567b08fb223f",
-      "output": "276ef50894b3f798"
+      "output": "eaf2b3b3a991cffd"
     },
     "reply": {
       "input": "c71a16cffbc733d2",
-      "output": "40d5a7fb6e23fbbd"
+      "output": "5c2e8d82befc1b01"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",
@@ -613,7 +637,7 @@
     },
     "settings.get": {
       "input": "e5fa5cc18e054cdd",
-      "output": "dfeb369fa9284423"
+      "output": "893ccf767cd72a55"
     },
     "settings.set": {
       "input": "6cbffd087130017f",

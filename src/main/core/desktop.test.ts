@@ -31,6 +31,7 @@ function desktop() {
       .mockResolvedValue({ open: false, always: false }),
     openExternal: vi.fn<HostServices['openExternal']>().mockResolvedValue(null),
     showFile: vi.fn<HostServices['showFile']>().mockResolvedValue(null),
+    launcher: () => null,
     pickFolder: vi.fn<HostServices['pickFolder']>().mockResolvedValue(null),
   };
 }

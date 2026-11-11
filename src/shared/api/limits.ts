@@ -199,3 +199,12 @@ export const MAX_CONSENTS = 16;
 export const MAX_CONSENT_TITLE = 120;
 /** The longest description of a declared consent, in characters. */
 export const MAX_CONSENT_DESCRIPTION = 2048;
+
+/**
+ * B24 C7: consecutive rejections by one lead of one worker's prompts after which that worker's
+ * prompts come to you alone, until you answer one or confirm the lead again. Counted in memory.
+ */
+export const LEAD_DENIALS = 3;
+
+/** B24 C7: how long a lead holds a routed prompt before corrallm hands it back for the lead. */
+export const LEAD_ANSWER_SECONDS = 600;

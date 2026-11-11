@@ -13,8 +13,11 @@ import type { CoreSide, HostSide } from '../protocol';
 
 export function appHost(
   link: Pick<CoreLink<CoreSide, HostSide>, 'request' | 'emit'>,
+  launcher: string | null = null,
 ): HostServices {
   return {
+    // Given once at init, by main: the packaged app's own launcher, never anything a caller sends.
+    launcher: () => launcher,
     presence: (snapshot) => {
       link.emit('presence', Presence.parse(snapshot));
     },

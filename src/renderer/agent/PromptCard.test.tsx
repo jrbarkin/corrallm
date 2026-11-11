@@ -408,6 +408,15 @@ it.each<{ outcome: LiveOutcome; words: string }>([
     outcome: { type: 'choice', hint: 'reject_always', by: 'you' },
     words: 'Always declined by you.',
   },
+  // B24 X3: a lead's decision, and an outside orchestrator's, named by what they are.
+  {
+    outcome: { type: 'choice', hint: 'allow_once', by: 'agent:boss' },
+    words: 'Allowed once by Lead.',
+  },
+  {
+    outcome: { type: 'choice', hint: 'reject_once', by: 'outside:planner' },
+    words: 'Declined by planner.',
+  },
   { outcome: { type: 'answers', secret: true, by: 'you' }, words: 'Answered (secret) by you.' },
   { outcome: { type: 'form', action: 'decline', by: 'you' }, words: 'Declined by you.' },
   { outcome: { type: 'form', action: 'cancel', by: 'you' }, words: 'Cancelled by you.' },

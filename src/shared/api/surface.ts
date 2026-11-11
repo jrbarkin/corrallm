@@ -71,7 +71,8 @@ export type TopicKind =
   | 'session'
   | 'messages'
   | 'activity'
-  | 'worktrees';
+  | 'worktrees'
+  | 'leads';
 
 export interface Surface {
   /** The op's audience, checked on every call: the GUI's if `you` is in it, MCP's for the rest. */
@@ -145,6 +146,8 @@ export const SURFACE = {
   'topics.subscribe': { access: Y, kind: 'command', scope: 'none' },
   'topics.unsubscribe': { access: Y, kind: 'command', scope: 'none' },
   'app.info': { access: A, kind: 'read', scope: 'none' },
+  // B30 C2: linking the corrallm command onto your PATH is yours alone (the consent deviation).
+  'app.command': { access: Y, kind: 'command', scope: 'none' },
   'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
   'templates.list': { access: R, kind: 'read', scope: 'none' },
@@ -155,7 +158,7 @@ export const SURFACE = {
     kind: 'read',
     scope: 'none',
     reads: 'settings',
-    varies: ['notifications', 'links'],
+    varies: ['notifications', 'links', 'command'],
   },
   // B12 C2, B22a C1: your settings are yours alone to set (the consent deviation, Core Server D8).
   'settings.set': { access: Y, kind: 'command', scope: 'none' },
@@ -249,12 +252,12 @@ export const SURFACE = {
     rules: ['new-agent'],
   },
   'canvas.setArrange': { access: W, kind: 'doc', scope: 'canvas' },
-  'canvas.addAgent': { access: L, kind: 'doc', scope: 'canvas', rules: ['new-agent'] },
+  'canvas.addAgent': { access: L, kind: 'doc', scope: 'canvas', rules: ['team', 'new-agent'] },
   'canvas.spawnAgent': {
     access: L,
     kind: 'doc',
     scope: 'canvas',
-    rules: ['new-agent'],
+    rules: ['team', 'new-agent'],
     self: 'allowed',
   },
   // A token's delete of an agent comes to you as a proposal (R4), unless another rule refuses it;
@@ -305,6 +308,7 @@ export const SURFACE = {
       'mode-permits',
       'self',
       'human-gate',
+      'team',
       'new-agent',
       'role',
       'links',
@@ -344,6 +348,13 @@ export const SURFACE = {
     scope: 'canvas',
     rules: ['connection'],
   },
+  // B24 C1 (Design §3): who leads, and what each may answer for its team, are yours alone (D9),
+  // kept on this machine and never in a canvas file; so are the outside orchestrators you let
+  // answer approvals (Q3), and what is said of them. No token, file, template or command line
+  // makes a lead or widens a grant.
+  'agent.setLead': { access: Y, kind: 'command', scope: 'canvas' },
+  'outside.setGrant': { access: Y, kind: 'command', scope: 'canvas' },
+  'leads.get': { access: Y, kind: 'read', scope: 'none', reads: 'leads' },
   'agent.setSettings': {
     access: L,
     kind: 'doc',

@@ -495,7 +495,9 @@ describe('a connected agent', () => {
     expect(card().querySelector('.graph-card')?.getAttribute('title')).toBe(
       'Agent: Claude Code · Agent SDK',
     );
-    expect(card().querySelector('img')?.getAttribute('alt')).toBe('Claude Code');
+    const mark = within(card()).getByRole('img', { name: 'Claude Code' });
+    expect(mark.tagName).toBe('SPAN');
+    expect(card().querySelector('img, svg')).toBeNull();
     // Its view is open: its session starts.
     await settle();
     expect(replies.start).toHaveBeenCalledWith('a', {

@@ -1256,15 +1256,40 @@ export function partsOf(
       };
     if (topic.startsWith('worktrees:')) {
       // B9a's who works where: each agent's item, then each tree kept, in order.
-      const value = state as { items: readonly { agent: string }[]; kept: readonly unknown[] };
+      const value = state as {
+        items: readonly { agent: string }[];
+        kept: readonly unknown[];
+        into: unknown;
+      };
+      // The branch the checkout is on is one small value: the summary carries it.
       return {
-        summary: {},
+        summary: { into: value.into },
         entries: [
           ...value.items.map((item) => ({
             key: `item/${encodeURIComponent(item.agent)}`,
             value: item,
           })),
           ...value.kept.map((tree, index) => ({ key: `kept/${String(index)}`, value: tree })),
+        ],
+      };
+    }
+    if (topic.startsWith('leads:')) {
+      // B24's who leads: each lead by its agent, then each outside orchestrator by its name.
+      const value = state as {
+        leads: readonly { agent: string }[];
+        outside: readonly { name: string }[];
+      };
+      return {
+        summary: {},
+        entries: [
+          ...value.leads.map((lead) => ({
+            key: `lead/${encodeURIComponent(lead.agent)}`,
+            value: lead,
+          })),
+          ...value.outside.map((one) => ({
+            key: `outside/${encodeURIComponent(one.name)}`,
+            value: one,
+          })),
         ],
       };
     }
