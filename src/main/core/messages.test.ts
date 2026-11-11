@@ -2518,6 +2518,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
     ['another agent', BUILDER],
     ['the user', YOU],
   ])('rides the next message from %s, without starting a turn of its own', async (_who, caller) => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('helper');
@@ -2540,6 +2544,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('names an agent sender as frames name it', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('helper', BUILDER);
@@ -2551,6 +2559,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('names the user explicitly when the withdrawn message was theirs', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('builder', YOU);
@@ -2609,6 +2621,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('keeps the note durably across a restart, and keeps its delivered acknowledgement across the next', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived();
@@ -2665,29 +2681,22 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('sends a separate framed note first when the user’s next message starts with a shell prefix', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('shell');
     expect(sent(terminal)).toHaveLength(1);
     const next = await send('shell', '!echo hello', YOU);
-    await vi.waitFor(() => {
-      expect(sent(terminal)).toHaveLength(2);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
     });
     const later = await send('shell', 'After the shell command', YOU);
-    // A Terminal fake's turn takes about 760 ms here (its keys, then its settle): as long a wait
-    // as the next one's, not the default second a slow host can overrun.
-    await vi.waitFor(
-      async () => {
-        expect((await find(next, YOU))?.state).toBe('replied');
-      },
-      { timeout: 3000 },
-    );
-    await vi.waitFor(
-      async () => {
-        expect((await find(later, YOU))?.state).toBe('replied');
-      },
-      { timeout: 3000 },
-    );
+    await vi.waitFor(async () => {
+      expect((await find(later, YOU))?.state).toBe('replied');
+    });
     expect(sent(terminal).slice(1)).toEqual([
       `[corrallm] ${withdrawalNote(id)}`,
       '!echo hello',
