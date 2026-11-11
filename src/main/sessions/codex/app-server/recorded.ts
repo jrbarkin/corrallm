@@ -36,6 +36,19 @@ import path from 'node:path';
  *   - approvals: in Read only, a patch's approval, a command run outside the sandbox, then input
  *     written to it (kind writeStdin, with its approvalId), cancelled.
  *
+ * Codex CLI 0.162.1 (B13 C13), against a local stub of the model API (stub-model) in a throwaway
+ * CODEX_HOME, with a stub MCP server (probe: save_note, destructive) over HTTP, each an ephemeral
+ * thread in a scratch folder (/work/smoke/p1), on-request:
+ * - command-always: in Read only, `touch one.txt` outside the sandbox, asked with the decisions
+ *   accept, a prefix rule (acceptWithExecpolicyAmendment) and cancel; answered with the prefix
+ *   rule. Codex then ran the same command again without asking.
+ * - mcp-always: save_note asked through an elicitation offering to keep it for the session or
+ *   always; answered accept with persist always. The next call of the tool wasn't asked.
+ * - mcp-concurrent: with `supports_parallel_tool_calls` on the server, two calls of save_note with
+ *   identical arguments asked at once (two elicitations in one burst, nothing in either naming
+ *   its call); the first request cancelled, the second accepted. It was the call that started
+ *   second (call_3) that was cancelled, and the other that ran.
+ *
  * Codex CLI 0.162.1 (B11a C4), GPT-6-Luna at low effort, an ephemeral thread in a scratch folder
  * (/work/smoke/ctx1, ctx2), its model window lowered for the recording alone with a per-run
  * override (`-c model_context_window=50000`, so that its usable window is 47,500 and it compacts
@@ -65,6 +78,9 @@ export type Fixture =
   | 'question'
   | 'permissions'
   | 'approvals'
+  | 'command-always'
+  | 'mcp-always'
+  | 'mcp-concurrent'
   | 'compact-default'
   | 'compact-limit';
 
