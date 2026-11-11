@@ -13,6 +13,8 @@ import { fakeConnector } from '../sessions/test-fake';
 import type { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
 import { createCore } from './core';
+import { SYSTEM_DEPS } from './store/store';
+import type { StoreDeps } from './store/store';
 import type { Core } from './core';
 import { keepCanvases, readOnDisk, refuseWrites } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
@@ -52,6 +54,16 @@ let profile: string;
 let core: Core | undefined;
 let appServer: FakeConnector;
 let sends = 0;
+/**
+ * The database on the real clock but a log flush that returns at once, not the drive's fsync: what
+ * these tests count (turns between two agents) does not depend on how fast a host's drive is, and a
+ * slow one (each turn takes several commits) would run a turn past the one second each wait below
+ * gives it. What they read back is written to the log either way.
+ */
+const store: StoreDeps = {
+  ...SYSTEM_DEPS,
+  flush: () => Promise.resolve(),
+};
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-loops-'));
@@ -101,6 +113,7 @@ async function start(connector: FakeConnector = appServer): Promise<Core> {
       distribution: 'local',
       directoryResolver: legacyDirectories,
       locale: 'en-GB',
+      store,
       sessions: {
         callers: () => true,
         connectors: { 'codex.app-server': connector },
