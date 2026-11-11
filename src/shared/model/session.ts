@@ -164,8 +164,11 @@ export interface Session {
   submissions?: readonly SubmittedMessage[];
   /** Working on a turn; waiting (mid-turn) for the user to answer a prompt; or idle. */
   status: 'idle' | 'working' | 'waiting';
-  /** Messages sent while it works, sent in order once it is idle. */
-  queued: { id: string; text: string; images?: MessageImage[] }[];
+  /**
+   * Messages sent while it works, sent in order once it is idle. `from`: the sender's name, on a
+   * hand-off from another agent's queue (B19 X2), which is the run's and not yours to take back.
+   */
+  queued: { id: string; text: string; images?: MessageImage[]; from?: string }[];
   /** Its reported mode, or null until the native session says. */
   mode: Mode | null;
   /**

@@ -1089,7 +1089,7 @@ function MessageRow({
     { multiline: true },
   );
   if (item.submission) {
-    const { status, images, unresolved } = item.submission;
+    const { status, images, unresolved, handoff } = item.submission;
     return (
       <div
         className="graph-queue-row graph-queue-message graph-queue-submission"
@@ -1097,8 +1097,11 @@ function MessageRow({
         data-run={status}
         data-submission={item.submission.id}
         data-unresolved={unresolved ? '' : undefined}
+        data-handoff={handoff?.from}
       >
         <span className="graph-queue-keyword">Message</span>
+        {/* B19 X2: another agent's queue handed it over; the run owns it, not this queue. */}
+        {handoff && <span className="graph-queue-submission-from">From {handoff.from}</span>}
         <span
           className="graph-queue-submission-status"
           title={
