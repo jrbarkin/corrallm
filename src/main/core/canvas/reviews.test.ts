@@ -325,3 +325,62 @@ it.each(['apply', 'discard'] as const)(
     expect(reviews.open(canvas)).toBeDefined();
   },
 );
+
+describe('its writes', () => {
+  const SUMMARY = { file: 'team.corral', from: null, groups: 1 };
+  const OTHER = newCanvasId();
+
+  async function loaded(): Promise<CanvasId> {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    await documents.load(canvas);
+    return canvas;
+  }
+
+  it('settle a review in a planned write, failing only the write that settles it again', async () => {
+    const canvas = await loaded();
+    await store.write(() => {
+      reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY);
+    });
+    const review = reviews.open(canvas);
+    if (review === undefined) throw new Error('No review.');
+    await store.write(() => {
+      reviews.settleWithin(review, 'kept', 'you');
+    });
+    const [again, neighbour] = await Promise.allSettled([
+      store.write(() => {
+        reviews.settleWithin(review, 'applied', 'you');
+      }),
+      store.write(() => {
+        memory.ensure(OTHER);
+      }),
+    ]);
+    expect(again).toMatchObject({
+      status: 'rejected',
+      reason: { message: `${review.id} was settled already.` },
+    });
+    expect(neighbour.status).toBe('fulfilled');
+    expect(reviewRows(canvas)).toEqual([expect.objectContaining({ outcome: 'kept' })]);
+  });
+
+  it('tell of a supersede only when a review was open', async () => {
+    const canvas = await loaded();
+    let none: (() => void) | undefined;
+    await store.write(() => {
+      none = reviews.supersedeWithin(canvas);
+    });
+    none?.();
+    expect(told).toEqual([]);
+    await store.write(() => {
+      reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY);
+    });
+    let some: (() => void) | undefined;
+    await store.write(() => {
+      some = reviews.supersedeWithin(canvas);
+    });
+    expect(told).toEqual([]);
+    some?.();
+    expect(told).toEqual([[canvas, 'corrallm']]);
+    expect(reviews.open(canvas)).toBeUndefined();
+  });
+});

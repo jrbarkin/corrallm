@@ -359,12 +359,17 @@ export class LeadStore {
   /** Within a write: what was decided, written. */
   #apply(canvas: CanvasId, { gone, held }: { gone: string[]; held: [string, HeldReason][] }): void {
     const { store } = this.#deps;
-    const remove = store.prepare('DELETE FROM lead WHERE canvas_id = ? AND agent_id = ?');
-    for (const agent of gone) remove.run(canvas, agent);
-    const hold = store.prepare(
-      'UPDATE lead SET held = ? WHERE canvas_id = ? AND agent_id = ? AND held IS NULL',
-    );
-    for (const [agent, reason] of held) hold.run(reason, canvas, agent);
+    for (const agent of gone) {
+      store.run('DELETE FROM lead WHERE canvas_id = ? AND agent_id = ?', canvas, agent);
+    }
+    for (const [agent, reason] of held) {
+      store.run(
+        'UPDATE lead SET held = ? WHERE canvas_id = ? AND agent_id = ? AND held IS NULL',
+        reason,
+        canvas,
+        agent,
+      );
+    }
   }
 
   /** Once it is on disk: what was decided, in memory, and said. */

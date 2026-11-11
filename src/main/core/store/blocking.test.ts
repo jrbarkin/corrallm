@@ -15,8 +15,7 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..', '..', '..');
 
 /** Today's blocking writers, by file: how many `.writeBlocking(` calls each has. */
 const BLOCKING: Readonly<Record<string, number>> = {
-  'src/main/core/canvas/documents.ts': 5,
-  'src/main/core/canvas/proposals.ts': 2,
+  'src/main/core/canvas/proposals.ts': 1,
   'src/main/core/leads.ts': 3,
   'src/main/core/selftest.ts': 1,
   'src/main/core/workspaces/merge-journal.ts': 1,

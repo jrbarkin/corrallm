@@ -1048,3 +1048,29 @@ it('keeps the only copy of a canvas after Save As displaces its file, across evi
   expect((await documents.load(a)).document.nodes).toHaveLength(3);
   expect(documents.unsaved(a)).toBe(true);
 });
+
+describe('its writes', () => {
+  it('commit in a planned write, which reads nothing', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    const blocking = vi.spyOn(store, 'writeBlocking');
+    await commit(canvas, renamed(document, 'lead', 'Head'));
+    expect(blocking).not.toHaveBeenCalled();
+    expect(documents.live(canvas).document).toEqual(renamed(document, 'lead', 'Head'));
+  });
+
+  it('write every row again once canvas memory forgot the canvas, reading none', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    await forgetWhileLoaded(canvas);
+    expect(documentRow(canvas)).toBeUndefined();
+    const blocking = vi.spyOn(store, 'writeBlocking');
+    await commit(canvas, renamed(document, 'lead', 'Head'));
+    expect(blocking).not.toHaveBeenCalled();
+    expect(documentRow(canvas)).toBeDefined();
+    await restart();
+    expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
+  });
+});

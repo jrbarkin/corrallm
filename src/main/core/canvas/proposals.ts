@@ -309,13 +309,13 @@ export class Proposals {
       },
       within: () => {
         const at = this.#now();
-        const { changes } = this.#deps.store
-          .prepare(
-            `UPDATE proposal SET outcome = ?, settled_by = ?, settled_at = ?
+        this.#deps.store.runExpecting(
+          `UPDATE proposal SET outcome = ?, settled_by = ?, settled_at = ?
              WHERE id = ? AND outcome IS NULL`,
-          )
-          .run(outcome, by, at, proposal.id.slice('proposal/'.length));
-        if (Number(changes) !== 1) throw new Error(`${proposal.id} was settled already.`);
+          [outcome, by, at, proposal.id.slice('proposal/'.length)],
+          1,
+          `${proposal.id} was settled already.`,
+        );
         const staged = messages.stageWithin({
           from: 'corrallm',
           to: proposal.by,
@@ -348,7 +348,7 @@ export class Proposals {
     const settlement = await this.settlement(proposal, outcome, by, why);
     let staged: Staged | undefined;
     try {
-      await this.#deps.store.writeBlocking(() => {
+      await this.#deps.store.write(() => {
         staged = settlement.within();
       });
     } catch (error) {
