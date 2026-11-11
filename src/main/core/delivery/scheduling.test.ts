@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import type { Catalog } from '../../../shared/adapter';
+import { MADE_UP } from '../../../shared/test-made-up';
+import { managesQuestions } from '../ancestry';
+import { ALL_GRANTS, LEAD_CATALOG, leadAgent, SIGNALLING } from '../prompts/test-lead-world';
 import type { AgentNode, CanvasNode } from '../../../shared/model/canvas';
 import type { Message } from '../../../shared/model/messages';
 import type { NeedsItem } from '../../../shared/model/needs';
@@ -244,4 +248,43 @@ it('re-addresses manager rows as delivery starts, from a recipient that no longe
     await stop();
     vi.restoreAllMocks();
   }
+});
+
+it('sends a manager ask to you when its only lead has no API route, through a made-up connection', async () => {
+  // B24 X1: the lead is granted questions, but the made-up catalog's connections have no API route
+  // (its own, unlike the lead tests' catalog): there is nothing to answer by.
+  const nodes = [
+    leadAgent('top', undefined, SIGNALLING),
+    leadAgent('work', 'top', SIGNALLING),
+  ] as unknown as CanvasNode[];
+  const ask = async (catalog: Catalog) => {
+    const { delivery, stop } = await worldOf(nodes, {
+      manages: (lead) => managesQuestions(catalog, ALL_GRANTS, nodes, lead),
+    });
+    try {
+      const message = await delivery.asks.ask({
+        from: 'agent:work',
+        to: 'you',
+        via: 'manager',
+        questions: [
+          {
+            id: 'q',
+            header: 'H',
+            text: 'Which?',
+            options: [{ label: 'A' }],
+            multiple: false,
+            other: false,
+          },
+        ],
+        seconds: 600,
+      });
+      return message.to;
+    } finally {
+      await stop();
+      vi.restoreAllMocks();
+    }
+  };
+  expect(await ask(MADE_UP)).toBe('you');
+  // The same team on a connection that has one: the lead takes it.
+  expect(await ask(LEAD_CATALOG)).toBe('agent:top');
 });

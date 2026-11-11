@@ -18,6 +18,7 @@ import { createCore } from './core';
 import type { Core } from './core';
 import { mailboxTasks } from './delivery/tasks';
 import { expectRestorable, liveRunOf } from './engine/run/test-restore';
+import { ALL_GRANTS } from './prompts/test-lead-world';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, CANVAS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
@@ -41,7 +42,7 @@ const agentCaller = (agent: string): AgentCaller => ({
   session: `${agent}-session`,
 });
 const LEAD = agentCaller('lead');
-const GRANTS: LeadGrants = { questions: true, plans: true, approvals: true };
+const GRANTS: LeadGrants = ALL_GRANTS;
 const COMPLETED: TurnResult = { status: 'completed', reason: 'completed' };
 /** A prompt with no `signals` mark: the lead may answer it (the shared fakes are all human-only). */
 const approval = {

@@ -119,6 +119,7 @@ import { UsageProbe } from './usage-probe';
 import type { UsageRead } from './usage-probe';
 import { Children } from './children';
 import { StalledTurns } from './stalled';
+import { managesQuestions as managesQuestionsIn } from './ancestry';
 import { LeadCopies } from './delivery/lead-copies';
 import { PromptOwner } from './prompts/owner';
 import type { WatchdogClock, WatchdogNetwork } from './stalled';
@@ -520,8 +521,8 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     memory,
     catalog: CATALOG,
     document: (canvas) => documents.loaded(canvas)?.document,
-    changed: (canvas) => {
-      leadsChanged(canvas);
+    changed: (canvas, lead) => {
+      leadsChanged(canvas, lead);
     },
   });
   leadStore.load();
@@ -709,6 +710,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     },
     wake: (wake) => {
       leadCopies.wake(wake);
+    },
+    cutOff: (cut) => {
+      leadCopies.cutOff(cut);
     },
     // B24 C3: who leads now and what it may answer, and the outside parties you let answer
     // approvals, read on every use.
@@ -971,9 +975,11 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
    * Who leads on a canvas, or may answer there, changed (B24 C1): its topic and Needs read again,
    * and what its runtime topics' copies may see checked again. C2 routes its prompts again here.
    */
-  const leadsChanged = (canvas: CanvasId) => {
-    // Its prompts are routed again, and nobody keeps a lead's refusals count past your change.
-    prompts.forgive(canvas);
+  const leadsChanged = (canvas: CanvasId, lead?: string) => {
+    // Its prompts are routed again, and the lead you made, confirmed or removed starts its
+    // refusals count again (§4.4: "confirm or change that lead"): no other lead's, and none for a
+    // grant to an outside orchestrator or a hold.
+    if (lead !== undefined) prompts.forgive(canvas, lead);
     prompts.reroute(canvas);
     // B24 C4: a manager's rows leave a lead that lost the authority to take them.
     engines.canvas(canvas)?.delivery.asks.readdress();
@@ -1187,17 +1193,13 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   });
   // B24 C4: whether a lead may take its team's questions now: it leads, holds the questions
   // grant, and its connection has an API route to answer them through.
-  const managesQuestions = (canvas: CanvasId, lead: string): boolean => {
-    if (leadStore.grantsOf(canvas, lead)?.questions !== true) return false;
-    const node = documents
-      .loaded(canvas)
-      ?.document.nodes.find((one) => one.id === lead && one.type === 'agent');
-    const endpoint = node?.type === 'agent' ? agentEndpoint(node.data, CATALOG) : undefined;
-    return (
-      endpoint?.kind === 'known' &&
-      connectionIn(CATALOG, endpoint.connection)?.connection.api != null
+  const managesQuestions = (canvas: CanvasId, lead: string): boolean =>
+    managesQuestionsIn(
+      CATALOG,
+      leadStore.grantsOf(canvas, lead),
+      documents.loaded(canvas)?.document.nodes,
+      lead,
     );
-  };
   const engines: Engines = new Engines({
     manages: (canvas, lead) => managesQuestions(canvas, lead),
     leadCopy: {

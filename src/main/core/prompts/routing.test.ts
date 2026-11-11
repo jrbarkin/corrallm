@@ -4,16 +4,12 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Catalog } from '../../../shared/adapter';
 import type { LeadGrants } from '../../../shared/api/ops/leads';
 import { LEAD_ANSWER_SECONDS, LEAD_DENIALS } from '../../../shared/api/limits';
-import type { CanvasId } from '../../../shared/canvas';
 import type { NodeLike } from '../../../shared/model/canvas';
 import type { PromptAnswer } from '../../../shared/model/prompts';
-import { MADE_UP } from '../../../shared/test-made-up';
 import { CanvasMemory } from '../../memory';
 import type { PromptAnswers } from '../../sessions/connector';
-import type { PromptOrigin } from '../../sessions/manager';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
 import { MessageStore, MessageTable } from '../delivery/messages';
@@ -22,34 +18,31 @@ import { openTestStore } from '../store/test-store';
 import { HAND_BACK } from './grants';
 import { PromptOwner } from './owner';
 import type { RouteChange } from './owner';
+import {
+  ALL_GRANTS,
+  approval,
+  LEAD_CANVAS,
+  LEAD_CATALOG,
+  leadAgent,
+  promptOrigin,
+  question,
+  QUIET,
+  SIGNALLING,
+} from './test-lead-world';
 
 /*
  * B24 C3, C4, C7: a team's prompts routed to the nearest ancestor lead granted their kind (and to
  * you at once), answered within the one allowance, handed back, timed out and cut off.
  */
 
-const CANVAS = '7f3e4d5c-6b7a-4c8d-9e0f-1a2b3c4d5e6f' as CanvasId;
-const WITH_API: Catalog = {
-  ...MADE_UP,
-  adapters: MADE_UP.adapters.map((adapter) => ({
-    ...adapter,
-    connections: adapter.connections.map((connection) => ({ ...connection, api: 'channel' })),
-  })),
-};
-const SIGNALLING = 'zed.acp';
-const QUIET = 'zed.free';
+const CANVAS = LEAD_CANVAS;
+const WITH_API = LEAD_CATALOG;
+const ALL = ALL_GRANTS;
 
-function agent(id: string, parentId?: string): NodeLike {
-  return {
-    id,
-    type: 'agent',
-    ...(parentId === undefined ? {} : { parentId }),
-    data: { label: id.toUpperCase(), adapter: 'zed', connection: SIGNALLING } as NodeLike['data'],
-  };
-}
+const agent = (id: string, parentId?: string): NodeLike =>
+  leadAgent(id, parentId, SIGNALLING, id.toUpperCase());
 
 const NODES: NodeLike[] = [agent('top'), agent('mid', 'top'), agent('work', 'mid'), agent('free')];
-const ALL: LeadGrants = { questions: true, plans: true, approvals: true };
 const KEYS = [
   '0f6b1e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b',
   '1a7c2f3b-4d5e-4f60-9b1c-2d3e4f5a6b7c',
@@ -57,31 +50,7 @@ const KEYS = [
   '3c9e4b5d-6f70-4182-9d3e-4f5a6b7c8d9e',
 ];
 
-const yes = { value: 'yes', label: 'Yes', hint: 'allow_once', effects: {} };
-const no = { value: 'no', label: 'No', hint: 'reject_once', effects: {} };
-const always = { value: 'always', label: 'Always', hint: 'allow_always', effects: {} };
-const approval = {
-  kind: 'approval',
-  title: 'Run it?',
-  subject: { type: 'command', command: 'private-command-text', cwd: '/work' },
-  answerIn: 'api',
-  choices: [yes, no, always],
-};
-const question = {
-  kind: 'question',
-  title: 'Which?',
-  answerIn: 'api',
-  questions: [
-    {
-      id: 'q1',
-      header: 'H',
-      text: 'Which?',
-      options: [{ label: 'Red' }, { label: 'Blue' }],
-      multiple: false,
-      other: true,
-    },
-  ],
-};
+const approvalPrompt = approval();
 
 let profile: string;
 let database: Store;
@@ -93,6 +62,8 @@ let nodes: NodeLike[];
 let timers: { run: () => void; ms: number; stopped: boolean }[];
 let moves: RouteChange[];
 let answered: [string, PromptAnswer][];
+let wakes: { name: string; need: string; type: string }[];
+let cuts: { need: string; lead: string; agent: string }[];
 
 function handle(): PromptAnswers {
   return {
@@ -104,23 +75,11 @@ function handle(): PromptAnswers {
   };
 }
 
-function origin(agentId: string, connection = SIGNALLING): PromptOrigin {
-  return {
-    canvas: CANVAS,
-    agent: agentId,
-    connection,
-    generation: 1,
-    live: true,
-    startMode: 'plan',
-    answers: handle(),
-  };
-}
-
 let next = 0;
 /** Raises `prompt` from `agentId` on `connection`, and the item it waits as. */
-function raise(agentId: string, prompt: object = approval, connection = SIGNALLING) {
+function raise(agentId: string, prompt: object = approvalPrompt, connection = SIGNALLING) {
   const key = KEYS[next++ % KEYS.length] ?? '';
-  owner.raised(origin(agentId, connection), { type: 'prompt', key, prompt });
+  owner.raised(promptOrigin(agentId, handle(), connection), { type: 'prompt', key, prompt });
   const item = owner.items(CANVAS).at(-1);
   if (item === undefined) throw new Error('not admitted');
   return item;
@@ -166,6 +125,8 @@ beforeEach(async () => {
   timers = [];
   moves = [];
   answered = [];
+  wakes = [];
+  cuts = [];
   next = 0;
   owner = new PromptOwner({
     catalog: WITH_API,
@@ -183,6 +144,8 @@ beforeEach(async () => {
       };
     },
     routed: (change) => moves.push(change),
+    wake: ({ name, need, type }) => wakes.push({ name, need, type }),
+    cutOff: (cut) => cuts.push({ need: cut.need, lead: cut.lead, agent: cut.agent }),
     now: () => 5_000,
   });
 });
@@ -281,7 +244,7 @@ describe('answering as the lead', () => {
   });
 
   it('may only reject on a worker whose connection reports no signals', async () => {
-    const { id } = raise('work', approval, QUIET);
+    const { id } = raise('work', approvalPrompt, QUIET);
     expect(await reply(id, { choice: 'yes' }, 'agent:mid')).toMatchObject({ code: 'refused' });
     expect(await reply(id, { choice: 'no' }, 'agent:mid')).toMatchObject({ outcome: 'answered' });
   });
@@ -499,5 +462,59 @@ describe('LEAD_DENIALS', () => {
       });
     });
     expect(raise('work').by).toEqual(['you', 'agent:mid']);
+  });
+
+  const tick = () =>
+    new Promise((resolve) => {
+      queueMicrotask(() => {
+        resolve(undefined);
+      });
+    });
+
+  it('keeps the counts when your answer is invalid, or loses to another, and starts them again only once it is reserved', async () => {
+    for (let n = 0; n < LEAD_DENIALS; n += 1) await refuseOne();
+    const open = raise('work');
+    expect(await reply(open.id, { choice: 'nonsense' }, 'you')).toMatchObject({ code: 'invalid' });
+    await tick();
+    expect(raise('work').by).toEqual(['you']);
+    // A second answer refused as it is already being given changes nothing either.
+    expect(await reply(open.id, { choice: 'no' }, 'you')).toMatchObject({ outcome: 'answered' });
+    await tick();
+    expect(raise('work').by).toEqual(['you', 'agent:mid']);
+  });
+
+  it('never takes the prompt you are answering for the lead it forgives', async () => {
+    for (let n = 0; n < LEAD_DENIALS; n += 1) await refuseOne();
+    const open = raise('work');
+    moves.length = 0;
+    await reply(open.id, { choice: 'no' }, 'you');
+    await tick();
+    expect(moves.filter(({ need, to }) => need === open.id && to !== undefined)).toEqual([]);
+  });
+
+  it('tells the lead it was cut off, once, beside the note to you', async () => {
+    for (let n = 0; n < LEAD_DENIALS; n += 1) await refuseOne();
+    expect(cuts).toHaveLength(1);
+    expect(cuts[0]).toMatchObject({ lead: 'mid', agent: 'work' });
+    expect(messages.all().filter((one) => one.body.includes('in a row'))).toHaveLength(1);
+  });
+});
+
+describe('an outside grantee’s wake', () => {
+  it('ends with a record only when the prompt ends unanswered by it', async () => {
+    grantees = ['orchestrator', 'other'];
+    const a = raise('work');
+    expect(wakes.filter(({ type }) => type === 'raised')).toHaveLength(2);
+    await reply(a.id, { choice: 'yes' }, 'outside:orchestrator');
+    expect(wakes.filter(({ type }) => type === 'ended')).toEqual([
+      { name: 'other', need: a.id, type: 'ended' },
+    ]);
+    wakes.length = 0;
+    const b = raise('work');
+    await reply(b.id, { choice: 'yes' }, 'you');
+    expect(wakes.filter(({ type }) => type === 'ended').map(({ name }) => name)).toEqual([
+      'orchestrator',
+      'other',
+    ]);
   });
 });

@@ -4,13 +4,10 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Catalog } from '../../../shared/adapter';
-import type { LeadGrants } from '../../../shared/api/ops/leads';
-import type { CanvasId } from '../../../shared/canvas';
 import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
-import { MADE_UP } from '../../../shared/test-made-up';
 import { CanvasMemory } from '../../memory';
+import { PromptEvent } from '../../../shared/model/prompts';
 import type { PromptOrigin } from '../../sessions/manager';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
@@ -24,6 +21,16 @@ import type { Store } from '../store/store';
 import { openTestStore } from '../store/test-store';
 import { HAND_BACK } from './grants';
 import { PromptOwner } from './owner';
+import {
+  ALL_GRANTS,
+  LEAD_CANVAS,
+  LEAD_CATALOG,
+  leadAgent,
+  plan,
+  question,
+  SIGNALLING,
+  QUIET,
+} from './test-lead-world';
 
 /*
  * B24 C4's core: one allowance used at every boundary. For generated prompts (kind, choice hints,
@@ -32,25 +39,12 @@ import { PromptOwner } from './owner';
  * router and the prompt owner accept exactly the same answers.
  */
 
-const CANVAS = '7f3e4d5c-6b7a-4c8d-9e0f-1a2b3c4d5e6f' as CanvasId;
-const WITH_API: Catalog = {
-  ...MADE_UP,
-  adapters: MADE_UP.adapters.map((adapter) => ({
-    ...adapter,
-    connections: adapter.connections.map((connection) => ({ ...connection, api: 'channel' })),
-  })),
-};
+const CANVAS = LEAD_CANVAS;
+const WITH_API = LEAD_CATALOG;
 const KEY = '0f6b1e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
-const ALL: LeadGrants = { questions: true, plans: true, approvals: true };
+const ALL = ALL_GRANTS;
 
-function agent(id: string, parentId?: string): NodeLike {
-  return {
-    id,
-    type: 'agent',
-    ...(parentId === undefined ? {} : { parentId }),
-    data: { label: id, adapter: 'zed', connection: 'zed.acp' } as NodeLike['data'],
-  };
-}
+const agent = (id: string, parentId?: string): NodeLike => leadAgent(id, parentId);
 
 const NODES = [agent('top'), agent('mid', 'top'), agent('work', 'mid'), agent('free')];
 
@@ -92,29 +86,6 @@ const approval = (choices: readonly object[], more: object = {}) => ({
   choices,
   ...more,
 });
-const question = {
-  kind: 'question',
-  title: 'Which?',
-  answerIn: 'api',
-  questions: [
-    {
-      id: 'q1',
-      header: 'H',
-      text: 'Which?',
-      options: [{ label: 'Red' }, { label: 'Blue' }],
-      multiple: false,
-      other: true,
-    },
-  ],
-};
-const plan = {
-  kind: 'plan',
-  title: 'Plan',
-  plan: 'Do it',
-  answerIn: 'api',
-  choices: [choice('go', 'allow_once'), choice('stay', 'reject_once')],
-};
-
 const choiceAnswers = (values: string[]) => [
   ...values.map((value) => ({ choice: value })),
   { choice: 'tell', feedback: 'why' },
@@ -158,6 +129,109 @@ for (const signals of [true, false]) {
       ],
     },
   );
+}
+
+/** A small seeded generator (mulberry32): the same cases every run, reproducible from the seed. */
+function seeded(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const HINTS = ['allow_once', 'allow_always', 'reject_once', 'reject_always'] as const;
+const EFFECTS: (object | undefined)[] = [
+  undefined,
+  {},
+  { rules: [{ behavior: 'allow', rule: 'x', scope: 'user' }] },
+  { mode: 'bypass' },
+  { directories: ['/elsewhere'] },
+  { network: { host: 'example.test', allow: true, scope: 'session' } },
+];
+const SIGNAL_MARKS: (object | undefined)[] = [
+  undefined,
+  undefined,
+  { askRule: true },
+  { safetyCheck: true },
+  { requiresUser: true },
+];
+const ANSWER_IN = ['api', 'api', 'terminal', 'both'] as const;
+
+/** Generated prompts (a stable few dozen) over both signals, each with answers to try. */
+function generated(seed: number, count: number): Case[] {
+  const next = seeded(seed);
+  const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)] as T;
+  const cases: Case[] = [];
+  for (let n = 0; n < count; n += 1) {
+    const kind =
+      n < 3
+        ? (['approval', 'plan', 'question'] as const)[n]
+        : pick(['approval', 'plan', 'question', 'approval']);
+    const answerIn = n < 3 ? (['api', 'terminal', 'both'] as const)[n] : pick(ANSWER_IN);
+    const signals = n % 2 === 0;
+    const marks = pick(SIGNAL_MARKS);
+    const values: string[] = [];
+    const choices = Array.from({ length: 1 + Math.floor(next() * 4) }, (_, i) => {
+      const effects = pick(EFFECTS);
+      const feedback = pick([undefined, undefined, 'optional', 'required'] as const);
+      const value = `c${String(i)}`;
+      values.push(value);
+      return {
+        value,
+        label: value,
+        hint: pick(HINTS),
+        ...(effects === undefined ? {} : { effects }),
+        ...(feedback === undefined ? {} : { feedback }),
+      };
+    });
+    // An API decision must offer a rejection.
+    const last = choices.at(-1);
+    if (last !== undefined && !choices.some(({ hint }) => hint.startsWith('reject_')))
+      last.hint = pick(['reject_once', 'reject_always'] as const);
+    const common = {
+      title: 'Generated',
+      answerIn,
+      ...(marks === undefined ? {} : { signals: marks }),
+    };
+    const answers: unknown[] = [
+      ...values.map((value) => ({ choice: value })),
+      { choice: values[0] ?? 'c0', feedback: 'because' },
+      { choice: 'not-offered' },
+      { choice: HAND_BACK },
+    ];
+    if (kind === 'question') {
+      cases.push({
+        name: `generated ${String(n)} question`,
+        prompt: { ...common, kind, ...{ questions: question.questions } },
+        signals,
+        answers: [
+          { answers: { q1: { picked: ['Red'] } } },
+          { answers: { q1: { text: 'mine' } } },
+          { answers: { q1: { picked: ['Nowhere'] } } },
+          { choice: HAND_BACK },
+        ],
+      });
+    } else {
+      const subject = pick([
+        { type: 'command', command: 'ls', cwd: '/w' },
+        { type: 'trust' },
+        undefined,
+      ]);
+      cases.push({
+        name: `generated ${String(n)} ${String(kind)}`,
+        prompt:
+          kind === 'plan'
+            ? { ...common, kind, plan: 'Do it', choices }
+            : { ...common, kind, ...(subject === undefined ? {} : { subject }), choices },
+        signals,
+        answers,
+      });
+    }
+  }
+  return cases;
 }
 
 const PARTIES: { party: PartyId; caller: Caller }[] = [
@@ -224,7 +298,7 @@ function raise(test: Case): string {
   const origin: PromptOrigin = {
     canvas: CANVAS,
     agent: 'work',
-    connection: test.signals ? 'zed.acp' : 'zed.free',
+    connection: test.signals ? SIGNALLING : QUIET,
     generation: 1,
     live: true,
     startMode: 'plan',
@@ -238,7 +312,12 @@ function raise(test: Case): string {
   };
   owner.raised(origin, { type: 'prompt', key: KEY, prompt: test.prompt });
   const item = owner.items(CANVAS).at(-1);
-  if (item === undefined) throw new Error('not admitted');
+  if (item === undefined) {
+    const parsed = PromptEvent.safeParse({ type: 'prompt', key: KEY, prompt: test.prompt });
+    throw new Error(
+      `not admitted: ${test.name} ${parsed.success ? 'valid' : parsed.error.message}`,
+    );
+  }
   return item.id;
 }
 
@@ -262,10 +341,11 @@ async function accepted(run: () => Promise<unknown>): Promise<boolean> {
   }
 }
 
-describe('the allowance at every boundary', () => {
-  it('is the same for the selector, R3, the router and the owner', async () => {
+/** Runs every party and answer of each case through the four boundaries; how many trials ran. */
+async function agree(cases: readonly Case[]): Promise<number> {
+  {
     let trials = 0;
-    for (const test of CASES) {
+    for (const test of cases) {
       for (const { party, caller } of PARTIES) {
         for (const answer of test.answers) {
           // Hand back is never a thing you pick: no boundary offers it.
@@ -323,18 +403,41 @@ describe('the allowance at every boundary', () => {
               expect(shown, `selector ${label}`).toBe(false);
             // And R3 refuses it, whenever the prompt takes the answer at all.
             const value = (answer as { choice?: string }).choice;
+            // A question's answer picking a label it doesn't offer is refused by its shape, not by
+            // the allowance.
+            const picked = (answer as { answers?: Record<string, { picked?: string[] }> }).answers
+              ?.q1?.picked;
             const offers =
-              value === undefined ||
-              value === HAND_BACK ||
-              ((test.prompt as { choices?: { value: string }[] }).choices ?? []).some(
-                (one) => one.value === value,
-              );
+              value === undefined
+                ? (picked ?? []).every((label) => ['Red', 'Blue'].includes(label))
+                : value === HAND_BACK ||
+                  ((test.prompt as { choices?: { value: string }[] }).choices ?? []).some(
+                    (one) => one.value === value,
+                  );
             if (party !== 'you' && offers) expect(r3, `R3 ${label}`).toBe(false);
           }
           trials += 1;
         }
       }
     }
-    expect(trials).toBeGreaterThan(200);
+    return trials;
+  }
+}
+
+describe('the allowance at every boundary', () => {
+  it('is the same for the selector, R3, the router and the owner', async () => {
+    expect(await agree(CASES)).toBeGreaterThan(200);
   });
+
+  it('is the same over generated prompts: hints, effects, marks, answerIn, signals and parties', async () => {
+    const cases = generated(0x5eed, 24);
+    // The generator reaches every kind, hint, answerIn and mark it varies, however it is seeded.
+    const kinds = new Set(cases.map(({ prompt }) => (prompt as { kind: string }).kind));
+    expect([...kinds].sort()).toEqual(['approval', 'plan', 'question']);
+    expect(new Set(cases.map(({ prompt }) => (prompt as { answerIn: string }).answerIn))).toEqual(
+      new Set(['api', 'terminal', 'both']),
+    );
+    expect(new Set(cases.map(({ signals }) => signals))).toEqual(new Set([true, false]));
+    expect(await agree(cases)).toBeGreaterThan(300);
+  }, 60_000);
 });

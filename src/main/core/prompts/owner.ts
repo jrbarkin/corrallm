@@ -180,6 +180,11 @@ export interface PromptOwnerDeps {
    * is admitted, and told once more if it ends unanswered by it (a record for its `wait`).
    */
   wake?: (wake: { canvas: CanvasId; need: string; name: string; type: 'raised' | 'ended' }) => void;
+  /**
+   * B24 C7: a lead was cut off from a worker's prompts after LEAD_DENIALS rejections in a row
+   * (`need` is the prompt whose answer made the last): the copy path tells it once.
+   */
+  cutOff?: (cut: { canvas: CanvasId; agent: string; need: string; lead: string }) => void;
 }
 
 /** A prompt's route moving, as the copy path hears it. */
@@ -770,6 +775,13 @@ export class PromptOwner implements PromptSink {
         words: `${who(open.nodes, by)} refused ${String(LEAD_DENIALS)} of ${name}’s requests in a row, so its requests come to you alone.`,
       });
     }
+    // The lead is told too, once and value-free, as a copy's lead is told it no longer holds one.
+    this.#deps.cutOff?.({
+      canvas: occurrence.canvas,
+      agent: occurrence.agent,
+      need: occurrence.need,
+      lead: by.slice('agent:'.length),
+    });
     // The route of the worker's other prompts moves once this answer has landed.
     queueMicrotask(() => {
       for (const one of this.#live(occurrence.canvas)) this.#route(one, 'denials');
@@ -788,7 +800,10 @@ export class PromptOwner implements PromptSink {
     }
     if (any) {
       queueMicrotask(() => {
-        this.reroute(occurrence.canvas);
+        // Never the prompt you are answering: a lead it went to would be sent a copy and a notice.
+        for (const one of this.#live(occurrence.canvas)) {
+          if (one !== occurrence) this.#route(one, 'authority');
+        }
       });
     }
   }
@@ -836,8 +851,6 @@ export class PromptOwner implements PromptSink {
         );
       }
       if (picks(given, HAND_BACK)) return this.#handBackBy(occurrence, ctx);
-    } else {
-      this.#forgiven(occurrence);
     }
     // Not waiting, before a terminal's answers are refused: settled at once, nothing recorded.
     if (notWaiting(occurrence, given)) return this.#dismiss(occurrence, ctx);
@@ -852,6 +865,8 @@ export class PromptOwner implements PromptSink {
     }
     // Reserved, with nothing awaited since it was checked: a second reply now is a conflict.
     occurrence.state = { at: 'answering', by: ctx.by };
+    // Your answer is valid and reserved: only now does it start the worker's counts again.
+    if (ctx.by === 'you') this.#forgiven(occurrence);
     const name = nameOf(open.nodes, occurrence.agent);
     const settled = settledOf(to, occurrence.prompt, answer);
     const link = occurrence.prompt.kind === 'form' && 'url' in occurrence.prompt.form;
@@ -1193,6 +1208,8 @@ export class PromptOwner implements PromptSink {
     prompts.live.delete(occurrence.prompt.id);
     this.#unroute(occurrence, ended);
     for (const name of occurrence.woken) {
+      // One that answered it was told by its own reply.
+      if (ended.by === `outside:${name}`) continue;
       this.#deps.wake?.({ canvas: occurrence.canvas, need: occurrence.need, name, type: 'ended' });
     }
     this.#keys.delete(keyOf(occurrence, occurrence.key));

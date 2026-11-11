@@ -69,9 +69,10 @@ export interface LeadStoreDeps {
   /**
    * Told once a change of a canvas's leads or outside grants is on disk and in memory: whoever
    * leads, or may answer, there may have changed (its topic, its Needs, and from C2 the routes of
-   * its prompts).
+   * its prompts). `lead`: the one you made, confirmed or removed (`set`), if it was one lead you
+   * changed, whose refusals count starts again; a grant, a hold or a deletion names none.
    */
-  changed?: (canvas: CanvasId) => void;
+  changed?: (canvas: CanvasId, lead?: string) => void;
 }
 
 const GRANT_KEYS = ['questions', 'plans', 'approvals'] as const;
@@ -231,7 +232,7 @@ export class LeadStore {
         fingerprint: lead.fingerprint,
         held: undefined,
       });
-    this.#deps.changed?.(canvas);
+    this.#deps.changed?.(canvas, agent);
   }
 
   /** The token names you let answer approvals on `canvas`, in order. */

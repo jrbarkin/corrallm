@@ -1,9 +1,10 @@
-import { MAX_WAITING } from '../../../shared/api/limits';
+import { LEAD_DENIALS, MAX_WAITING } from '../../../shared/api/limits';
 import type { CanvasId } from '../../../shared/canvas';
 import { agentParty, isLeadCopy, isLeadNotice } from '../../../shared/model/messages';
 import type { Message } from '../../../shared/model/messages';
 import { leadCopy, leadNotice } from '../../../shared/model/purpose';
 import type { TurnResult } from '../../../shared/session';
+import { decidedOf } from '../decisions';
 import type { RouteChange } from '../prompts/owner';
 import type { MessageStore } from './messages';
 
@@ -99,22 +100,32 @@ export class LeadCopies {
   }): void {
     const messages = this.#deps.messages(canvas);
     if (messages === undefined) return;
-    const told = `outside-${type}:${need}|${name}`;
+    wakeRecord(messages, canvas, need, name, type);
+  }
+
+  /**
+   * B24 C7: `lead` was cut off from a worker's prompts after LEAD_DENIALS rejections in a row: it is
+   * told once, in fixed words and the prompt's escaped Need id, as you are (a note of your own).
+   */
+  cutOff({ canvas, need, lead }: { canvas: CanvasId; need: string; lead: string }): void {
+    const messages = this.#deps.messages(canvas);
+    if (messages === undefined) return;
+    const to = agentParty(lead);
+    const told = `${NOTICE}${need}~denials|${to}`;
     if (messages.toldWith(told).length > 0) return;
     messages.add(
       {
         from: 'corrallm',
-        to: `outside:${name}`,
-        kind: 'notice',
+        to,
+        kind: 'text',
         origin: 'party',
-        body:
-          type === 'raised'
-            ? `A request from a worker waits for approval, and you may answer it once, as the user allowed (not the user): ${need}. Read it with needs { "canvas": "${canvas}" } and answer it with reply.`
-            : `${need} no longer waits for you.`,
-        state: 'delivered',
+        body: `${need} was the ${String(LEAD_DENIALS)}th request of that agent you refused in a row, so its requests come to the user alone now, until the user answers one or changes your grants. Nothing more is asked of you.`,
+        state: 'pending',
+        purpose: leadNotice(need),
       },
       told,
     );
+    this.#deps.schedule(canvas);
   }
 
   /** Whether a copy's prompt still waits on its lead's route: checked just before it is sent. */
@@ -207,8 +218,47 @@ export class LeadCopies {
           break;
       }
     }
+    // An orchestrator woken for a request a core stopped holding is told it ended, once.
+    for (const raised of messages.toldStarting('outside-raised:')) {
+      const key = messages.toldOf(raised.id) ?? '';
+      const bar = key.lastIndexOf('|');
+      if (bar < 0) continue;
+      const need = key.slice('outside-raised:'.length, bar);
+      const name = key.slice(bar + 1);
+      if (messages.toldWith(`outside-ended:${need}|${name}`).length > 0) continue;
+      // One that answered it was told by its own reply.
+      if (decidedOf(messages, need)?.by === `outside:${name}`) continue;
+      wakeRecord(messages, messages.canvas, need, name, 'ended');
+      any = true;
+    }
     return any;
   }
+}
+
+/** The record for an outside orchestrator's `wait`: told once, in fixed words and the Need id. */
+function wakeRecord(
+  messages: MessageStore,
+  canvas: CanvasId,
+  need: string,
+  name: string,
+  type: 'raised' | 'ended',
+): void {
+  const told = `outside-${type}:${need}|${name}`;
+  if (messages.toldWith(told).length > 0) return;
+  messages.add(
+    {
+      from: 'corrallm',
+      to: `outside:${name}`,
+      kind: 'notice',
+      origin: 'party',
+      body:
+        type === 'raised'
+          ? `A request from a worker waits for approval, and you may answer it once, as the user allowed (not the user): ${need}. Read it with needs { "canvas": "${canvas}" } and answer it with reply.`
+          : `${need} no longer waits for you.`,
+      state: 'delivered',
+    },
+    told,
+  );
 }
 
 /** The one notice for `need`'s copy, to the lead that got it: none if it already has one. */

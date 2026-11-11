@@ -4,14 +4,22 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Catalog } from '../../../shared/adapter';
 import type { LeadGrants } from '../../../shared/api/ops/leads';
-import type { CanvasId } from '../../../shared/canvas';
 import type { NodeLike } from '../../../shared/model/canvas';
 import { isLeadCopy, isLeadNotice } from '../../../shared/model/messages';
-import { MADE_UP } from '../../../shared/test-made-up';
 import { CanvasMemory } from '../../memory';
 import { PromptOwner } from '../prompts/owner';
+import {
+  ALL_GRANTS,
+  approval,
+  LEAD_CANVAS,
+  LEAD_CATALOG,
+  leadAgent,
+  promptOrigin,
+  raisePrompt,
+  recordingAnswers,
+  SIGNALLING,
+} from '../prompts/test-lead-world';
 import type { Store } from '../store/store';
 import { openTestStore } from '../store/test-store';
 import { LeadCopies } from './lead-copies';
@@ -22,24 +30,13 @@ import { MessageStore, MessageTable } from './messages';
  * noticed once if it did, and recovered after a crash without being sent again.
  */
 
-const CANVAS = '7f3e4d5c-6b7a-4c8d-9e0f-1a2b3c4d5e6f' as CanvasId;
-const WITH_API: Catalog = {
-  ...MADE_UP,
-  adapters: MADE_UP.adapters.map((adapter) => ({
-    ...adapter,
-    connections: adapter.connections.map((connection) => ({ ...connection, api: 'channel' })),
-  })),
-};
-const ALL: LeadGrants = { questions: true, plans: true, approvals: true };
+const CANVAS = LEAD_CANVAS;
+const WITH_API = LEAD_CATALOG;
+const ALL = ALL_GRANTS;
 const CANARY = 'CANARY-7c41';
 
 function agent(id: string, label: string, parentId?: string): NodeLike {
-  return {
-    id,
-    type: 'agent',
-    ...(parentId === undefined ? {} : { parentId }),
-    data: { label, adapter: 'zed', connection: 'zed.acp' } as NodeLike['data'],
-  };
+  return leadAgent(id, parentId, SIGNALLING, label);
 }
 
 const NODES = [
@@ -90,6 +87,9 @@ function wire(): void {
     wake: (wake) => {
       copies.wake(wake);
     },
+    cutOff: (cut) => {
+      copies.cutOff(cut);
+    },
     now: () => 5_000,
   });
   live = copies;
@@ -98,35 +98,22 @@ let live: LeadCopies;
 let grantees: string[] = [];
 
 function raise(key: string) {
-  owner.raised(
-    {
-      canvas: CANVAS,
-      agent: 'work',
-      connection: 'zed.acp',
-      generation: 1,
-      live: true,
-      startMode: 'plan',
-      answers: { answer: () => undefined, decline: () => undefined, dismiss: () => undefined },
-    },
-    {
-      type: 'prompt',
-      key,
-      prompt: {
-        kind: 'approval',
+  return raisePrompt(
+    owner,
+    promptOrigin('work', recordingAnswers()),
+    key,
+    approval(
+      [
+        { value: 'yes', label: `Yes ${CANARY}`, hint: 'allow_once', effects: {} },
+        { value: 'no', label: 'No', hint: 'reject_once', effects: {} },
+      ],
+      {
         title: `Run ${CANARY}?`,
         summary: CANARY,
         subject: { type: 'command', command: `echo ${CANARY}`, cwd: '/w' },
-        answerIn: 'api',
-        choices: [
-          { value: 'yes', label: `Yes ${CANARY}`, hint: 'allow_once', effects: {} },
-          { value: 'no', label: 'No', hint: 'reject_once', effects: {} },
-        ],
       },
-    },
+    ),
   );
-  const item = owner.items(CANVAS).at(-1);
-  if (item === undefined) throw new Error('not admitted');
-  return item.id;
 }
 
 const KEY = '0f6b1e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
@@ -473,7 +460,50 @@ describe('after a crash', () => {
   });
 });
 
+describe('a lead cut off by its refusals', () => {
+  it('is told once, in fixed words, that the worker’s requests come to the user alone', async () => {
+    const as = (by: `agent:${string}`) =>
+      ({
+        by,
+        caller: { kind: 'agent', agent: by.slice(6) },
+        signal: new AbortController().signal,
+        noReturn: () => undefined,
+      }) as never;
+    for (let n = 0; n < 3; n += 1) {
+      const need = raise(`${String(n)}f6b1e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b`);
+      await owner.answer(CANVAS, need, { choice: 'no' }, as('agent:mid'));
+    }
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toMatchObject({ to: 'agent:mid', purpose: { type: 'lead-notice' } });
+    expect(notices()[0]?.body).toMatch(/refused in a row/);
+    expect(JSON.stringify(notices())).not.toContain(CANARY);
+  });
+});
+
 describe('an outside orchestrator you let answer approvals', () => {
+  it('is told once after a restart, unless it answered the request itself', async () => {
+    grantees = ['orchestrator', 'other'];
+    const need = raise(KEY);
+    const second = raise(KEY2);
+    await owner.answer(CANVAS, second, { choice: 'yes' }, {
+      by: 'outside:orchestrator',
+      caller: { kind: 'outside', name: 'orchestrator' },
+      signal: new AbortController().signal,
+      noReturn: () => undefined,
+    } as never);
+    await messages.durable();
+    const again = await load();
+    expect(LeadCopies.recover(again)).toBe(true);
+    const ended = again.all().filter((one) => one.body.includes('no longer waits for you.'));
+    // The first request: both orchestrators; the second, answered by one: only the other.
+    expect(ended.map(({ to, body }) => [to, body.startsWith(need)]).sort()).toEqual([
+      ['outside:orchestrator', true],
+      ['outside:other', false],
+      ['outside:other', true],
+    ]);
+    expect(LeadCopies.recover(again)).toBe(false);
+  });
+
   it('is woken once by a record for its wait, and told once when it ends unanswered by it', () => {
     grantees = ['orchestrator'];
     const need = raise(KEY);

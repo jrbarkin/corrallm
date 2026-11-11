@@ -62,6 +62,8 @@ let store: Store;
 let memory: CanvasMemory;
 let documents: Documents;
 let leads: LeadStore;
+/** What the lead store said changed: the canvas, and the lead you changed (none: not one lead). */
+let heard: { canvas: CanvasId; lead?: string | undefined }[] = [];
 
 /** A lead store and documents over the profile's database, as a core opens them. */
 function open(): void {
@@ -72,12 +74,14 @@ function open(): void {
     catalog: CATALOG,
     document: (canvas) => documents.loaded(canvas)?.document,
     now: () => 1000,
+    changed: (canvas, lead) => heard.push({ canvas, lead }),
   });
   leads.load();
   documents = new Documents({ store, memory, catalog: CATALOG, leads });
 }
 
 beforeEach(async () => {
+  heard = [];
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-leads-'));
   store = await openTestStore(profile, SYSTEM_DEPS);
   open();
@@ -123,6 +127,24 @@ async function reopen(): Promise<void> {
   open();
   await documents.load(CANVAS);
 }
+
+describe('what a change says changed', () => {
+  it('names the lead you made, confirmed or removed, and no lead for a grant or a hold', async () => {
+    await makeLead();
+    await makeLead();
+    await leads.set(CANVAS, 'lead', null);
+    expect(heard.map(({ lead }) => lead)).toEqual(['lead', 'lead', 'lead']);
+    heard.length = 0;
+    await leads.setGrant(CANVAS, 'orchestrator', true);
+    expect(heard).toEqual([{ canvas: CANVAS, lead: undefined }]);
+    heard.length = 0;
+    await makeLead();
+    heard.length = 0;
+    await commit(canvasOf(agent('lead', { role: 'Another role.' }), agent('helper', {}, 'lead')));
+    expect(heard.length).toBeGreaterThan(0);
+    expect(heard.every(({ lead }) => lead === undefined)).toBe(true);
+  });
+});
 
 describe('a lead', () => {
   it('is kept with its grants and what its agent was, on disk before it resolves', async () => {

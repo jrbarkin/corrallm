@@ -11,8 +11,8 @@ import { z } from 'zod';
  *   pending message to that agent, carrying the item's attempt as its task, which delivery delivers
  *   once, at its recipient's delivery point.
  * - `lead-copy` and `lead-notice` (B24): the host-built card a routed lead gets, and the one note when
-  that prompt no longer waits for it, each carrying its Need item.
-- `evidence`: the hand-off's reply, kept for its queue: a record from the recipient to the
+ *   that prompt no longer waits for it, each carrying its Need item.
+ * - `evidence`: the hand-off's reply, kept for its queue: a record from the recipient to the
  *   queue's agent, `replyTo` the hand-off, with its task and how the turn ended. Never a turn and
  *   never pending: the queue's item reads it, its agent is not sent it.
  *

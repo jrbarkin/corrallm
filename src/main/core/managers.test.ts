@@ -15,6 +15,7 @@ import { fakeConnector } from '../sessions/test-fake';
 import type { AgentCaller, Caller } from './caller';
 import { createCore } from './core';
 import type { Core } from './core';
+import { APPROVALS_ONLY, QUESTIONS_ONLY } from './prompts/test-lead-world';
 import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
@@ -28,8 +29,8 @@ import { legacyDirectories } from './workspaces/test-directories';
  */
 
 const TEAM = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b02' as CanvasId;
-const QUESTIONS: LeadGrants = { questions: true, plans: false, approvals: false };
-const APPROVALS: LeadGrants = { questions: false, plans: false, approvals: true };
+const QUESTIONS: LeadGrants = QUESTIONS_ONLY;
+const APPROVALS: LeadGrants = APPROVALS_ONLY;
 const YOU = CALLERS.you;
 const agentCaller = (agent: string): AgentCaller => ({
   kind: 'agent',
