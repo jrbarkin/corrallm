@@ -180,10 +180,15 @@ export class FallbackService {
   }
 
   /**
-   * A canvas's availability changed (a workspace became ready): a switch it held is tried again
-   * at the next admission.
+   * A canvas's availability changed: active switches recheck from the beginning, including which
+   * workspace the target starts afresh in; blocked ones may be tried again at the next admission.
    */
   availabilityChanged(canvas: CanvasId): void {
+    for (const lane of this.#lanes.values()) {
+      if (lane.canvas !== canvas) continue;
+      lane.stop = new Abandoned('Its workspace availability changed: admission decides again');
+      lane.wake?.();
+    }
     for (const key of [...this.#blocked.keys()])
       if ((JSON.parse(key) as [string, string])[0] === canvas) this.#blocked.delete(key);
   }
