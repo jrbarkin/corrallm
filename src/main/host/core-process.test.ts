@@ -48,6 +48,7 @@ const host = {
   askOpenLink: () => Promise.resolve({ open: false, always: false }),
   openExternal: () => Promise.resolve(null),
   showFile: () => Promise.resolve(null),
+  launcher: () => null,
   notify: () => Promise.resolve('unsupported' as const),
   pickCanvasToOpen: vi.fn(() => Promise.resolve(null)),
   pickCanvasToSave: vi.fn(() => Promise.resolve(null)),

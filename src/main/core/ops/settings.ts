@@ -7,6 +7,11 @@ import type { Implementations, OpServices } from '.';
 
 /** What you are told when the remembered sites can't be read: a fixed sentence, no value. */
 const LINKS_UNREADABLE = 'corrallm couldn’t read the sites you said to open without asking.';
+/** What you are told when the command's link can't be read: a fixed sentence, no value. */
+const COMMAND_UNREADABLE = {
+  state: 'unavailable',
+  sentence: 'corrallm couldn’t read where the command is linked.',
+} as const;
 /** What any reader is told when the settings can't be read: never the error, which names a file. */
 const SETTINGS_UNREADABLE = 'corrallm couldn’t read your settings.';
 
@@ -30,6 +35,7 @@ export function settingsOps({
   api,
   links,
   notifications,
+  command,
 }: OpServices): Pick<Implementations, 'settings.get' | 'settings.set'> {
   return {
     'settings.get': async (_args, ctx) => {
@@ -63,6 +69,7 @@ export function settingsOps({
           lastDelivery: notifications.status() ?? null,
         },
         links: sites,
+        command: await command.status().catch(() => COMMAND_UNREADABLE),
       };
     },
     'settings.set': async (args, ctx) => {

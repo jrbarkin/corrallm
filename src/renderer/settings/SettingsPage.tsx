@@ -8,11 +8,13 @@ import { api } from '../api/client';
 import { topics, useTopic } from '../api/topics';
 import type { TopicMirror } from '../api/topics';
 import { animate } from '../agent/motion';
+import { commandView } from './command-words';
 import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import './SettingsPage.css';
 
 type Intent = NonNullable<Parameters<GuiApi['settingsSet']>[0]>;
+type Client = Pick<GuiApi, 'settingsSet' | 'appCommand'>;
 
 const DELIVERY = {
   shown: 'Last notification shown',
@@ -26,7 +28,7 @@ const NO_DELIVERY = 'No notification attempted since corrallm started';
  * One writable row at a time: each gesture is one `settings.set`; its row alone is disabled while
  * the call is pending, and a refusal is kept at that row (with the retry) until the next attempt.
  */
-function useRows(client: Pick<GuiApi, 'settingsSet'>) {
+function useRows() {
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [problems, setProblems] = useState<Readonly<Record<string, string>>>({});
   const busy = useRef(new Set<string>());
@@ -37,13 +39,13 @@ function useRows(client: Pick<GuiApi, 'settingsSet'>) {
       alive.current = false;
     };
   }, []);
-  const send = async (row: string, intent: Intent) => {
+  const send = async (row: string, run: () => Promise<unknown>) => {
     if (busy.current.has(row)) return;
     busy.current.add(row);
     setPending(new Set(busy.current));
     setProblems((was) => Object.fromEntries(Object.entries(was).filter(([name]) => name !== row)));
     try {
-      await client.settingsSet(intent);
+      await run();
     } catch (error) {
       if (alive.current) setProblems((was) => ({ ...was, [row]: ipcErrorMessage(error) }));
     } finally {
@@ -65,7 +67,7 @@ export function SettingsPage({
   mirror = topics,
   onClose,
 }: {
-  client?: Pick<GuiApi, 'settingsSet'>;
+  client?: Client;
   mirror?: TopicMirror;
   onClose: () => void;
 }) {
@@ -76,7 +78,7 @@ export function SettingsPage({
     () => mirror.revision('settings'),
   );
   const current = settings !== undefined && revision !== undefined;
-  const { pending, problems, send } = useRows(client);
+  const { pending, problems, send } = useRows();
   const readError = useSyncExternalStore(
     useCallback((listener: () => void) => mirror.subscribe('settings', listener), [mirror]),
     () => mirror.failure('settings') ?? mirror.unreadable('settings'),
@@ -128,7 +130,7 @@ export function SettingsPage({
     };
   }, []);
   const take = (row: string, target: ConsentTarget) => {
-    void send(row, { consent: target });
+    void send(row, () => client.settingsSet({ consent: target } satisfies Intent));
   };
   const problem = (row: string): ReactNode =>
     problems[row] !== undefined && <p role="alert">{problems[row]}</p>;
@@ -150,6 +152,7 @@ export function SettingsPage({
   );
 
   const links = settings?.links;
+  const command = commandView(settings?.command);
   return (
     <div
       className="graph-detail-backdrop graph-start-backdrop"
@@ -209,7 +212,11 @@ export function SettingsPage({
                     aria-disabled={off('notifications') || undefined}
                     onChange={() => {
                       if (off('notifications')) return;
-                      void send('notifications', { notifications: { enabled: !enabled } });
+                      void send('notifications', () =>
+                        client.settingsSet({
+                          notifications: { enabled: !enabled },
+                        } satisfies Intent),
+                      );
                     }}
                   />
                   OS notifications
@@ -340,6 +347,48 @@ export function SettingsPage({
                 )}
               </>
             )}
+          </section>
+
+          <section aria-labelledby="settings-command">
+            <h3 id="settings-command">The corrallm command</h3>
+            {settings === undefined ? (
+              <p role="status">Loading…</p>
+            ) : (
+              <>
+                {command.lines.map((line) => (
+                  <p key={line} role="status">
+                    {line}
+                  </p>
+                ))}
+                {command.install && (
+                  <button
+                    type="button"
+                    aria-label="Install the corrallm command"
+                    aria-disabled={off('command') || undefined}
+                    onClick={() => {
+                      if (off('command')) return;
+                      void send('command', () => client.appCommand({ action: 'install' }));
+                    }}
+                  >
+                    Install
+                  </button>
+                )}
+                {command.remove && (
+                  <button
+                    type="button"
+                    aria-label="Remove the corrallm command"
+                    aria-disabled={off('command') || undefined}
+                    onClick={() => {
+                      if (off('command')) return;
+                      void send('command', () => client.appCommand({ action: 'remove' }));
+                    }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </>
+            )}
+            {problem('command')}
           </section>
         </div>
       </div>

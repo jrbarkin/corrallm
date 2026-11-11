@@ -10,6 +10,7 @@ node_modules/
 .vite/
 out/
 dist-cli/
+dist-check/
 *.tsbuildinfo
 
 # Test output

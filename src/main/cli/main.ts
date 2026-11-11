@@ -6,6 +6,7 @@ import type { Command } from './args';
 import { dumpCommand } from './dump';
 import { USAGE_ERROR } from './node';
 import { writtenOut } from './output';
+import { commandLauncher } from './register';
 import { serveCommand } from './serve';
 import { tokenCommand } from './token';
 import { waitCommand } from './wait';
@@ -137,6 +138,8 @@ async function run(command: Command): Promise<number> {
         env: process.env,
         cwd: process.cwd(),
         stderr: process.stderr,
+        // The shipped command's launcher, to check the helper's `corrallm` resolves to it.
+        ...launcherOption(commandLauncher(process.argv[1] ?? '')),
         // Opened only by `token header`, the one that prints there.
         stdout: {
           write: (text) => process.stdout.write(text),
@@ -144,6 +147,9 @@ async function run(command: Command): Promise<number> {
       });
   }
 }
+
+const launcherOption = (launcher: string | undefined) =>
+  launcher === undefined ? {} : { launcher };
 
 /** Where a command printed, so that exiting waits for those streams alone. */
 function printedBy(command: Command): Printed {

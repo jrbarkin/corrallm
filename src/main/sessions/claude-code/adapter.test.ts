@@ -157,6 +157,9 @@ describe("Claude Code's adapter", () => {
       expect(descriptor.registerMcp).toContain(placeholder);
     }
     expect(descriptor.registerMcp).toMatch(/^claude mcp add --transport http /);
+    // A command run in the orchestrator's folder (local scope), not text for a file; it renews.
+    expect(descriptor.registerMcpIn).toBeUndefined();
+    expect(descriptor.registerMcpRenews).toBe(true);
   });
 
   it('registers an outside MCP server with a headers helper, run at every connect, so a renewed token needs no restart', () => {

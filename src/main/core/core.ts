@@ -48,6 +48,7 @@ import { upgradeIdentities } from './workspaces/discovery';
 import { WorkspaceChanges } from './workspaces/rebind';
 import type { WorktreeRecord } from './workspaces/store';
 import { RunJournal } from '../run-journal';
+import { CommandLink } from './command-link';
 import { ADAPTERS, CATALOG, isConversationId } from '../sessions/adapters';
 import type { Conversations, OptionsReader } from '../sessions/adapter';
 import type { Connector } from '../sessions/connector';
@@ -144,6 +145,8 @@ export interface CoreConfig {
   store?: StoreDeps;
   /** The profile folder, where the core keeps its stores. */
   profile: string;
+  /** For tests: the home folder the `corrallm` command is linked under, instead of the user's. */
+  home?: string;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
   /**
@@ -914,6 +917,16 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       await host.openExternal(url);
     },
   });
+  // The corrallm command's link (B30 C2): the launcher is the host's, given by the packaged app.
+  const command = new CommandLink({
+    home: config.home ?? homedir(),
+    searchPath: async () => (await environment()).PATH ?? '',
+    launcher: () => host.launcher(),
+    // The settings topic carries the link's state, for you alone.
+    changed: () => {
+      topics.changed('settings', 'you');
+    },
+  });
   const reveal = new FileRevealer({
     // Reveal the picked root, with the resolver excluding every unverified/foreign workspace.
     folderOf: (canvas) => directories.projectRoot(canvas),
@@ -1492,6 +1505,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           directories,
           files,
           settings,
+          command,
           api: () => api,
           links,
           notifications: {

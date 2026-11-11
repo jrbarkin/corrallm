@@ -30,6 +30,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "build:cli": "vite build --config vite.cli.config.mts",
+    "build:seed": "vite build --config vite.seed.config.mts",
     "corrallm": "node scripts/corrallm.mjs",
     "api:surface": "vitest run --project main src/shared/api/surface.test.ts --update",
     "prepare": "husky"

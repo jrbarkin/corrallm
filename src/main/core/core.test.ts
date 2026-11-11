@@ -75,6 +75,9 @@ async function start(sessions?: CoreConfig['sessions']): Promise<Core> {
   return core;
 }
 
+/** What you read of the command's link where the host has no launcher (B30 C2). */
+const NO_COMMAND = { state: 'unavailable', sentence: expect.any(String) as unknown };
+
 describe('createCore', () => {
   it('checks saved conversation ids with the registry’s stricter adapter shape', async () => {
     const nativeId = 'session:one';
@@ -247,6 +250,7 @@ describe('createCore', () => {
         api: { state: 'stopped', port: null },
         notifications: { enabled: true, lastDelivery: null },
         links: { state: 'ready', sites: [], builtIn: ['https://github.com'] },
+        command: NO_COMMAND,
       },
     });
   });
@@ -494,6 +498,58 @@ describe('the core’s database', () => {
 /** Whether a file's permissions can keep its owner from reading it: not on Windows, nor as root. */
 const CAN_DENY = process.platform !== 'win32' && process.getuid?.() !== 0;
 
+describe('app.command: the settings topic follows the command link (B30 C2)', () => {
+  it('publishes the link’s state to a window after an install and a remove, and nothing for a change that changes nothing', async () => {
+    const home = path.join(profile, 'command-home');
+    const launcher = path.join(profile, 'corrallm.app', 'Contents', 'Resources', 'bin', 'corrallm');
+    await mkdir(path.dirname(launcher), { recursive: true });
+    await mkdir(home);
+    await writeFile(launcher, '#!/bin/sh\n', { mode: 0o755 });
+    core = await createCore(
+      {
+        profile,
+        home,
+        app: { name: 'corrallm', version: '9.8.7' },
+        check: true,
+        distribution: 'local',
+        directoryResolver: legacyDirectories,
+        sessions: {
+          connectors: {},
+          environment: () => Promise.resolve({}),
+          callers: () => true,
+        },
+      },
+      { ...NO_DESKTOP, launcher: () => launcher },
+    );
+    const started = core;
+    const window = openWindow(new WindowPorts(started), 7);
+    const heard: string[] = [];
+    window.link.on('topic', (batch) => {
+      for (const change of batch) {
+        if (change.topic !== 'settings' || !('replace' in change)) continue;
+        const shown = change.replace as { command?: { link?: { is?: string } } };
+        heard.push(shown.command?.link?.is ?? 'none');
+      }
+    });
+    await window.link.request('call', 'topics.subscribe', { topic: 'settings' });
+    try {
+      const first = heard.length;
+      await started.call('app.command', { action: 'install' }, CALLERS.you);
+      await vi.waitFor(() => {
+        expect(heard.slice(first)).toEqual(['current']);
+      });
+      const second = await started.call('app.command', { action: 'install' }, CALLERS.you);
+      expect(second).toMatchObject({ ok: true, value: { changed: false } });
+      await started.call('app.command', { action: 'remove' }, CALLERS.you);
+      await vi.waitFor(() => {
+        expect(heard.slice(first)).toEqual(['current', 'absent']);
+      });
+    } finally {
+      window.close();
+    }
+  });
+});
+
 describe('settings.set: the default agent, yours alone (B12 C2)', () => {
   const file = () => path.join(profile, 'settings.json');
   /** A window subscribed to the settings topic: each state it is told. */
@@ -684,6 +740,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
         api: API,
         notifications: { enabled: false, lastDelivery: null },
         links: { state: 'ready', sites: [SECRET, LOCAL], builtIn: ['https://github.com'] },
+        command: NO_COMMAND,
       },
     });
     for (const party of READERS) {
@@ -700,7 +757,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
       () => undefined,
     );
     followed.stop();
-    expect(JSON.stringify(followed.snapshot)).not.toMatch(/intranet|notifications|links/);
+    expect(JSON.stringify(followed.snapshot)).not.toMatch(/intranet|notifications|links|command/);
     const yours = await started.topics.follow(CALLERS.you, 'settings', () => undefined);
     yours.stop();
     expect(JSON.stringify(yours.snapshot)).toContain(SECRET);
@@ -724,6 +781,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
               state: 'unavailable',
               sentence: 'corrallm couldn’t read the sites you said to open without asking.',
             },
+            command: NO_COMMAND,
           },
         });
         expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({

@@ -47,6 +47,7 @@ function dialogs(picked: string | null) {
     askOpenLink: () => Promise.resolve({ open: false, always: false }),
     openExternal: () => Promise.resolve(null),
     showFile: () => Promise.resolve(null),
+    launcher: () => null,
     notify: () => Promise.resolve('unsupported' as const),
     pickCanvasToOpen: vi.fn<(window: number) => Promise<string | null>>(pick),
     pickCanvasToSave: vi.fn<(window: number, defaultPath: string) => Promise<string | null>>(pick),

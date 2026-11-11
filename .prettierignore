@@ -3,6 +3,7 @@ pnpm-lock.yaml
 src/shared/api/surface.snap.json
 .vite/
 dist-cli/
+dist-check/
 out/
 coverage/
 playwright-report/

@@ -17,7 +17,8 @@ collect_installers() {
   mkdir -p "$artifacts/release"
   cp "${debs[0]}" "${rpms[0]}" "$artifacts/release/"
   cp "$(dirname "$0")"/linux-{steps,smoke,installed,versions,keep}.sh \
-    "$(dirname "$0")/notices-check.sh" "$artifacts/"
+    "$(dirname "$0")/notices-check.sh" "$(dirname "$0")/headless-smoke.sh" "$artifacts/"
+  cp dist-check/seed-profile.cjs "$artifacts/"
   chmod -R a+rX "$artifacts"
 }
 
@@ -45,12 +46,15 @@ case "$mode" in
   e2e) e2e_tests "$@" ;;
   smoke)
     step 'Package Linux app' pnpm package --platform linux --arch "$arch"
+    step 'Build the headless check seeding bundle (test-only, never packed)' pnpm build:seed
     step 'Packaged Linux checks' bash "$(dirname "$0")/linux-smoke.sh" \
-      "out/corrallm-linux-$arch/corrallm" "out/corrallm-linux-$arch/resources/bin/corrallm"
+      "out/corrallm-linux-$arch/corrallm" "out/corrallm-linux-$arch/resources/bin/corrallm" \
+      "$PWD/dist-check/seed-profile.cjs"
     ;;
   packages)
     # Forge 8 names our Maker instances deb/rpm. Module names create NEW default instances,
     # losing the configured launcher, desktop template, dependencies and patched RPM spec.
+    step 'Build the headless check seeding bundle (test-only, never packed)' pnpm build:seed
     step 'Make deb and rpm' pnpm make --platform linux --arch "$arch" \
       --targets deb,rpm
     step 'Collect installers' collect_installers

@@ -396,9 +396,12 @@ it('makes only the configured Linux makers and collects their installers and run
     await mkdir(out, { recursive: true });
     await writeFile(path.join(out, `test.${kind}`), kind);
   }
-  await writeFile(path.join(folder, 'pnpm'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$PNPM_LOG"\n', {
-    mode: 0o755,
-  });
+  await writeFile(
+    path.join(folder, 'pnpm'),
+    // `pnpm build:seed` makes the test-only seeding bundle the installed check carries along.
+    '#!/bin/bash\nprintf "%s\\n" "$*" >> "$PNPM_LOG"\n[ "$1" = build:seed ] && mkdir -p dist-check && printf seed > dist-check/seed-profile.cjs\nexit 0\n',
+    { mode: 0o755 },
+  );
   await exec(
     'bash',
     [path.join(root, 'scripts/lib/linux-workspace.sh'), 'packages', 'x64', artifacts],
@@ -410,8 +413,14 @@ it('makes only the configured Linux makers and collects their installers and run
   expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual([
     'install --frozen-lockfile',
     'exec install-electron',
+    'build:seed',
     'make --platform linux --arch x64 --targets deb,rpm',
   ]);
+  // The headless check and its test-only seeding bundle travel beside the installers.
+  expect(await readFile(path.join(artifacts, 'seed-profile.cjs'), 'utf8')).toBe('seed');
+  expect(await readFile(path.join(artifacts, 'headless-smoke.sh'), 'utf8')).toContain(
+    'Packaged headless check',
+  );
   expect(await readFile(path.join(artifacts, 'corrallm.deb'), 'utf8')).toBe('deb');
   expect(await readFile(path.join(artifacts, 'corrallm.rpm'), 'utf8')).toBe('rpm');
   expect(await readFile(path.join(artifacts, 'linux-installed.sh'), 'utf8')).toContain(
