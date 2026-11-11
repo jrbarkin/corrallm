@@ -20,7 +20,6 @@ const BLOCKING: Readonly<Record<string, number>> = {
   'src/main/core/leads.ts': 3,
   'src/main/core/selftest.ts': 1,
   'src/main/core/workspaces/merge-journal.ts': 1,
-  'src/main/core/workspaces/store.ts': 1,
   'src/main/memory.ts': 2,
 };
 

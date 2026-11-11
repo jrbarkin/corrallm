@@ -291,16 +291,10 @@ describe.skipIf(process.platform === 'win32')('a repository kept in the form bef
 
   /** As that corrallm kept it: the repository by `identity`, and its workspaces' jobs expecting it. */
   async function keepAs(repository: RepositoryRecord, identity: string): Promise<void> {
-    await made.store.writeBlocking(() => {
-      made.store
-        .prepare('UPDATE repository SET identity = ? WHERE id = ?')
-        .run(identity, repository.id);
-      made.store
-        .prepare(
-          `UPDATE worktree_job SET expected_identity = ?
-           WHERE workspace_id IN (SELECT id FROM worktree WHERE repository_id = ?)`,
-        )
-        .run(identity, repository.id);
+    await made.workspaces.write((w) => {
+      const kept = w.repository(repository.id);
+      if (kept === undefined) throw new Error('No repository.');
+      w.reidentify(repository.id, kept.identity, identity);
     });
   }
 

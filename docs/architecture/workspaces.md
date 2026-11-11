@@ -2,7 +2,7 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
-B9a gives independent work independent checkouts: each canvas's outermost group, or lone agent, works in a Git worktree of its own of the repository picked as the canvas's project folder. The records are schema 3's (see [Store](store.md)); this page is the Git and filesystem side, in `src/main/core/workspaces/`. Q32 is answered yes (Claude Code trusts a worktree inside a trusted folder), so new checkouts live inside the picked checkout.
+B9a gives independent work independent checkouts: each canvas's outermost group, or lone agent, works in a Git worktree of its own of the repository picked as the canvas's project folder. The records are schema 3's (see [Store](store.md)), kept in memory by WorkspaceStore as they are on disk: a read is never SQL, and a write is planned (it checks and changes memory, gives its statements, and puts memory back if they fail); this page is the Git and filesystem side, in `src/main/core/workspaces/`. Q32 is answered yes (Claude Code trusts a worktree inside a trusted folder), so new checkouts live inside the picked checkout.
 
 ## Prepared branch review contracts
 

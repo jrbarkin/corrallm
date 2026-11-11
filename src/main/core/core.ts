@@ -436,6 +436,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     undefined,
     (canvas: CanvasId): boolean => documents.unsaved(canvas),
     isConversationId,
+    // A canvas deleted takes its project link with it, which the workspace store keeps in memory.
+    (canvas: CanvasId): void => {
+      workspaceStore.canvasForgotten(canvas);
+    },
   );
   // The reviews of canvas files changed on disk (B9 Design §5): what waits on a canvas is read
   // again as one is raised or settled.

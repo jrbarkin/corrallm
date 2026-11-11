@@ -12,7 +12,7 @@ import { CATALOG } from '../../sessions/adapters';
 import { Documents } from '../canvas/documents';
 import { commitDocument } from '../canvas/test-documents';
 import { unopened } from '../store/store';
-import type { Store } from '../store/store';
+import type { Database, Store } from '../store/store';
 import { messagesIn, onDisk, openTestStore, refuseWrites } from '../store/test-store';
 import type { Connection } from '../store/sqlite';
 import { WorkspaceStore, WorkspaceStoreError } from './store';
@@ -915,9 +915,11 @@ describe('WorkspaceStore', () => {
         )
         .run(J1, W1);
     });
-    expect(() => workspaces.job(J1)).toThrow(/worktree_job .*can’t be read/);
-    expect(() => workspaces.openJobs()).toThrow(/worktree_job .*can’t be read/);
-    expect(() => workspaces.jobsOf(W1)).toThrow(/worktree_job .*can’t be read/);
+    // Read as the store is made, from what is on disk.
+    const made = new WorkspaceStore({ store, now: () => now });
+    expect(() => made.job(J1)).toThrow(/worktree_job .*can’t be read/);
+    expect(() => made.openJobs()).toThrow(/worktree_job .*can’t be read/);
+    expect(() => made.jobsOf(W1)).toThrow(/worktree_job .*can’t be read/);
   });
 
   it('never reuses a cleared plan or deleted binding generation, even after a restart and a clock rollback', async () => {
@@ -1049,29 +1051,41 @@ describe('WorkspaceStore', () => {
       w.setProjectCommand(REPOSITORY, 'npm ci', 'posix');
     });
     const cases = [
-      ['repository', 'picked_root', 'relative', () => workspaces.repository(REPOSITORY)],
-      ['repository', 'identity', 'bad\nidentity', () => workspaces.repository(REPOSITORY)],
-      ['worktree', 'branch_ref', '--help', () => workspaces.worktree(W1)],
-      ['worktree', 'base_oid', 'HEAD', () => workspaces.worktree(W1)],
-      ['worktree', 'path', 'relative', () => workspaces.worktree(W1)],
-      ['agent_worktree', 'agent_id', '', () => workspaces.bindingsOf(CANVAS)],
-      ['worktree_job', 'phase', 'Not a phase', () => workspaces.job(J1)],
-      ['worktree_job', 'payload', JSON.stringify('x'.repeat(70_000)), () => workspaces.job(J1)],
-      ['worktree_setup', 'spec_hash', 'not a hash', () => workspaces.setup(W1)],
-      ['worktree_setup', 'command_snapshot', 'echo a\necho b', () => workspaces.setup(W1)],
+      ['repository', 'picked_root', 'relative', (w: WorkspaceStore) => w.repository(REPOSITORY)],
+      ['repository', 'identity', 'bad\nidentity', (w: WorkspaceStore) => w.repository(REPOSITORY)],
+      ['worktree', 'branch_ref', '--help', (w: WorkspaceStore) => w.worktree(W1)],
+      ['worktree', 'base_oid', 'HEAD', (w: WorkspaceStore) => w.worktree(W1)],
+      ['worktree', 'path', 'relative', (w: WorkspaceStore) => w.worktree(W1)],
+      ['agent_worktree', 'agent_id', '', (w: WorkspaceStore) => w.bindingsOf(CANVAS)],
+      ['worktree_job', 'phase', 'Not a phase', (w: WorkspaceStore) => w.job(J1)],
+      [
+        'worktree_job',
+        'payload',
+        JSON.stringify('x'.repeat(70_000)),
+        (w: WorkspaceStore) => w.job(J1),
+      ],
+      ['worktree_setup', 'spec_hash', 'not a hash', (w: WorkspaceStore) => w.setup(W1)],
+      ['worktree_setup', 'command_snapshot', 'echo a\necho b', (w: WorkspaceStore) => w.setup(W1)],
       [
         'project_setup',
         'always_spec_hash',
         'not a hash',
-        () => workspaces.projectSetup(REPOSITORY),
+        (w: WorkspaceStore) => w.projectSetup(REPOSITORY),
       ],
-      ['project_setup', 'command', 'echo a\necho b', () => workspaces.projectSetup(REPOSITORY)],
+      [
+        'project_setup',
+        'command',
+        'echo a\necho b',
+        (w: WorkspaceStore) => w.projectSetup(REPOSITORY),
+      ],
     ] as const;
     for (const [table, column, bad, read] of cases) {
       await store.writeBlocking(() => {
         const previous = store.prepare(`SELECT ${column} AS value FROM ${table}`).get()?.value;
         store.prepare(`UPDATE ${table} SET ${column} = ?`).run(bad);
-        expect.soft(read, `${table}.${column}`).toThrow(/can’t be read/);
+        // Read as the store is made, from what is on disk.
+        const made = new WorkspaceStore({ store, now: () => now });
+        expect.soft(() => read(made), `${table}.${column}`).toThrow(/can’t be read/);
         store.prepare(`UPDATE ${table} SET ${column} = ?`).run(previous ?? null);
       });
     }
@@ -1084,5 +1098,204 @@ describe('WorkspaceStore', () => {
     expect(() => none.openJobs()).toThrow(why);
     await expect(none.write((w) => w.addRepository(REPO))).rejects.toThrow(why);
     expect(WorkspaceStoreError).toBeDefined();
+  });
+});
+
+describe('WorkspaceStore’s records in memory', () => {
+  /** A store whose reads, once armed, fail: every record must already be in memory. */
+  function guarded(): { database: Database; arm: () => void } {
+    let armed = false;
+    const database = new Proxy(store, {
+      get(target, key) {
+        if (key === 'prepare') {
+          return (sql: string) => {
+            if (armed) throw new Error(`It read SQL: ${sql}`);
+            return target.prepare(sql);
+          };
+        }
+        const value: unknown = Reflect.get(target, key);
+        return typeof value === 'function' ? (value as () => void).bind(target) : value;
+      },
+    });
+    return {
+      database,
+      arm: () => {
+        armed = true;
+      },
+    };
+  }
+
+  it('answers every read from memory once made, whatever was written before and since', async () => {
+    await withWorktrees(W1, W2);
+    await workspaces.write((w) => {
+      w.bindCanvas(CANVAS, REPOSITORY);
+      w.bind(CANVAS, 'a', W1);
+      w.plan(CANVAS, 'a', 'group/team');
+      w.recordJob({
+        id: J1,
+        workspace: W1,
+        kind: 'create',
+        phase: 'intent',
+        generation: 1,
+        payload: { a: 1 },
+      });
+      w.offerSetup(W1, {
+        command: 'npm ci',
+        source: 'detected',
+        specHash: HASH,
+        copyManifestHash: HASH,
+      });
+      w.setProjectCommand(REPOSITORY, 'npm ci', 'posix');
+    });
+    const { database, arm } = guarded();
+    const made = new WorkspaceStore({ store: database, now: () => now });
+    arm();
+    const reads = (w: WorkspaceStore) => ({
+      repository: w.repository(REPOSITORY),
+      repositories: w.repositories(),
+      at: w.repositoryAt('/work/app', 'repository identity'),
+      canvas: w.canvasRepository(CANVAS),
+      worktree: w.worktree(W1),
+      of: w.worktreesOf(CANVAS),
+      in: w.worktreesIn(['creating', 'ready']),
+      active: w.activeWorktree(CANVAS, REPOSITORY, `agent/${W2}`),
+      binding: w.binding(CANVAS, 'a'),
+      bindingsOf: w.bindingsOf(CANVAS),
+      bindingsTo: w.bindingsTo(CANVAS, W1),
+      job: w.job(J1),
+      open: w.openJob(W1, 'create'),
+      openJobs: w.openJobs(),
+      jobsOf: w.jobsOf(W1),
+      setup: w.setup(W1),
+      project: w.projectSetup(REPOSITORY),
+    });
+    expect(reads(made)).toEqual(reads(workspaces));
+    expect(reads(made).binding).toMatchObject({ desired: { owner: 'group/team' } });
+    // And writes since are read from memory too.
+    await made.write((w) => {
+      w.transition(W1, { from: 'creating', to: 'setup' });
+    });
+    expect(made.worktree(W1)?.state).toBe('setup');
+  });
+
+  it('has a canvas’s project link no more once canvas memory forgot the canvas', async () => {
+    const wired = new CanvasMemory(
+      store,
+      200,
+      () => false,
+      () => true,
+      (canvas) => {
+        workspaces.canvasForgotten(canvas);
+      },
+    );
+    await withWorktrees();
+    await workspaces.write((w) => w.bindCanvas(CANVAS, REPOSITORY));
+    expect(workspaces.canvasRepository(CANVAS)).toMatchObject({ repository: REPOSITORY });
+    await expect(wired.forget(CANVAS)).resolves.toBe(true);
+    expect(workspaces.canvasRepository(CANVAS)).toBeUndefined();
+    expect(onDiskCount('canvas_repository')).toBe(0);
+    // Opened again, it has no link, and its project generation begins again.
+    await store.write(() => {
+      wired.ensure(CANVAS);
+    });
+    expect(workspaces.canvasRepository(CANVAS)).toBeUndefined();
+    expect((await workspaces.write((w) => w.bindCanvas(CANVAS, REPOSITORY))).generation).toBe(1);
+  });
+
+  it('puts the link back if the write that forgot the canvas failed', async () => {
+    const wired = new CanvasMemory(
+      store,
+      200,
+      () => false,
+      () => true,
+      (canvas) => {
+        workspaces.canvasForgotten(canvas);
+      },
+    );
+    await withWorktrees();
+    await workspaces.write((w) => w.bindCanvas(CANVAS, REPOSITORY));
+    const allow = refuseWrites(profile, 'canvas', 'The disk is full');
+    try {
+      await expect(wired.forget(CANVAS)).rejects.toThrow('The disk is full');
+    } finally {
+      allow();
+    }
+    expect(workspaces.canvasRepository(CANVAS)).toMatchObject({ repository: REPOSITORY });
+  });
+
+  it('leaves every record as it was when a write is refused', async () => {
+    await withWorktrees(W1);
+    const binding = await workspaces.write((w) => {
+      w.bindCanvas(CANVAS, REPOSITORY);
+      return w.bind(CANVAS, 'a', W1);
+    });
+    const before = {
+      repositories: workspaces.repositories(),
+      canvas: workspaces.canvasRepository(CANVAS),
+      worktrees: workspaces.worktreesOf(CANVAS),
+      bindings: workspaces.bindingsOf(CANVAS),
+      jobs: workspaces.openJobs(),
+    };
+    const release = refuseWrites(profile, 'worktree_job', 'The disk is full');
+    try {
+      await expect(
+        workspaces.write((w) => {
+          w.addRepository({ ...REPO, id: W3, realRoot: '/work/other' });
+          w.bindCanvas(CANVAS, W3);
+          w.transition(W1, { from: 'creating', to: 'setup' });
+          w.advance(W1);
+          w.plan(CANVAS, 'a', 'group/team');
+          w.recordJob({
+            id: J1,
+            workspace: W1,
+            kind: 'create',
+            phase: 'intent',
+            generation: 1,
+            payload: {},
+          });
+        }),
+      ).rejects.toThrow('The disk is full');
+    } finally {
+      release();
+    }
+    expect({
+      repositories: workspaces.repositories(),
+      canvas: workspaces.canvasRepository(CANVAS),
+      worktrees: workspaces.worktreesOf(CANVAS),
+      bindings: workspaces.bindingsOf(CANVAS),
+      jobs: workspaces.openJobs(),
+    }).toEqual(before);
+    // The generations it numbered on from are given again, as they would be.
+    const again = await workspaces.write((w) => w.plan(CANVAS, 'a', 'group/team'));
+    expect(again.desired?.generation).toBeGreaterThan(binding.generation);
+    expect(workspaces.worktree(W1)?.generation).toBe(1);
+  });
+
+  it('fails exactly the reads that would return a record it can’t read', async () => {
+    await withWorktrees(W1, W2);
+    await store.writeBlocking(() => {
+      for (const [id, workspace, kind] of [
+        [J1, W1, 'teleport'],
+        [J2, W2, 'create'],
+      ]) {
+        store.run(
+          `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, intent_hash,
+             created_at, updated_at)
+           VALUES (?, ?, ?, 'intent', 1, '{}', ?, 1, 1)`,
+          id ?? null,
+          workspace ?? null,
+          kind ?? null,
+          'b'.repeat(64),
+        );
+      }
+    });
+    // Read as it is made, from what is on disk.
+    const made = new WorkspaceStore({ store, now: () => now });
+    expect(() => made.job(J1)).toThrow(/worktree_job .*can’t be read/);
+    expect(() => made.jobsOf(W1)).toThrow(/worktree_job .*can’t be read/);
+    expect(() => made.openJobs()).toThrow(/worktree_job .*can’t be read/);
+    expect(made.job(J2)).toMatchObject({ id: J2, workspace: W2, kind: 'create' });
+    expect(made.jobsOf(W2)).toHaveLength(1);
+    expect(made.worktree(W1)).toMatchObject({ id: W1 });
   });
 });

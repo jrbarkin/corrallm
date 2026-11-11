@@ -228,13 +228,11 @@ describe('a spawn outside a shared group', () => {
     committed(a.cwd, 'later.txt', 'after the spawn\n');
 
     // As the next core starts: a provisioner of its own, over what is on disk.
-    const restarted = new Provisioner({
-      workspaces: new WorkspaceStore({ store: t.store }),
-      git: t.git,
-      profile: PROFILE_ID,
-    });
+    const workspaces = new WorkspaceStore({ store: t.store });
+    const restarted = new Provisioner({ workspaces, git: t.git, profile: PROFILE_ID });
     await restarted.reconcile();
-    const tree = treeOf('b');
+    const bound = workspaces.binding(CANVAS, 'b');
+    const tree = bound === undefined ? undefined : workspaces.worktree(bound.workspace);
     expect(tree).toMatchObject({ state: 'setup', baseOid: head, forkedFrom: a.tree.id });
     if (tree === undefined) throw new Error('No fork');
     expect(readFileSync(path.join(tree.path, 'committed.txt'), 'utf8')).toBe('kept\n');
