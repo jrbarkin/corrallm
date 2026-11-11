@@ -36,6 +36,8 @@ import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
 import { asHuman } from './gui';
 import { createCore } from './core';
+import { SYSTEM_DEPS } from './store/store';
+import type { StoreDeps } from './store/store';
 import type { Core, CoreConfig } from './core';
 import { isActive } from './delivery/messages';
 import { STORE_FILE } from './store/open';
@@ -114,6 +116,15 @@ const LINKS = [
   ['builder', 'checker'],
 ];
 
+/**
+ * The database on the real clock but a log flush that returns at once, not the drive's fsync: what
+ * these tests read back is written to the log either way, and every turn takes several commits, so
+ * a slow drive would run one past the one second each wait below gives it.
+ */
+const store: StoreDeps = {
+  ...SYSTEM_DEPS,
+  flush: () => Promise.resolve(),
+};
 let profile: string;
 let project: string;
 let core: Core | undefined;
@@ -244,6 +255,7 @@ async function start(
       distribution: 'local',
       directoryResolver: legacyDirectories,
       locale: 'en-GB',
+      store,
       ...(watchdog === undefined ? {} : { watchdog }),
       ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
       ...(leads === undefined ? {} : { leads }),
@@ -2203,10 +2215,43 @@ async function startAtTrust() {
   return { runs, start: () => start({ claude: connector }) };
 }
 
+/**
+ * A fake whose turn for a "/question" message, the one `receive` and the tests below send to have a
+ * turn going, is held until its real interrupt (as a take-back or a kill does), however many agents
+ * each have one. Every other turn ends at once: none races a pause the test must beat, or runs
+ * past the one second its wait gives it.
+ */
+function heldReceipts(): FakeConnector {
+  const gates = new Map<string, PromiseWithResolvers<undefined>>();
+  const gate = (id: string) => {
+    const made = gates.get(id) ?? Promise.withResolvers<undefined>();
+    gates.set(id, made);
+    return made;
+  };
+  const fake = fakeConnector({
+    adapter: 'codex',
+    step: ({ id, text }) =>
+      text.includes('/question') ? gate(id).promise.then(() => undefined) : Promise.resolve(),
+  });
+  const start = fake.start.bind(fake);
+  vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+    const session = await start(spec, host);
+    const interrupt = session.interrupt.bind(session);
+    session.interrupt = () => {
+      const stopped = interrupt();
+      for (const { id } of fake.sessions.find((one) => one === session)?.sent ?? [])
+        gate(id).resolve(undefined);
+      return stopped;
+    };
+    return session;
+  });
+  return fake;
+}
+
 describe('telling an agent of a withdrawal after receipt', () => {
   beforeEach(() => {
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
-    terminal = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = heldReceipts();
+    terminal = heldReceipts();
   });
 
   /** Keep the original and then its separate note running until their real interrupts. */
@@ -2805,7 +2850,7 @@ function sentTo(connector: FakeConnector, agent: string): string[] {
 
 describe('telling an agent of a kill after receipt', () => {
   beforeEach(() => {
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = heldReceipts();
   });
 
   /** Builder and Helper in the group Team. */
@@ -3028,13 +3073,13 @@ describe('telling an agent of a kill after receipt', () => {
         disk.prepare('SELECT withdrawal FROM message WHERE id = ?').get(id),
       ),
     ).toEqual({ withdrawal: JSON.stringify({ text: note }) });
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
     // A note starts no turn by itself.
     expect(sent(appServer)).toEqual([]);
     expect(await next('builder')).toContain(note);
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     expect(await next('builder')).not.toContain(id);
   });
