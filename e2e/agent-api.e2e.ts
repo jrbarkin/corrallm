@@ -175,7 +175,8 @@ test('fake agents ask you and each other, and continue their tasks on the answer
     await expect(world.row('planner', 'choose')).toContainText('waiting for an answer', {
       timeout: 20_000,
     });
-    expect(await world.calls('plan-ask-you')).toMatchObject([{ tool: 'ask', ok: true }]);
+    // The fake logs a call once corrallm has answered it, which can trail what the core shows.
+    await expect.poll(() => world.calls('plan-ask-you')).toMatchObject([{ tool: 'ask', ok: true }]);
     await openNeeds(page);
     const needs = page.getByRole('complementary', { name: 'Needs you' });
     await expect(needs.getByText('Which plan do you want?')).toBeVisible();
@@ -189,8 +190,14 @@ test('fake agents ask you and each other, and continue their tasks on the answer
     await expect(world.row('planner', 'size')).toHaveAttribute('data-run', 'succeeded', {
       timeout: 20_000,
     });
-    expect(await world.calls('plan-ask-builder')).toMatchObject([{ tool: 'ask', ok: true }]);
-    expect(await world.calls('Question from agent')).toMatchObject([{ tool: 'reply', ok: true }]);
+    // The fake logs a call once corrallm has answered it, which can trail what the core shows.
+    await expect
+      .poll(() => world.calls('plan-ask-builder'))
+      .toMatchObject([{ tool: 'ask', ok: true }]);
+    // The fake logs a call once corrallm has answered it, which can trail what the core shows.
+    await expect
+      .poll(() => world.calls('Question from agent'))
+      .toMatchObject([{ tool: 'reply', ok: true }]);
     const prompts = await world.sdkPrompts();
     expect(prompts.filter((text) => text.includes('Question from agent "Planner"'))).toHaveLength(
       1,
