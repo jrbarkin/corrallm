@@ -1,0 +1,94 @@
+{"t":0,"kind":"argv","data":["--no-daemon","-C","/work/smoke/p2","-c","projects={\"/work/smoke/p2\"={trust_level=\"trusted\"}}","-c","hooks.SessionStart=[{hooks=[{type=\"command\",command=\"/bin/sh -c 'curl -s -o /dev/null --max-time 5 -X POST -H \\\"Content-Type: application/json\\\" --data-binary @- http://127.0.0.1:<port>/hook; exit 0' >/dev/null 2>&1\",timeout=10}]}]","-c","hooks.UserPromptSubmit=[{hooks=[{type=\"command\",command=\"/bin/sh -c 'curl -s -o /dev/null --max-time 5 -X POST -H \\\"Content-Type: application/json\\\" --data-binary @- http://127.0.0.1:<port>/hook; exit 0' >/dev/null 2>&1\",timeout=10}]}]","-c","hooks.Stop=[{hooks=[{type=\"command\",command=\"/bin/sh -c 'curl -s -o /dev/null --max-time 5 -X POST -H \\\"Content-Type: application/json\\\" --data-binary @- http://127.0.0.1:<port>/hook; exit 0' >/dev/null 2>&1\",timeout=10}]}]","-c","hooks.Interrupt=[{hooks=[{type=\"command\",command=\"/bin/sh -c 'curl -s -o /dev/null --max-time 5 -X POST -H \\\"Content-Type: application/json\\\" --data-binary @- http://127.0.0.1:<port>/hook; exit 0' >/dev/null 2>&1\",timeout=2}]}]","-c","hooks.state={\"/<session-flags>/config.toml:session_start:0:0\"={trusted_hash=\"sha256:05c6f7e1632cab1e7c89d2de4184d19eb00991d64e29e04e849203fd606e599d\"},\"/<session-flags>/config.toml:user_prompt_submit:0:0\"={trusted_hash=\"sha256:3917a53c6409f595aece649222d181da8ca80e4a185b19dc7e7bbccb17156722\"},\"/<session-flags>/config.toml:stop:0:0\"={trusted_hash=\"sha256:0f49dd70014d4b595ff6cd804e185c38c01b555958ed1a3635d0b30756aa8e99\"},\"/<session-flags>/config.toml:interrupt:0:0\"={trusted_hash=\"sha256:2246a64b8d08ab0991b95ade8a3263ce96db5f44b955491ab99a7a32be3713c5\"}}","-c","tui.terminal_title=[\"context-used\",\"activity\",\"run-state\"]","-c","check_for_update_on_startup=false","-c","tui.auto_recap=false","-s","read-only","-a","on-request","-c","model_providers.stub={name=\"stub\",base_url=\"http://127.0.0.1:<port>/v1\",wire_api=\"responses\",request_max_retries=0,stream_max_retries=0}","-c","model_provider=\"stub\"","-c","model=\"stub-model\""]}
+{"t":0,"kind":"out","data":"\u001b[?2004h"}
+{"t":1,"kind":"out","data":"\u001b[>4;0m\u001b[>7u\u001b[?1004h\u001b[6n\u001b]10;?\u001b\\\u001b]11;?\u001b\\\u001b[?u\u001b[c"}
+{"t":259,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[?1049h\u001b[>4;0m\u001b[>7u"}
+{"t":261,"kind":"out","data":"\u001b[?1007l\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?25l\u001b[1;1H\u001b[J"}
+{"t":267,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[2;3H\u001b[38;2;99;168;248;49m>_ \u001b[1m\u001b[39;49mOpenAI Codex\u001b[22m\u001b[2m\u001b[2m (v0.162.1)\u001b[3;6Hloading\u001b[17;1H\u001b[22m\u001b[1m›\u001b[17;3H\u001b[22m\u001b[2m\u001b[2mAsk Codex to do anything\u001b[20;3H\u001b[22m\u001b[1m?\u001b[20;5H\u001b[22mfor\u001b[20;9Hshortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[1;1H\u001b[0 q\u001b[1;1H \u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l\u001b[?2026l"}
+{"t":272,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":272,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":274,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":287,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":319,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":446,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[3;6H\u001b[2m/work/smoke/p2/p2\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":448,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H"}
+{"t":449,"kind":"out","data":"\u001b[?25h\u001b[?2026l"}
+{"t":450,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":506,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":543,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":4520,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":4528,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":4841,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":4981,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h"}
+{"t":4981,"kind":"out","data":"\u001b[?2026l"}
+{"t":4985,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":4995,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5103,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5104,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5168,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5208,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5231,"kind":"out","data":"\u001b]0;Context 0% used | Ready\u0007"}
+{"t":5231,"kind":"note","data":"pasted"}
+{"t":5234,"kind":"in","data":"do the thing"}
+{"t":5235,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5245,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[17;15H\u001b[0m\u001b[49m\u001b[K\u001b[20;2H\u001b[0m\u001b[49m\u001b[K\u001b[17;3Hdo the thing\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5245,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5253,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[19;3H\u001b[38;2;246;226;183;49mstub-model default\u001b[19;22H\u001b[39;49m·\u001b[19;24H\u001b[38;2;171;223;167;49m/work/smoke/p2xxxxxx/c13/c13-code…\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5258,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5436,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5671,"kind":"out","data":"\u001b]0;Context 0% used ⠼ Starting\u0007"}
+{"t":5672,"kind":"out","data":"\u001b]0;Context 0% used | Ready\u0007"}
+{"t":5673,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5683,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5796,"kind":"in","data":"\\r"}
+{"t":5816,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;15H\u001b[?25h\u001b[?2026l"}
+{"t":5833,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[6;1H\u001b[1m\u001b[2m› \u001b[22m\u001b[22mdo\u001b[6;6Hthe\u001b[6;10Hthing\u001b[17;3H\u001b[2mAsk Codex to do anything\u001b[20;3H\u001b[22m\u001b[1m?\u001b[20;5H\u001b[22mfor\u001b[20;9Hshortcuts\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5953,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[20;36H⚠\u001b[20;38H\u001b[38;2;196;167;103;49m1 warning\u001b[20;48H\u001b[39;49m·\u001b[20;50H\u001b[1mf2\u001b[20;53H\u001b[22mto\u001b[20;56Hview\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5959,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":5972,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6019,"kind":"out","data":"\u001b]0;Context 0% used ⠧ Working\u0007"}
+{"t":6090,"kind":"out","data":"\u001b]0;Context 0% used ⠇ Working\u0007\u001b[?2026h\u001b[?25l\u001b[14;1H\u001b[1m\u001b[38;2;128;128;128;49m•\u001b[14;3H\u001b[22m\u001b[2m\u001b[2m\u001b[39;49mWorking\u001b[14;11H(0s • \u001b[22m\u001b[1mesc\u001b[22m\u001b[2m\u001b[2m to interrupt)\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6123,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6160,"kind":"out","data":"\u001b]0;Context 0% used ⠏ Working\u0007\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6199,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6251,"kind":"out","data":"\u001b]0;Context 0% used ⠋ Working\u0007"}
+{"t":6251,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6279,"kind":"hook","data":{"ok":true,"ev":{"session_id":"01a1c3ad-f87f-7002-8bb4-4adf1107ddaf","transcript_path":"/home/user/.codex/sessions/2026/11/09/rollout-2026-11-09T18-18-40-01a1c3ad-f87f-7002-8bb4-4adf1107ddaf.jsonl","cwd":"/work/smoke/p2","hook_event_name":"SessionStart","model":"stub-model","permission_mode":"default","source":"startup"}}}
+{"t":6319,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6321,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6367,"kind":"out","data":"\u001b]0;Context 0% used ⠙ Working\u0007\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6402,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6440,"kind":"out","data":"\u001b]0;Context 0% used ⠹ Working\u0007"}
+{"t":6441,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6452,"kind":"hook","data":{"ok":true,"ev":{"session_id":"01a1c3ad-f87f-7002-8bb4-4adf1107ddaf","turn_id":"01a1c3ad-fae4-7102-8eae-c7f0a24caacf","transcript_path":"/home/user/.codex/sessions/2026/11/09/rollout-2026-11-09T18-18-40-01a1c3ad-f87f-7002-8bb4-4adf1107ddaf.jsonl","cwd":"/work/smoke/p2","hook_event_name":"UserPromptSubmit","model":"stub-model","permission_mode":"default","prompt":"do the thing"}}}
+{"t":6513,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6514,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6528,"kind":"out","data":"\u001b]0;Context 0% used ⠸ Working\u0007"}
+{"t":6537,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6596,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6644,"kind":"out","data":"\u001b]0;Context 0% used ⠼ Working\u0007"}
+{"t":6645,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6678,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[9;1H\u001b[1m\u001b[38;2;128;128;128;49m•\u001b[9;3H\u001b[39;49mRunning\u001b[9;11H\u001b[22m\u001b[38;2;137;180;250;49mtouch\u001b[38;2;205;214;244;49m one.txt\u001b[14;1H\u001b[1m\u001b[38;2;138;138;138;49m•\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6694,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6708,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":6835,"kind":"out","data":"\u001b]0;[ . ] Action Required | Context 0% used\u0007"}
+{"t":6838,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[2;2H\u001b[0m\u001b[49m\u001b[K\u001b[3;24H\u001b[0m\u001b[49m\u001b[K\u001b[9;2H\u001b[0m\u001b[49m\u001b[K\u001b[14;2H\u001b[0m\u001b[49m\u001b[K\u001b[17;25H\u001b[0m\u001b[49m\u001b[K\u001b[19;2H\u001b[0m\u001b[49m\u001b[K\u001b[3;1H\u001b[1m\u001b[38;2;128;128;128;49m•\u001b[3;3H\u001b[39;49mRunning\u001b[22m \u001b[38;2;137;180;250;49mtouch\u001b[38;2;205;214;244;49m one.txt\u001b[6;1H\u001b[39;49m  \u001b[1mWould you like to run the following command?\u001b[8;3H\u001b[22mEnvironment:\u001b[8;16H\u001b[1mlocal\u001b[9;1H\u001b[22m \u001b[10;3HReason:\u001b[10;11H\u001b[3mNeeds to write a file.\u001b[12;3H\u001b[23m$\u001b[12;5H\u001b[38;2;137;180;250;49mtouch\u001b[38;2;205;214;244;49m one.txt\u001b[14;1H\u001b[39;49m \u001b[15;1H\u001b[7m\u001b[1m› 1. Yes, proceed (y)                                       \u001b[16;3H\u001b[27m\u001b[22m2.\u001b[16;6HYes,\u001b[16;11Hand\u001b[16;15Hdon't\u001b[16;21Hask\u001b[16;25Hagain\u001b[16;31Hfor\u001b[16;35Hcommands\u001b[16;44Hthat\u001b[16;49Hstart\u001b[16;55Hwith\u001b[17;1H \u001b[17;3H   `touch one.txt` (\u001b[1mp\u001b[22m)\u001b[18;3H3.\u001b[18;6HNo,\u001b[18;10Hand\u001b[18;14Htell\u001b[18;19HCodex\u001b[18;25Hwhat\u001b[18;30Hto\u001b[18;33Hdo\u001b[18;36Hdifferently\u001b[18;48H(\u001b[1mesc\u001b[22m)\u001b[20;3H\u001b[2mPress \u001b[22m\u001b[1menter\u001b[22m\u001b[2m\u001b[2m to confirm or \u001b[22m\u001b[1mesc\u001b[22m\u001b[2m\u001b[2m to cancel                   \u001b[39m\u001b[49m\u001b[0m\u001b["}
+{"t":6840,"kind":"out","data":"?2026l\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[?2026l"}
+{"t":7924,"kind":"out","data":"\u001b]0;[ ! ] Action Required | Context 0% used\u0007"}
+{"t":8340,"kind":"note","data":"approve it"}
+{"t":8340,"kind":"in","data":"y"}
+{"t":8344,"kind":"out","data":"\u001b]0;Context 0% used ⠙ Working\u0007"}
+{"t":8345,"kind":"out","data":"\u001b[?2026h\u001b[6;15H\u001b[0m\u001b[49m\u001b[K\u001b[8;2H\u001b[0m\u001b[49m\u001b[K\u001b[10;2H\u001b[0m\u001b[49m\u001b[K\u001b[12;2H\u001b[0m\u001b[49m\u001b[K\u001b[15;2H\u001b[0m\u001b[49m\u001b[K\u001b[16;2H\u001b[0m\u001b[49m\u001b[K\u001b[18;2H\u001b[0m\u001b[49m\u001b[K\u001b[20;60H\u001b[0m\u001b[49m\u001b[K\u001b[2;3H\u001b[38;2;99;168;248;49m>_ \u001b[1m\u001b[39;49mOpenAI Codex\u001b[22m\u001b[2m\u001b[2m (v0.162.1)\u001b[3;1H\u001b[22m \u001b[3;3H   \u001b[2m/work/smoke/p2/p2\u001b[6;1H\u001b[1m› \u001b[22m\u001b[22mdo the thing\u001b[9;1H\u001b[38;5;2;49m✔ \u001b[39;49mYou\u001b[9;7H\u001b[1mapproved\u001b[9;16H\u001b[22mcodex\u001b[9;22Hto\u001b[9;25Hrun\u001b[9;29H\u001b[2mtouch one.txt\u001b[22m\u001b[1m this time\u001b[11;1H\u001b[38;2;128;128;128;49m•\u001b[11;3H\u001b[39;49mRunning\u001b[11;11H\u001b[22m\u001b[38;2;137;180;250;49mtouch\u001b[38;2;205;214;244;49m one.txt\u001b[14;1H\u001b[1m\u001b[38;2;128;128;128;49m•\u001b[14;3H\u001b[22m\u001b[2m\u001b[2m\u001b[39;49mWorking\u001b[14;11H(0s • \u001b[22m\u001b[1mesc\u001b[22m\u001b[2m\u001b[2m to interrupt)\u001b[15;1H\u001b[22m \u001b[17;1H\u001b[1m›\u001b[17;3H\u001b[22m\u001b[2m\u001b[2mAsk Codex to do anything\u001b[19;3H\u001b[22m\u001b[38;2;246;226;183;49mstub-model default\u001b[19;22H\u001b[39;49m·\u001b[19;24H\u001b[38;2;171;223;167;49m/work/smoke/p2xxxxxx/c13/c13-code…\u001b[20;3H\u001b[1m\u001b[39;49m?\u001b[22m for shortcuts                  ⚠ \u001b[38;2;196;167;103"}
+{"t":8346,"kind":"out","data":";49m1 warning\u001b[39;49m · \u001b[1mf2\u001b[22m to view\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8412,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8468,"kind":"out","data":"\u001b]0;Context 0% used ⠹ Working\u0007"}
+{"t":8468,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8539,"kind":"out","data":"\u001b]0;Context 0% used ⠸ Working\u0007\u001b[?2026h\u001b[?25l\u001b[14;12H\u001b[2m1\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8542,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[11;20H\u001b[0m\u001b[49m\u001b[K\u001b[11;1H\u001b[1m\u001b[38;5;2;49m•\u001b[11;4H\u001b[39;49ma\u001b[11;6H\u001b[22m \u001b[38;2;137;180;250;49mtouch\u001b[38;2;205;214;244;49m one.txt\u001b[12;1H\u001b[2m\u001b[39;49m  └ (no output)\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8582,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8588,"kind":"out","data":"\u001b[?2026h\u001b[?25l\u001b[14;7H\u001b[0m\u001b[49m\u001b[K\u001b[14;1H\u001b[2m• \u001b[22mdone\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8669,"kind":"hook","data":{"ok":true,"ev":{"session_id":"01a1c3ad-f87f-7002-8bb4-4adf1107ddaf","turn_id":"01a1c3ad-fae4-7102-8eae-c7f0a24caacf","transcript_path":"/home/user/.codex/sessions/2026/11/09/rollout-2026-11-09T18-18-40-01a1c3ad-f87f-7002-8bb4-4adf1107ddaf.jsonl","cwd":"/work/smoke/p2","hook_event_name":"Stop","model":"stub-model","permission_mode":"default","stop_hook_active":false,"last_assistant_message":"done"}}}
+{"t":8734,"kind":"out","data":"\u001b]0;Context 0% used ⠴ Working\u0007"}
+{"t":8735,"kind":"out","data":"\u001b[?2026h\u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}
+{"t":8735,"kind":"out","data":"\u001b]0;Context 0% used | Ready\u0007"}
+{"t":8738,"kind":"out","data":"\u001b[?2026h\u001b[?25l"}
+{"t":8738,"kind":"out","data":"\u001b[2;2H\u001b[0m\u001b[49m\u001b[K\u001b[3;2H\u001b[0m\u001b[49m\u001b[K\u001b[6;2H\u001b[0m\u001b[49m\u001b[K\u001b[9;20H\u001b[0m\u001b[49m\u001b[K\u001b[11;2H\u001b[0m\u001b[49m\u001b[K\u001b[12;7H\u001b[0m\u001b[49m\u001b[K\u001b[1;6H\u001b[2m/work/smoke/p2/p2\u001b[4;1H\u001b[1m› \u001b[22m\u001b[22mdo\u001b[4;6Hthe\u001b[4;10Hthing\u001b[6;1H \u001b[7;1H\u001b[38;5;2;49m✔ \u001b[39;49mYou\u001b[7;7H\u001b[1mapproved\u001b[7;16H\u001b[22mcodex\u001b[7;22Hto\u001b[7;25Hrun\u001b[7;29H\u001b[2mtouch one.txt\u001b[22m\u001b[1m this time\u001b[9;1H\u001b[38;5;2;49m•\u001b[22m\u001b[39;49m \u001b[1mRan\u001b[9;7H\u001b[22m\u001b[38;2;137;180;250;49mtouch\u001b[38;2;205;214;244;49m one.txt\u001b[10;1H\u001b[2m\u001b[39;49m  └ (no output)\u001b[11;1H\u001b[22m \u001b[12;1H\u001b[2m•\u001b[12;3H\u001b[22mdone\u001b[14;1H\u001b[2m \u001b[14;3HWorked for 2s • 6:18 PM                                   \u001b[39m\u001b[49m\u001b[0m\u001b[17;3H\u001b[?25h\u001b[?2026l"}

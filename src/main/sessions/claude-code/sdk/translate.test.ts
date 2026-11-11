@@ -43,6 +43,13 @@ function texts(events: SessionEvent[], type: 'text' | 'thinking'): Map<string, s
 }
 
 describe('Translator, on what the real Claude Code did', () => {
+  it('says auto mode’s classifier denied a command, which it never asked about (B13 C13)', () => {
+    const notices = ofType(play('signals-auto-classifier'), 'notice');
+    expect(notices.map((notice) => `${notice.level}: ${notice.text}`)).toContainEqual(
+      expect.stringMatching(/^warning: Not allowed: Bash .*Classifier unavailable/),
+    );
+  });
+
   it('uses the top-level response and its model window, apart from subagents', () => {
     const messages = structuredClone(recordedMessages('tools-and-compact'));
     const end = messages.findIndex((message) => message.type === 'result');

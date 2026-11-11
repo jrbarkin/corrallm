@@ -24,7 +24,7 @@ export default defineConfig({
       formats: ['cjs'],
       fileName: () => 'seed-profile.cjs',
     },
-    rollupOptions: {
+    rolldownOptions: {
       output: { codeSplitting: false },
       external: [...builtinModules.flatMap((name) => [name, `node:${name}`]), ...NATIVE_EXTERNALS],
     },
