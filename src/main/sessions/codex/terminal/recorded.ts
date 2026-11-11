@@ -36,10 +36,34 @@ import { Screen } from '../../terminal/screen';
  *   a stub model API (no real usage), a throwaway home and the per-run flags of the adapter (no
  *   hooks): "line one", Shift+Enter as CSI-u, "line two", then Enter. Notes: the draft before Enter,
  *   and the model API's first request (a message of two lines), which came after Enter alone.
+ * - Codex 0.162.1 (B13 C13), against a local stub of the model API in a throwaway CODEX_HOME,
+ *   with corrallm's per-run flags (no daemon, the folder trusted, plain command hooks and their
+ *   trust, its window title) in a pseudo-terminal of 100×30 unless said; the folder reads
+ *   /work/smoke/p2. Its window titles stay in what it printed (no `title` records), and the
+ *   prompt "do the thing" was pasted, then Enter:
+ *   - approvals: in Read only (`-s read-only -a on-request`), two commands that ask to leave the
+ *     sandbox (`touch one.txt`, then `touch two.txt`) in one turn, each approved with y. Its title
+ *     says Action Required for each; no hook runs for either.
+ *   - approvals-small: one such approval in a pseudo-terminal of 60×20.
+ *   - question: in Plan mode (the text "/plan", then Enter, before the prompt), its question tool
+ *     (request_user_input): one question, two options, the first picked with Enter. Its title
+ *     says Action Required.
+ *   - plan: in Plan mode, a proposed plan: the turn ends (Stop hook, title Ready) and its "Implement
+ *     this plan?" popup waits on the screen with no Action Required title; its first option
+ *     (Yes, implement) is picked with Enter, which starts a turn (UserPromptSubmit) in Default mode.
  */
 
 export type TerminalFixture =
-  'prompts' | 'resume' | 'resume-missing' | 'turns' | 'context' | 'multiline';
+  | 'prompts'
+  | 'resume'
+  | 'resume-missing'
+  | 'turns'
+  | 'context'
+  | 'approvals'
+  | 'approvals-small'
+  | 'question'
+  | 'plan'
+  | 'multiline';
 
 /** The recorded sessions' ids (their threads'): prompts' (and resume's), and turns'. */
 export const RECORDED_SESSION = '01a13450-a090-78e2-aba2-01792d6d732d';
