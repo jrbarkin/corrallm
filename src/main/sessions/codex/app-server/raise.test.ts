@@ -10,7 +10,7 @@ import {
   raised as raise,
 } from './raise';
 import type { Native, RaiseContext, Raised } from './raise';
-import { recordedAsks, recordedPlaces } from './recorded';
+import { recorded, recordedAsks, recordedPlaces } from './recorded';
 import type { Fixture, RecordedAsk } from './recorded';
 import { Translator } from './translate';
 
@@ -383,6 +383,81 @@ describe('a command’s approval', () => {
       ) as unknown,
       result: { decision: 'cancel' },
     });
+  });
+});
+
+describe('what the real Codex did with the decisions it was told to keep (B13 C13)', () => {
+  it('took the prefix rule as the command’s answer, and ran the same command again without asking', () => {
+    const [asked, ...more] = recordedAsks('command-always');
+    if (asked === undefined) throw new Error('not recorded');
+    expect(more).toEqual([]);
+    const command = prompt(raise(asked.method, asked.params, context(asked.before)));
+    const rule = command.prompt.kind === 'approval' ? command.prompt.choices[1] : undefined;
+    expect(rule).toMatchObject({
+      hint: 'allow_always',
+      effects: {
+        rules: [{ behavior: 'allow', rule: expect.stringContaining('touch') as unknown }],
+      },
+    });
+    // The very shape Codex was sent, and went on from.
+    expect(told(command, choice('acceptWithExecpolicyAmendment'))).toEqual(asked.result);
+    expect(asked.result).toEqual({
+      decision: {
+        acceptWithExecpolicyAmendment: { execpolicy_amendment: ['touch', 'one.txt'] },
+      },
+    });
+    const ran = recorded('command-always').filter(
+      ({ dir, msg }) =>
+        dir === 'in' &&
+        msg.method === 'item/completed' &&
+        (msg.params as { item: { type: string } }).item.type === 'commandExecution',
+    );
+    expect(ran).toHaveLength(2);
+  });
+
+  it('took "always" for an MCP tool as accept with persist always, and asked about the next call no more', () => {
+    const [asked, ...more] = recordedAsks('mcp-always');
+    if (asked === undefined) throw new Error('not recorded');
+    expect(more).toEqual([]);
+    const approval = prompt(raise(asked.method, asked.params, context(asked.before)));
+    expect(told(approval, choice('always'))).toEqual(asked.result);
+    expect(asked.result).toEqual({ action: 'accept', content: null, _meta: { persist: 'always' } });
+    const calls = recorded('mcp-always').filter(
+      ({ dir, msg }) =>
+        dir === 'in' &&
+        msg.method === 'item/completed' &&
+        (msg.params as { item: { type: string; status: string } }).item.type === 'mcpToolCall' &&
+        (msg.params as { item: { status: string } }).item.status === 'completed',
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it('asked about two identical calls of one tool at once, naming neither call: each is raised as that tool, and either may be answered first', () => {
+    const [first, second, ...more] = recordedAsks('mcp-concurrent');
+    if (first === undefined || second === undefined) throw new Error('not recorded');
+    expect(more).toEqual([]);
+    // Neither request names its call: they are the same request.
+    expect(first.params).toEqual(second.params);
+    expect(
+      first.before.filter(
+        ({ method, params }) =>
+          method === 'item/started' &&
+          (params as { item: { type: string } }).item.type === 'mcpToolCall',
+      ),
+    ).toHaveLength(2);
+    const [one, two] = [first, second].map((asked) =>
+      prompt(raise(asked.method, asked.params, context(asked.before))),
+    );
+    for (const raised of [one, two]) {
+      expect(raised?.prompt).toMatchObject({
+        kind: 'approval',
+        subject: { type: 'mcpTool', server: 'probe', tool: 'save_note', input: { text: 'a' } },
+      });
+    }
+    // As recorded: the first cancelled, the second accepted.
+    if (one === undefined || two === undefined) throw new Error('not raised');
+    expect(told(one, choice('cancel'))).toEqual(first.result);
+    expect(told(two, choice('allow'))).toEqual(second.result);
   });
 });
 

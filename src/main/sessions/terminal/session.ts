@@ -1108,7 +1108,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const shown = this.#cli.trusting?.(this.#screen) ?? false;
     if (shown === (this.#trust !== undefined)) return;
     this.#trust = shown ? randomUUID() : undefined;
-    this.#list();
+    // The dialog is erased as it is answered Yes, before the CLI reports or runs a hook (recorded:
+    // most of a second before): gone from the screen is answered there. "No, exit" erases nothing;
+    // the CLI's exit withdraws it.
+    this.#list(shown ? 'withdrawn' : 'answered-natively');
   }
 
   /** Its CLI is past its first-run dialogs: the folder is trusted, and the others may start. */

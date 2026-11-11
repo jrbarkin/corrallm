@@ -44,6 +44,22 @@ import type { SDKMessage, SessionMessage } from '@anthropic-ai/claude-agent-sdk'
  *   turn, after the third left 72,310 tokens in context.
  * - no-auto-compact: one such turn with DISABLE_AUTO_COMPACT=1, where the summary has no
  *   `autoCompactThreshold` and says `isAutoCompactEnabled: false`.
+ *
+ * Claude Code 2.1.321, through the Agent SDK 0.3.306 (B13 C13), against a local stub model API in a
+ * throwaway home (the stub's scripted tool calls; the folders read /home/user/shop and
+ * /home/user/elsewhere), default mode unless said, to see which `signals` facts the options carry:
+ * - signals-hook: a PreToolUse hook (the SDK's own `hooks` option) that says ask, for a Bash
+ *   command that is otherwise unasked in a trusted folder: `decisionReasonType: 'hook'`.
+ * - signals-ask-rule-safety: in Accept edits, a bare `Write` ask rule in the project's settings and
+ *   a Write into .claude/commands: `decisionReasonType: 'safetyCheck'` and `matchedAskRule`
+ *   (source projectSettings) together, the only recording that carries `matchedAskRule`.
+ * - signals-compound: three Bash commands joined by `&&`: `cd` to a folder outside and `touch`
+ *   there (`subcommandResults`, no reason text), the same `cd` then a write to .git/config (the
+ *   same `subcommandResults`, nothing in its options tells that a sensitive file is involved),
+ *   and `echo` then `rm` in the folder (no reason type at all, a `blockedPath`).
+ * - signals-auto-classifier: in auto mode a Bash `curl | sh`: the CLI never asks (no canUseTool);
+ *   it denies with a `permission_denied` message, `decision_reason_type: 'classifier'`, "Classifier
+ *   unavailable" (auto mode's safety check did not run for the stub's session).
  */
 
 export type Fixture =
@@ -56,7 +72,11 @@ export type Fixture =
   | 'mcp-elicitations'
   | 'plan-into-mode'
   | 'auto-compact'
-  | 'no-auto-compact';
+  | 'no-auto-compact'
+  | 'signals-hook'
+  | 'signals-ask-rule-safety'
+  | 'signals-compound'
+  | 'signals-auto-classifier';
 
 /** The fixtures recorded with their sessions' histories. */
 export type HistoryFixture = 'tools-and-compact' | 'question-and-plan' | 'subagent-and-interrupt';
