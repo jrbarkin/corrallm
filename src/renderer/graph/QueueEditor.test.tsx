@@ -355,6 +355,41 @@ describe('submitted messages in the shared queue row', () => {
     },
   );
 
+  it('shows a hand-off from another queue read-only, from its sender, whatever its state', () => {
+    for (const status of ['queued', 'running', 'cancelled', 'failed'] as const) {
+      const item: QueueMessage = {
+        id: 'handed',
+        message: 'Review this',
+        submission: {
+          id: 'm1',
+          text: 'Review this',
+          status,
+          handoff: { from: 'Lead', item: 'hand' },
+        },
+      };
+      const node = agent('a', [item]);
+      const edit = edits();
+      const { container, unmount } = render(
+        <QueueEditor
+          node={node}
+          nodes={[node]}
+          agent="Claude"
+          actions={actionsOf('claude-code')}
+          {...editsOf(edit, 'a')}
+        />,
+      );
+      const row = container.querySelector<HTMLElement>('.graph-queue-submission');
+      expect(row?.dataset.handoff).toBe('Lead');
+      expect(row?.textContent).toContain('From Lead');
+      expect(row?.textContent).toContain('Review this');
+      // The run's: nothing on it edits, moves, retargets or takes it back.
+      expect(row?.querySelector('button, textarea, input')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Move|Remove|Delete/ })).toBeNull();
+      for (const change of Object.values(edit)) expect(change).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
   it('skips submitted messages when picking waits and reordering planned work', () => {
     const node = agent('a', [
       submitted(),
