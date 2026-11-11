@@ -148,6 +148,8 @@ export class CanvasMemory {
   #touched: CanvasId[] = [];
   /** The canvases that have a row, as committed and as the writes planned since will leave it. */
   readonly #rows = new Set<CanvasId>();
+  /** Why canvas membership could not be loaded, rather than treating unread rows as absent. */
+  readonly #rowsError: Error | undefined;
   /** How many times it deleted a canvas's row, by canvas (none: 0). */
   readonly #generations = new Map<CanvasId, number>();
   /** Called within the write that deletes a canvas's row, for what a cascade reaches elsewhere. */
@@ -174,7 +176,8 @@ export class CanvasMemory {
       for (const { id } of store.prepare('SELECT id FROM canvas').all()) {
         if (isCanvasId(id)) this.#rows.add(id);
       }
-    } catch {
+    } catch (error) {
+      this.#rowsError = error instanceof Error ? error : new Error(String(error));
       // A store that couldn't be opened writes nothing, and a row it does not know is made again
       // by a statement that changes nothing where it exists.
     }
@@ -239,10 +242,9 @@ export class CanvasMemory {
 
   /** Whether it keeps `canvas`, with every change asked for so far. */
   keeps(canvas: CanvasId): boolean {
-    return (
-      this.#unwritten.has(canvas) ||
-      this.#store.prepare('SELECT 1 AS kept FROM canvas WHERE id = ?').get(canvas) !== undefined
-    );
+    if (this.#unwritten.has(canvas)) return true;
+    if (this.#rowsError !== undefined) throw this.#rowsError;
+    return this.#rows.has(canvas);
   }
 
   /**
@@ -315,6 +317,7 @@ export class CanvasMemory {
 
   /** Within a write: it has no row for `canvas` now (its generation moves on); as before if the write fails. */
   #remove(canvas: CanvasId): void {
+    if (!this.#rows.has(canvas)) return;
     this.#store.undo(() => {
       this.#generations.set(canvas, this.generation(canvas) - 1);
       if (this.generation(canvas) === 0) this.#generations.delete(canvas);
@@ -386,9 +389,8 @@ export class CanvasMemory {
         this.#notifications = previous;
       }
     };
-    const attempt = this.#atomic
-      ? this.#atomic.then(() => this.#store.writeBlocking(run))
-      : this.#store.writeBlocking(run);
+    const write = () => this.#store.writeBlocking(run);
+    const attempt = this.#atomic ? this.#atomic.then(write) : write();
     const writing = attempt
       .then(
         () => {

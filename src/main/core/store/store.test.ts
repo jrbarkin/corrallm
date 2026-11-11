@@ -41,6 +41,7 @@ let timers: Timer[];
 let flushes: { fd: number; done: (error?: Error) => void }[] | undefined;
 const diskFault = vi.hoisted(() => ({
   truncate: false,
+  sync: false,
   snapshotFolder: '',
   publication: undefined as
     { folder: string; started: () => void; wait: Promise<void> } | undefined,
@@ -49,6 +50,10 @@ vi.mock('node:fs', async (original) => {
   const fs = await original<typeof Fs>();
   return {
     ...fs,
+    fsyncSync: (...args: Parameters<typeof fs.fsyncSync>) => {
+      if (diskFault.sync) throw new Error('EIO: i/o error, fsync');
+      fs.fsyncSync(...args);
+    },
     ftruncateSync: (...args: Parameters<typeof fs.ftruncateSync>) => {
       if (diskFault.truncate) throw new Error('EIO: i/o error, ftruncate');
       fs.ftruncateSync(...args);
@@ -125,6 +130,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   diskFault.truncate = false;
+  diskFault.sync = false;
   diskFault.snapshotFolder = '';
   diskFault.publication = undefined;
   if (reader.isOpen) reader.close();
@@ -1210,6 +1216,69 @@ describe('planned writes', () => {
   });
 
   describe('within a blocking write, or a tx', () => {
+    it('restores a synchronous transaction’s memory if its log flush fails', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let staged = 'before';
+      diskFault.sync = true;
+      expect(() => {
+        store.tx(() => {
+          store.undo(() => {
+            staged = 'before';
+          });
+          staged = 'inside';
+          store.run(INSERT, 'inside');
+        });
+      }).toThrow(/could not be written to the drive/);
+      expect(staged).toBe('before');
+      diskFault.sync = false;
+    });
+
+    it('restores a failed nested transaction before its caller continues', async () => {
+      let staged = 'before';
+      await store.writeBlocking(() => {
+        expect(() =>
+          store.tx(() => {
+            store.undo(() => {
+              staged = 'before';
+            });
+            staged = 'inside';
+            store.run(INSERT, 'inside');
+            throw new Error('The nested transaction was refused');
+          }),
+        ).toThrow('The nested transaction was refused');
+        expect(staged).toBe('before');
+        store.run(INSERT, 'after');
+      });
+      expect(notes()).toEqual(['after']);
+      expect(staged).toBe('before');
+    });
+
+    it('restores a successful nested transaction in order when its parent fails', async () => {
+      let staged = 0;
+      await expect(
+        store.writeBlocking(() => {
+          store.undo(() => {
+            staged = 0;
+          });
+          staged = 1;
+          store.tx(() => {
+            store.undo(() => {
+              staged = 1;
+            });
+            staged = 2;
+            store.run(INSERT, 'inside');
+          });
+          store.undo(() => {
+            staged = 2;
+          });
+          staged = 3;
+          throw new Error('The containing write was refused');
+        }),
+      ).rejects.toThrow('The containing write was refused');
+      expect(staged).toBe(0);
+      expect(notes()).toEqual([]);
+    });
+
     it('runs a planned write’s statements at once, and gives rows at once', async () => {
       await store.writeBlocking(() => {
         store.run(INSERT, 'now');

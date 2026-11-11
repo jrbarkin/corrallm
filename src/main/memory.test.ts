@@ -576,6 +576,7 @@ describe('CanvasMemory', () => {
     const why = 'The core’s database could not be opened (disk I/O error).';
     const memory = new CanvasMemory(unopened(why));
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(() => memory.keeps(TEAM)).toThrow(why);
     await expect(memory.get(TEAM)).rejects.toThrow(why);
     await expect(memory.canvasWithFile('/work/team.corral')).rejects.toThrow(why);
     await memory.setFile(TEAM, at('/work/team.corral'));
@@ -585,6 +586,41 @@ describe('CanvasMemory', () => {
 });
 
 describe('ensure, within a planned write', () => {
+  it('lets its listeners read canvas membership within the plan', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const memory = new CanvasMemory(store);
+    const seen: boolean[] = [];
+    memory.subscribe(() => {
+      seen.push(memory.keeps(TEAM));
+    });
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(seen).toEqual([true]);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it('can ensure an absent canvas after its forget was rolled back with the containing commit', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const memory = new CanvasMemory(store);
+    store.exec(`CREATE TABLE deferred_canvas (
+      canvas_id TEXT REFERENCES canvas(id) DEFERRABLE INITIALLY DEFERRED
+    )`);
+    const forgetting = memory.forget(TEAM);
+    const invalid = store.write(() => {
+      store.run('INSERT INTO deferred_canvas VALUES (?)', OTHER);
+    });
+    await Promise.all([
+      expect(forgetting).rejects.toThrow(/FOREIGN KEY/),
+      expect(invalid).rejects.toThrow(/FOREIGN KEY/),
+    ]);
+    expect(memory.generation(TEAM)).toBe(0);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(reader.prepare('SELECT id FROM canvas WHERE id = ?').get(TEAM)).toEqual({ id: TEAM });
+  });
+
   const rowsOf = () => reader.prepare('SELECT id FROM canvas ORDER BY used_at').all();
 
   it('gives no statement for a canvas it keeps, and a row for one it does not', async () => {

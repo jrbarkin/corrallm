@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -1102,6 +1103,71 @@ describe('WorkspaceStore', () => {
 });
 
 describe('WorkspaceStore’s records in memory', () => {
+  it('reads one canvas and workspace without walking other canvases’ records', async () => {
+    await withWorktrees(W1);
+    await workspaces.write((w) => {
+      w.bind(CANVAS, 'a', W1);
+      w.recordJob({
+        id: J1,
+        workspace: W1,
+        kind: 'create',
+        phase: 'intent',
+        generation: 1,
+        payload: {},
+      });
+    });
+    const read = () => ({
+      trees: workspaces.worktreesOf(CANVAS),
+      active: workspaces.activeWorktree(CANVAS, REPOSITORY, `agent/${W1}`),
+      bindings: workspaces.bindingsOf(CANVAS),
+      bound: workspaces.bindingsTo(CANVAS, W1),
+      jobs: workspaces.jobsOf(W1),
+      open: workspaces.openJob(W1, 'create'),
+    });
+    const expected = read();
+    const count = () => {
+      let walked = 0;
+      const values = Reflect.get(Map.prototype, 'values') as (
+        this: Map<unknown, unknown>,
+      ) => MapIterator<unknown>;
+      const spy = vi.spyOn(Map.prototype, 'values').mockImplementation(function (
+        this: Map<unknown, unknown>,
+      ) {
+        const iterator = values.call(this);
+        const next = iterator.next.bind(iterator);
+        iterator.next = () => {
+          const row = next();
+          if (!row.done) walked++;
+          return row;
+        };
+        return iterator;
+      });
+      try {
+        expect(read()).toEqual(expected);
+        return walked;
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const small = count();
+    await workspaces.write((w) => {
+      for (let n = 0; n < 100; n++) {
+        const id = randomUUID();
+        w.createWorktree(tree(id, `agent/${id}`, OTHER));
+        w.bind(OTHER, String(n), id);
+        w.recordJob({
+          id: randomUUID(),
+          workspace: id,
+          kind: 'create',
+          phase: 'intent',
+          generation: 1,
+          payload: {},
+        });
+      }
+    });
+    expect(count()).toBeLessThanOrEqual(small + 4);
+  });
+
   /** A store whose reads, once armed, fail: every record must already be in memory. */
   function guarded(): { database: Database; arm: () => void } {
     let armed = false;
@@ -1297,5 +1363,20 @@ describe('WorkspaceStore’s records in memory', () => {
     expect(made.job(J2)).toMatchObject({ id: J2, workspace: W2, kind: 'create' });
     expect(made.jobsOf(W2)).toHaveLength(1);
     expect(made.worktree(W1)).toMatchObject({ id: W1 });
+  });
+
+  it('keeps an out-of-range integer confined to its record and generation allocator', async () => {
+    await withWorktrees(W1, W2);
+    await store.writeBlocking(() => {
+      store.run('UPDATE worktree SET generation = ? WHERE id = ?', 9223372036854775807n, W1);
+      store.run('UPDATE meta SET workspace_generation = ? WHERE id = 1', 9223372036854775807n);
+    });
+    const made = new WorkspaceStore({ store, now: () => now });
+    expect(made.worktree(W2)).toMatchObject({ id: W2, generation: 1 });
+    expect(made.repository(REPOSITORY)).toMatchObject({ id: REPOSITORY });
+    expect(made.worktreesOf(OTHER)).toEqual([]);
+    expect(() => made.worktree(W1)).toThrow(/can’t be read/);
+    expect(() => made.worktreesOf(CANVAS)).toThrow(/can’t be read/);
+    await expect(made.write((w) => w.bind(CANVAS, 'a', W2))).rejects.toThrow(/generation/);
   });
 });

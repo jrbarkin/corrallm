@@ -60,7 +60,7 @@ export interface LeadStoreDeps {
    * Canvas memory: a canvas's row, which its leads refer to, and what it forgets, with which its
    * leads go (ON DELETE CASCADE).
    */
-  memory: Pick<CanvasMemory, 'ensure' | 'subscribe'>;
+  memory: Pick<CanvasMemory, 'ensure' | 'keeps' | 'subscribe'>;
   /** What an agent's endpoint is read against. */
   catalog: Catalog;
   /** A canvas's document as the core has it now: none while it isn't loaded. */
@@ -319,8 +319,7 @@ export class LeadStore {
     ]);
     if (canvases.size === 0) return;
     try {
-      const exists = this.#deps.store.prepare('SELECT 1 AS kept FROM canvas WHERE id = ?');
-      for (const canvas of canvases) if (exists.get(canvas) === undefined) this.#drop(canvas);
+      for (const canvas of canvases) if (!this.#deps.memory.keeps(canvas)) this.#drop(canvas);
     } catch {
       for (const canvas of canvases) this.#drop(canvas);
     }

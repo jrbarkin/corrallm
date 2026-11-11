@@ -282,7 +282,14 @@ export class Store {
     if (this.#failed !== undefined) throw this.#failed;
     const outermost = !this.#connection.isTransaction;
     if (this.#current?.planned === true) throw new Error('A planned write starts no transaction.');
-    if (!outermost) return transaction(this.#connection, run);
+    if (!outermost) {
+      const outer = this.#current;
+      const { value, context } = this.#transaction(run);
+      outer?.undo(() => {
+        context.restore();
+      });
+      return value;
+    }
     if (
       this.#inFlush.length > 0 ||
       this.#unflushed.length > 0 ||
@@ -295,12 +302,23 @@ export class Store {
     if (this.#shut) throw closed();
     const frames = this.#frames();
     const commit = ++this.#commits;
-    const context = new WriteContext('tx');
-    let value: T;
+    const { value, context } = this.#transaction(run);
     try {
-      value = transaction(this.#connection, () => {
+      fsyncSync(this.#logFile());
+    } catch (error) {
+      context.restore();
+      throw this.#fail(error, { frames, commit });
+    }
+    this.#committed();
+    return value;
+  }
+
+  /** A synchronous transaction's hooks belong to its own savepoint, not the containing write. */
+  #transaction<T>(run: () => T): { value: T; context: WriteContext } {
+    const context = new WriteContext('tx');
+    try {
+      const value = transaction(this.#connection, () => {
         const value = this.#within(context, run);
-        // Right after it, in the same transaction.
         for (
           let next = context.followUps.shift();
           next !== undefined;
@@ -309,17 +327,11 @@ export class Store {
           this.#within(context, next);
         return value;
       });
+      return { value, context };
     } catch (error) {
       context.restore();
       throw error;
     }
-    try {
-      fsyncSync(this.#logFile());
-    } catch (error) {
-      throw this.#fail(error, { frames, commit });
-    }
-    this.#committed();
-    return value;
   }
 
   /**

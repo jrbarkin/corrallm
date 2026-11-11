@@ -278,6 +278,35 @@ const TABLES = {
 } as const;
 type Table = keyof typeof TABLES;
 
+/** Secondary keys keep scoped reads within the records they could return. */
+const INDEXES: Partial<Record<Table, Record<string, (row: Row) => string | undefined>>> = {
+  repository: { found: (row) => tuple(row.real_root, row.identity) },
+  worktree: {
+    canvas: (row) => String(row.canvas_id),
+    repository: (row) => String(row.repository_id),
+    state: (row) => String(row.state),
+    fork: (row) => (typeof row.forked_from === 'string' ? row.forked_from : undefined),
+    owner: (row) =>
+      row.state === 'retained' || row.state === 'removing'
+        ? undefined
+        : tuple(row.canvas_id, row.repository_id, row.owner_key),
+  },
+  agent_worktree: {
+    canvas: (row) => String(row.canvas_id),
+    workspace: (row) => tuple(row.canvas_id, row.workspace_id),
+  },
+  worktree_job: {
+    workspace: (row) => String(row.workspace_id),
+    open: (row) => (row.outcome === null ? tuple(row.workspace_id, row.kind) : undefined),
+    unfinished: (row) => (row.outcome === null ? 'yes' : undefined),
+  },
+  worktree_setup: { state: (row) => String(row.state) },
+};
+
+function tuple(...values: unknown[]): string {
+  return JSON.stringify(values);
+}
+
 function agentKey(canvas: string, agent: string): string {
   return JSON.stringify([canvas, agent]);
 }
@@ -322,6 +351,7 @@ export class WorkspaceStore {
     worktree_setup: new Map(),
     project_setup: new Map(),
   };
+  readonly #indexes = new Map<string, Map<string, Set<string>>>();
   /** The last generation numbered (`meta.workspace_generation`). */
   #generation: unknown;
   /** Why the records couldn't be read as the store was made, if they couldn't: every read fails. */
@@ -332,13 +362,12 @@ export class WorkspaceStore {
     this.#now = now;
     try {
       for (const table of Object.keys(TABLES) as Table[]) {
-        for (const row of store.prepare(`SELECT * FROM ${table}`).all()) {
-          this.#tables[table].set(TABLES[table](row), { ...row });
+        for (const row of this.#load(`SELECT * FROM ${table}`)) {
+          this.#replace(table, TABLES[table](row), { ...row });
         }
       }
-      this.#generation = store
-        .prepare('SELECT workspace_generation FROM meta WHERE id = 1')
-        .get()?.workspace_generation;
+      this.#generation = this.#load('SELECT workspace_generation FROM meta WHERE id = 1')[0]
+        ?.workspace_generation;
     } catch (error) {
       this.#unread = error instanceof Error ? error : new Error(String(error));
     }
@@ -354,6 +383,30 @@ export class WorkspaceStore {
 
   // The records in memory.
 
+  /** Keeps unreadable integers on their own row instead of failing the entire initial read. */
+  #load(sql: string): Row[] {
+    const statement = this.#store.prepare(sql);
+    statement.setReadBigInts(true);
+    try {
+      return statement
+        .all()
+        .map((row) =>
+          Object.fromEntries(
+            Object.entries(row).map(([key, value]) => [
+              key,
+              typeof value === 'bigint' &&
+              value >= BigInt(Number.MIN_SAFE_INTEGER) &&
+              value <= BigInt(Number.MAX_SAFE_INTEGER)
+                ? Number(value)
+                : value,
+            ]),
+          ),
+        );
+    } finally {
+      statement.setReadBigInts(false);
+    }
+  }
+
   /** The rows of `table`, in no order. */
   #rows(table: Table): Row[] {
     if (this.#unread !== undefined) throw this.#unread;
@@ -365,16 +418,52 @@ export class WorkspaceStore {
     return this.#tables[table].get(key);
   }
 
+  #indexed(table: Table, index: string, key: string): Row[] {
+    if (this.#unread !== undefined) throw this.#unread;
+    const rows: Row[] = [];
+    for (const id of this.#indexes.get(`${table}/${index}`)?.get(key) ?? []) {
+      const row = this.#tables[table].get(id);
+      if (row !== undefined) rows.push(row);
+    }
+    return rows;
+  }
+
+  /** Sets a row and its secondary keys together, including when an undo restores it. */
+  #replace(table: Table, key: string, row: Row | undefined): void {
+    const rows = this.#tables[table];
+    const before = rows.get(key);
+    for (const [name, group] of Object.entries(INDEXES[table] ?? {})) {
+      const was = before === undefined ? undefined : group(before);
+      const now = row === undefined ? undefined : group(row);
+      if (was === now) continue;
+      const label = `${table}/${name}`;
+      const index = this.#indexes.get(label) ?? new Map<string, Set<string>>();
+      if (was !== undefined) {
+        const ids = index.get(was);
+        ids?.delete(key);
+        if (ids?.size === 0) index.delete(was);
+      }
+      if (now !== undefined) {
+        const ids = index.get(now) ?? new Set<string>();
+        ids.add(key);
+        index.set(now, ids);
+      }
+      if (index.size === 0) this.#indexes.delete(label);
+      else this.#indexes.set(label, index);
+    }
+    if (row === undefined) rows.delete(key);
+    else rows.set(key, row);
+  }
+
   /** Within a write: keeps `row`, as it is now; as it was if the write fails. */
   #keep(table: Table, row: Row): void {
     const rows = this.#tables[table];
     const key = TABLES[table](row);
     const before = rows.get(key);
     this.#store.undo(() => {
-      if (before === undefined) rows.delete(key);
-      else rows.set(key, before);
+      this.#replace(table, key, before);
     });
-    rows.set(key, row);
+    this.#replace(table, key, row);
   }
 
   /** Within a write: keeps the row at `key` changed by `changes`. */
@@ -390,9 +479,9 @@ export class WorkspaceStore {
     const before = rows.get(key);
     if (before === undefined) return;
     this.#store.undo(() => {
-      rows.set(key, before);
+      this.#replace(table, key, before);
     });
-    rows.delete(key);
+    this.#replace(table, key, undefined);
   }
 
   /** Within a write: `canvas` was forgotten, and its project link with it. */
@@ -414,9 +503,7 @@ export class WorkspaceStore {
 
   /** The repository found at `realRoot` with `identity`, if it is kept. */
   repositoryAt(realRoot: string, identity: string): RepositoryRecord | undefined {
-    const row = this.#rows('repository').find(
-      (kept) => kept.real_root === realRoot && kept.identity === identity,
-    );
+    const row = this.#indexed('repository', 'found', tuple(realRoot, identity))[0];
     return row === undefined ? undefined : repositoryOf(row);
   }
 
@@ -499,10 +586,11 @@ export class WorkspaceStore {
       throw new WorkspaceStoreError('stale', `The repository ${id} isn’t kept by that identity.`);
     }
     const found = this.rediscovered(id, { identity: to });
-    for (const job of this.#rows('worktree_job')) {
-      const tree = this.#tables.worktree.get(String(job.workspace_id));
-      if (job.expected_identity === from && tree?.repository_id === id) {
-        this.#change('worktree_job', String(job.id), { expected_identity: to });
+    for (const tree of this.#indexed('worktree', 'repository', id)) {
+      for (const job of this.#indexed('worktree_job', 'workspace', String(tree.id))) {
+        if (job.expected_identity === from) {
+          this.#change('worktree_job', String(job.id), { expected_identity: to });
+        }
       }
     }
     this.#store.run(
@@ -557,11 +645,7 @@ export class WorkspaceStore {
 
   /** Every workspace of the canvas, in any state, as they were made. */
   worktreesOf(canvas: CanvasId): WorktreeRecord[] {
-    return ordered(
-      this.#rows('worktree').filter((row) => row.canvas_id === canvas),
-      'created_at',
-      'id',
-    ).map(worktreeOf);
+    return ordered(this.#indexed('worktree', 'canvas', canvas), 'created_at', 'id').map(worktreeOf);
   }
 
   /** Every canvas's workspaces in one of `states`, as they were made: what a restart checks. */
@@ -569,7 +653,7 @@ export class WorkspaceStore {
     const asked = states.filter((state) => STATES.includes(state));
     if (asked.length === 0) return [];
     return ordered(
-      this.#rows('worktree').filter((row) => asked.includes(row.state as WorktreeState)),
+      [...new Set(asked)].flatMap((state) => this.#indexed('worktree', 'state', state)),
       'created_at',
       'id',
     ).map(worktreeOf);
@@ -581,14 +665,7 @@ export class WorkspaceStore {
     repository: string,
     owner: WorkspaceOwnerKey,
   ): WorktreeRecord | undefined {
-    const row = this.#rows('worktree').find(
-      (kept) =>
-        kept.canvas_id === canvas &&
-        kept.repository_id === repository &&
-        kept.owner_key === owner &&
-        kept.state !== 'retained' &&
-        kept.state !== 'removing',
-    );
+    const row = this.#indexed('worktree', 'owner', tuple(canvas, repository, owner))[0];
     return row === undefined ? undefined : worktreeOf(row);
   }
 
@@ -754,13 +831,11 @@ export class WorkspaceStore {
     }
     // What the database's references do with it: its jobs and setup go, a fork of it forks from none.
     this.#drop('worktree', id);
-    for (const job of this.#rows('worktree_job')) {
-      if (job.workspace_id === id) this.#drop('worktree_job', String(job.id));
-    }
+    for (const job of this.#indexed('worktree_job', 'workspace', id))
+      this.#drop('worktree_job', String(job.id));
     this.#drop('worktree_setup', id);
-    for (const fork of this.#rows('worktree')) {
-      if (fork.forked_from === id) this.#change('worktree', String(fork.id), { forked_from: null });
-    }
+    for (const fork of this.#indexed('worktree', 'fork', id))
+      this.#change('worktree', String(fork.id), { forked_from: null });
     this.#store.run('DELETE FROM worktree WHERE id = ?', id);
   }
 
@@ -773,18 +848,13 @@ export class WorkspaceStore {
 
   /** Every agent's binding on the canvas, by agent. */
   bindingsOf(canvas: CanvasId): AgentBinding[] {
-    return ordered(
-      this.#rows('agent_worktree').filter((row) => row.canvas_id === canvas),
-      'agent_id',
-    ).map(bindingOf);
+    return ordered(this.#indexed('agent_worktree', 'canvas', canvas), 'agent_id').map(bindingOf);
   }
 
   /** The bindings to a workspace of the canvas, by agent. */
   bindingsTo(canvas: CanvasId, workspace: string): AgentBinding[] {
     return ordered(
-      this.#rows('agent_worktree').filter(
-        (row) => row.canvas_id === canvas && row.workspace_id === workspace,
-      ),
+      this.#indexed('agent_worktree', 'workspace', tuple(canvas, workspace)),
       'agent_id',
     ).map(bindingOf);
   }
@@ -908,28 +978,22 @@ export class WorkspaceStore {
 
   /** The job of `kind` going on for the workspace, if one does. */
   openJob(workspace: string, kind: JobKind): JobRecord | undefined {
-    const row = this.#rows('worktree_job').find(
-      (kept) => kept.workspace_id === workspace && kept.kind === kind && kept.outcome === null,
-    );
+    const row = this.#indexed('worktree_job', 'open', tuple(workspace, kind))[0];
     return row === undefined ? undefined : jobOf(row);
   }
 
   /** Every job going on, of every canvas, oldest first: what a restart finishes. */
   openJobs(): JobRecord[] {
-    return ordered(
-      this.#rows('worktree_job').filter((row) => row.outcome === null),
-      'created_at',
-      'id',
-    ).map(jobOf);
+    return ordered(this.#indexed('worktree_job', 'unfinished', 'yes'), 'created_at', 'id').map(
+      jobOf,
+    );
   }
 
   /** Every job of the workspace, oldest first. */
   jobsOf(workspace: string): JobRecord[] {
-    return ordered(
-      this.#rows('worktree_job').filter((row) => row.workspace_id === workspace),
-      'created_at',
-      'id',
-    ).map(jobOf);
+    return ordered(this.#indexed('worktree_job', 'workspace', workspace), 'created_at', 'id').map(
+      jobOf,
+    );
   }
 
   /**
@@ -1212,7 +1276,7 @@ export class WorkspaceStore {
    * it did what it does is unknown, and so is never run again by itself. Returns their workspaces.
    */
   interruptSetups(): string[] {
-    const running = this.#rows('worktree_setup').filter((row) => row.state === 'running');
+    const running = this.#indexed('worktree_setup', 'state', 'running');
     for (const row of running)
       this.#change('worktree_setup', String(row.workspace_id), { state: 'interrupted' });
     this.#store.run("UPDATE worktree_setup SET state = 'interrupted' WHERE state = 'running'");

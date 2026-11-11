@@ -4,8 +4,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /*
- * A blocking write (`Database.writeBlocking`) is the rare write whose function needs SQL as it
- * runs; every other write is planned (`Database.write`) and reads nothing. This pins where the
+ * A blocking write (`Database.writeBlocking`, or a write's `followUp`) is the rare write whose
+ * function needs SQL as it runs; every other write is planned (`Database.write`) and reads nothing. This pins where the
  * blocking ones are, exactly, file by file: a file that gains a call fails, and so does one that
  * lost one until its count here is lowered (to nothing: out of the list), so the list only ever
  * shrinks (as src/main/platform-neutral.test.ts does for CLI names).
@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..', '..');
 
-/** Today's blocking writers, by file: how many `.writeBlocking(` calls each has. */
+/** Blocking entry points, including the blocking follow-ups of planned writes. */
 const BLOCKING: Readonly<Record<string, number>> = {
   'src/main/core/canvas/proposals.ts': 1,
   'src/main/core/leads.ts': 3,
@@ -39,7 +39,9 @@ describe('blocking writes', () => {
   it('are in exactly the files pinned here, as many as are pinned', () => {
     const found: Record<string, number> = {};
     for (const file of productionFiles('src')) {
-      const count = readFileSync(path.join(ROOT, file), 'utf8').match(/\.writeBlocking\(/g)?.length;
+      const count = readFileSync(path.join(ROOT, file), 'utf8').match(
+        /\.(?:writeBlocking|followUp)\(/g,
+      )?.length;
       if (count !== undefined) found[file] = count;
     }
     expect(found).toEqual(BLOCKING);

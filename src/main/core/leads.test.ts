@@ -291,6 +291,21 @@ describe('a lead', () => {
     expect(leads.granted(CANVAS)).toEqual([]);
   });
 
+  it('keeps existing leads and outside grants when a planned write ensures another canvas', async () => {
+    await makeLead();
+    await leads.setGrant(CANVAS, 'orchestrator', true);
+    await store.write(() => {
+      memory.ensure('11111111-1111-4111-8111-111111111111' as CanvasId);
+    });
+    expect(leads.isLead(CANVAS, 'lead')).toBe(true);
+    expect(leads.grantsOf(CANVAS, 'lead')).toEqual(GRANTS);
+    expect(leads.granted(CANVAS)).toEqual(['orchestrator']);
+    expect(rows()).toMatchObject([{ agent_id: 'lead', held: null }]);
+    await reopen();
+    expect(leads.isLead(CANVAS, 'lead')).toBe(true);
+    expect(leads.granted(CANVAS)).toEqual(['orchestrator']);
+  });
+
   it('is no lead where its row can’t be read, which is kept as it is', async () => {
     await makeLead();
     writeOnDisk(profile, `UPDATE lead SET grants = '{"v":2}'`);
