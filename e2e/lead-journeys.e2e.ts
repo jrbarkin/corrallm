@@ -146,6 +146,11 @@ test('a held lead is sent nothing, and the request waits for you alone', async (
     await w.page.keyboard.press('Escape');
     await openNeeds(w.page);
     await expect(w.page.getByText(/Lead may answer until/)).toHaveCount(0);
+    const needs = await w.call('needs', { canvas: w.canvas });
+    expect(
+      needs.items.find((item) => item.agent === 'worker' && item.kind === 'prompt')?.by,
+      'A held lead must not be an answerer of its worker’s request',
+    ).toEqual(['you']);
     expect(await count(w, CARD)).toBe(0);
   } finally {
     await w.close();

@@ -1510,12 +1510,46 @@ describe('readdress (B24 C4)', () => {
     messages.readdress(ask.id, 'agent:b', 'Moved off the first.');
     messages.update(ask.id, { state: 'delivered' });
     messages.readdress(ask.id, 'you', 'Moved off the second.');
-    expect(messages.withdrawals('agent:a')).toEqual([{ id: ask.id, text: 'Moved off the first.' }]);
+    const first = messages.withdrawals('agent:a');
+    expect(first).toEqual([{ id: ask.id, text: 'Moved off the first.' }]);
+    const second = messages.withdrawals('agent:b');
+    expect(messages.get(second[0]?.id ?? '')).toMatchObject({
+      kind: 'notice',
+      to: 'agent:b',
+      replyTo: ask.id,
+    });
+    expect(second.map(({ text }) => text)).toEqual(['Moved off the second.']);
+    await messages.durable();
+    const again = await store();
+    expect(again.withdrawals('agent:a')).toEqual(first);
+    expect(again.withdrawals('agent:b')).toEqual(second);
+    again.toldWithdrawals(first.map(({ id }) => id));
+    expect(again.withdrawals('agent:a')).toEqual([]);
+    expect(again.withdrawals('agent:b')).toHaveLength(1);
     // Once it is told, a later move may leave its own.
-    messages.toldWithdrawals([ask.id]);
+    messages.toldWithdrawals(first.map(({ id }) => id));
     messages.update(ask.id, { to: 'agent:c', state: 'delivered' });
     messages.readdress(ask.id, 'you', 'Moved off the third.');
     expect(messages.withdrawals('agent:c')).toEqual([{ id: ask.id, text: 'Moved off the third.' }]);
+  });
+
+  it('acknowledges a former recipient’s note while a later recipient still waits', async () => {
+    const messages = await store();
+    const ask = messages.add({
+      ...draft('agent:worker', 'agent:a', 'delivered'),
+      kind: 'prompt',
+      ask: { ...question, via: 'manager' },
+    });
+    messages.readdress(ask.id, 'agent:b', 'Moved off the first.');
+    // The first lead's next native send has already claimed these acknowledgement ids.
+    const carried = messages.withdrawals('agent:a');
+    messages.update(ask.id, { state: 'delivered' });
+    messages.readdress(ask.id, 'you', 'Moved off the second.');
+    messages.toldWithdrawals(carried.map(({ id }) => id));
+    expect(messages.withdrawals('agent:a')).toEqual([]);
+    expect(messages.withdrawals('agent:b').map(({ text }) => text)).toEqual([
+      'Moved off the second.',
+    ]);
   });
 
   it('sends a row to another agent back to pending', async () => {

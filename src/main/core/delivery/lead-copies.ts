@@ -4,7 +4,6 @@ import { agentParty, isLeadCopy, isLeadNotice } from '../../../shared/model/mess
 import type { Message } from '../../../shared/model/messages';
 import { leadCopy, leadNotice } from '../../../shared/model/purpose';
 import type { TurnResult } from '../../../shared/session';
-import { decidedOf } from '../decisions';
 import type { RouteChange } from '../prompts/owner';
 import type { MessageStore } from './messages';
 
@@ -25,6 +24,7 @@ import type { MessageStore } from './messages';
  */
 
 const COPY = 'lead-copy:';
+const ACKNOWLEDGED = 'lead-acknowledged:';
 const NOTICE = 'lead-notice:';
 
 const TAKEN_BACK: TurnResult = {
@@ -75,6 +75,10 @@ export class LeadCopies {
         change.from,
         change.why === 'ended' ? (change.how ?? 'withdrawn') : 'moved',
       );
+    } else if (change.from !== undefined) {
+      // Keep the acknowledgement on the copy itself, independent of decision retention.
+      for (const copy of messages.toldWith(`${COPY}${change.need}|${change.from}`))
+        messages.retell(copy.id, `${ACKNOWLEDGED}${change.need}|${change.from}`);
     }
     if (change.to !== undefined && change.until !== undefined) {
       this.#offer(messages, change.canvas, change.need, change.to, change.until);
@@ -96,10 +100,15 @@ export class LeadCopies {
     canvas: CanvasId;
     need: string;
     name: string;
-    type: 'raised' | 'ended';
+    type: 'raised' | 'ended' | 'answered';
   }): void {
     const messages = this.#deps.messages(canvas);
     if (messages === undefined) return;
+    if (type === 'answered') {
+      for (const raised of messages.toldWith(`outside-raised:${need}|${name}`))
+        messages.retell(raised.id, `outside-answered:${need}|${name}`);
+      return;
+    }
     wakeRecord(messages, canvas, need, name, type);
   }
 
@@ -158,10 +167,7 @@ export class LeadCopies {
     const to = agentParty(lead);
     const told = `${COPY}${need}|${lead}`;
     if (messages.toldWith(told).some(({ state }) => state !== 'withdrawn')) return;
-    const open = messages
-      .activeTo(to)
-      .filter((one) => one.from === 'corrallm' && isLeadCopy(one) && one.state !== 'replied');
-    if (open.length >= MAX_WAITING) {
+    if (messages.leadCopiesTo(to) >= MAX_WAITING) {
       // Full: the route passes it by (a route never stays with a lead that was not told).
       this.#deps.unreachable(canvas, need, lead);
       return;
@@ -197,8 +203,9 @@ export class LeadCopies {
    */
   static recover(messages: MessageStore): boolean {
     let any = false;
-    for (const copy of messages.toldStarting(COPY)) {
+    for (const copy of [...messages.toldStarting(COPY), ...messages.toldStarting(ACKNOWLEDGED)]) {
       if (copy.purpose?.type !== 'lead-copy') continue;
+      const acknowledged = messages.toldOf(copy.id)?.startsWith(ACKNOWLEDGED) === true;
       switch (copy.state) {
         case 'pending':
           messages.update(copy.id, { state: 'withdrawn', by: 'corrallm', turn: TAKEN_BACK });
@@ -206,12 +213,12 @@ export class LeadCopies {
           break;
         case 'delivering':
           messages.update(copy.id, { state: 'unresolved' });
-          notice(messages, copy, copy.purpose.need, ENDED.restart);
+          if (!acknowledged) notice(messages, copy, copy.purpose.need, ENDED.restart);
           any = true;
           break;
         case 'delivered':
         case 'replied':
-          notice(messages, copy, copy.purpose.need, ENDED.restart);
+          if (!acknowledged) notice(messages, copy, copy.purpose.need, ENDED.restart);
           any = true;
           break;
         default:
@@ -226,8 +233,6 @@ export class LeadCopies {
       const need = key.slice('outside-raised:'.length, bar);
       const name = key.slice(bar + 1);
       if (messages.toldWith(`outside-ended:${need}|${name}`).length > 0) continue;
-      // One that answered it was told by its own reply.
-      if (decidedOf(messages, need)?.by === `outside:${name}`) continue;
       wakeRecord(messages, messages.canvas, need, name, 'ended');
       any = true;
     }

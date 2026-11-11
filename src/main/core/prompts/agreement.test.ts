@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeLike } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
 import { CanvasMemory } from '../../memory';
-import { PromptEvent } from '../../../shared/model/prompts';
+import { checkQuestionAnswers, PromptEvent } from '../../../shared/model/prompts';
+import type { NeedsItem } from '../../../shared/model/needs';
 import type { PromptOrigin } from '../../sessions/manager';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
@@ -76,6 +77,7 @@ interface Case {
   prompt: object;
   signals: boolean;
   answers: unknown[];
+  parties?: readonly { party: PartyId; caller: Caller }[];
 }
 
 const approval = (choices: readonly object[], more: object = {}) => ({
@@ -150,6 +152,8 @@ const EFFECTS: (object | undefined)[] = [
   { mode: 'bypass' },
   { directories: ['/elsewhere'] },
   { network: { host: 'example.test', allow: true, scope: 'session' } },
+  { network: { host: 'example.test', allow: true, scope: 'turn' } },
+  { rules: [], directories: [] },
 ];
 const SIGNAL_MARKS: (object | undefined)[] = [
   undefined,
@@ -231,7 +235,67 @@ function generated(seed: number, count: number): Case[] {
       });
     }
   }
-  return cases;
+  // Pin each boundary value as well as combining them randomly: a seed cannot miss an effect.
+  for (const hint of HINTS)
+    cases.push({
+      name: `hint ${hint}`,
+      signals: true,
+      prompt: approval([choice('yes', hint), choice('no', 'reject_once')]),
+      answers: choiceAnswers(['yes', 'no']),
+    });
+  for (const [i, effects] of EFFECTS.entries())
+    cases.push({
+      name: `effects ${String(i)}`,
+      signals: true,
+      prompt: approval([
+        {
+          value: 'yes',
+          label: 'Yes',
+          hint: 'allow_once',
+          ...(effects === undefined ? {} : { effects }),
+          feedback: 'optional',
+        },
+        choice('no', 'reject_once'),
+      ]),
+      answers: [...choiceAnswers(['yes', 'no']), { choice: 'yes', feedback: 'because' }],
+    });
+  for (const answerIn of new Set(ANSWER_IN))
+    cases.push({
+      name: `answerIn ${answerIn}`,
+      signals: true,
+      prompt: approval(SETS.plain, { answerIn }),
+      answers: choiceAnswers(['yes', 'no']),
+    });
+  for (const secret of [true, false])
+    cases.push({
+      name: `question secret ${String(secret)}`,
+      signals: true,
+      prompt: { ...question, questions: question.questions.map((one) => ({ ...one, secret })) },
+      answers: [
+        { answers: { q1: { picked: ['Red'] } } },
+        { answers: { q1: { text: 'mine' } } },
+        { choice: HAND_BACK },
+      ],
+    });
+  return cases.map((test) => {
+    const stranger = `stranger_${String(Math.floor(next() * 1_000_000))}`;
+    const parties = [
+      ...PARTIES,
+      { party: `agent:${stranger}` as const, caller: agentCaller(stranger) },
+      { party: `outside:${stranger}` as const, caller: outsideCaller(stranger) },
+    ];
+    // Exercise identity and order independently of the prompt's generated fields.
+    for (let i = parties.length - 1; i > 0; i--) {
+      const j = Math.floor(next() * (i + 1));
+      const left = parties[i];
+      const right = parties[j];
+      if (left !== undefined && right !== undefined) {
+        parties[i] = right;
+        parties[j] = left;
+      }
+    }
+    return { ...test, parties };
+  });
 }
 
 const PARTIES: { party: PartyId; caller: Caller }[] = [
@@ -295,6 +359,9 @@ afterEach(async () => {
 
 /** Raises `test.prompt` from the worker on the connection `test.signals` names; its Need id. */
 function raise(test: Case): string {
+  // Each boundary sees the same facts: an earlier generated rejection is not a denial in this
+  // occurrence's world. Shuffling parties must not turn one boundary into the third rejection.
+  owner.forgive(CANVAS);
   const origin: PromptOrigin = {
     canvas: CANVAS,
     agent: 'work',
@@ -341,12 +408,36 @@ async function accepted(run: () => Promise<unknown>): Promise<boolean> {
   }
 }
 
+/** What the displayed controls offer, including feedback and question input controls. */
+function offered(view: NeedsItem | undefined, party: PartyId, answer: unknown): boolean {
+  if (view?.by.includes(party) !== true || view.answerIn === 'terminal') return false;
+  const value = answer as { choice?: string; feedback?: string; answers?: unknown };
+  if (value.choice !== undefined) {
+    const choice = view.choices.find((one) => one.value === value.choice);
+    if (choice === undefined) return false;
+    if (
+      value.feedback !== undefined &&
+      choice.feedback !== 'optional' &&
+      choice.feedback !== 'required'
+    )
+      return false;
+    return choice.feedback !== 'required' || !!value.feedback?.trim();
+  }
+  if (value.answers === undefined || view.questions === undefined) return false;
+  try {
+    checkQuestionAnswers(view.questions, value.answers);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Runs every party and answer of each case through the four boundaries; how many trials ran. */
 async function agree(cases: readonly Case[]): Promise<number> {
   {
     let trials = 0;
     for (const test of cases) {
-      for (const { party, caller } of PARTIES) {
+      for (const { party, caller } of test.parties ?? PARTIES) {
         for (const answer of test.answers) {
           // Hand back is never a thing you pick: no boundary offers it.
           if (party === 'you' && JSON.stringify(answer).includes(HAND_BACK)) continue;
@@ -358,12 +449,7 @@ async function agree(cases: readonly Case[]): Promise<number> {
           const view = owner
             .items(canvas, party === 'you' ? 'you' : 'token', party)
             .find((one) => one.id === id);
-          const named = view?.by.includes(party) === true;
-          const shown =
-            'choice' in (answer as object)
-              ? named &&
-                view.choices.some(({ value }) => value === (answer as { choice: string }).choice)
-              : undefined;
+          const shown = offered(view, party, answer);
 
           // R3, over your view of the item as the router reads it.
           const rule = rules['human-choice'].reply;
@@ -395,12 +481,11 @@ async function agree(cases: readonly Case[]): Promise<number> {
           }
           if (viaRouter) {
             expect(r3, `R3 ${label}`).toBe(true);
-            if (shown !== undefined) expect(shown, `selector ${label}`).toBe(true);
+            expect(shown, `selector ${label}`).toBe(true);
           } else if (!viaOwner) {
             // Refused by the allowance: R3 refuses it too wherever it speaks to a choice, and the
             // selector never showed it as one to pick.
-            if (shown !== undefined && party !== 'you')
-              expect(shown, `selector ${label}`).toBe(false);
+            if (party !== 'you') expect(shown, `selector ${label}`).toBe(false);
             // And R3 refuses it, whenever the prompt takes the answer at all.
             const value = (answer as { choice?: string }).choice;
             // A question's answer picking a label it doesn't offer is refused by its shape, not by

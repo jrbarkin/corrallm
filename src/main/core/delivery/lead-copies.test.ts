@@ -218,6 +218,10 @@ describe('a lead’s copy', () => {
     messages.update(top.id, { state: 'delivered' });
     await owner.answer(CANVAS, need, { choice: 'yes' }, as('agent:top'));
     expect(notices()).toEqual([]);
+    await messages.durable();
+    const again = await load();
+    LeadCopies.recover(again);
+    expect(again.all().filter(isLeadNotice)).toEqual([]);
   });
 
   it('offers a lead no more than MAX_WAITING open copies', () => {
@@ -227,6 +231,24 @@ describe('a lead’s copy', () => {
     expect(copies().filter(({ to }) => to === 'agent:mid').length).toBeLessThanOrEqual(20);
     expect(copies().filter(({ to }) => to === 'agent:top').length).toBeLessThanOrEqual(20);
   });
+
+  it.each(['replied', 'withdrawn', 'unresolved'] as const)(
+    'a %s copy frees a place across a restart, while one being delivered still counts',
+    async (state) => {
+      for (let n = 0; n < 20; n++)
+        raise(`${String(n).padStart(8, '0')}-3c4d-4e5f-8a9b-0c1d2e3f4a5b`);
+      const first = copies()[0];
+      if (first === undefined) throw new Error('no copy');
+      messages.update(first.id, { state: 'delivering' });
+      messages.update(first.id, { state: 'delivered' });
+      expect(owner.routeOf(CANVAS, raise(KEY))).toBe('top');
+      messages.update(first.id, { state });
+      await messages.durable();
+      messages = await load();
+      wire();
+      expect(owner.routeOf(CANVAS, raise(KEY2))).toBe('mid');
+    },
+  );
 });
 
 describe('a lead it could not send a copy', () => {
@@ -370,11 +392,11 @@ describe('work per event', () => {
     return count;
   }
 
-  function backlog(n: number): void {
+  function backlog(n: number, to: 'agent:other' | 'agent:mid' = 'agent:other'): void {
     for (let i = 0; i < n; i += 1) {
       messages.add({
         from: 'you',
-        to: 'agent:other',
+        to,
         kind: 'text',
         origin: 'party',
         body: `old ${String(i)}`,
@@ -390,6 +412,19 @@ describe('work per event', () => {
       raise(KEY);
     });
     backlog(300);
+    const big = iterated(() => {
+      raise('3c9e4b5d-6f70-4182-9d3e-4f5a6b7c8d9e');
+    });
+    expect(big).toBeLessThanOrEqual(small + 4);
+  });
+
+  it('offering a copy reads no party traffic waiting for that lead', () => {
+    raise(KEY2);
+    backlog(10, 'agent:mid');
+    const small = iterated(() => {
+      raise(KEY);
+    });
+    backlog(300, 'agent:mid');
     const big = iterated(() => {
       raise('3c9e4b5d-6f70-4182-9d3e-4f5a6b7c8d9e');
     });
@@ -428,6 +463,36 @@ describe('work per event', () => {
       });
     })();
     expect(big).toBeLessThanOrEqual(small + 4);
+  });
+
+  it('recovering an outside wake reads no unrelated decision history', async () => {
+    grants.clear();
+    grantees = ['orchestrator'];
+    raise(KEY);
+    await messages.durable();
+    const small = await load();
+    const before = iterated(() => {
+      LeadCopies.recover(small);
+    });
+    for (let i = 0; i < 300; i++)
+      messages.add(
+        {
+          from: 'corrallm',
+          to: 'you',
+          kind: 'settled',
+          origin: 'party',
+          body: 'An earlier decision.',
+          state: 'delivered',
+          by: 'you',
+        },
+        `decided:earlier-${String(i)}#${String(i)}`,
+      );
+    await messages.durable();
+    const big = await load();
+    const after = iterated(() => {
+      LeadCopies.recover(big);
+    });
+    expect(after).toBeLessThanOrEqual(before + 4);
   });
 });
 
@@ -491,6 +556,18 @@ describe('an outside orchestrator you let answer approvals', () => {
       signal: new AbortController().signal,
       noReturn: () => undefined,
     } as never);
+    // Decision retention is independent of the orchestrators' wake records.
+    for (let i = 0; i < 101; i++)
+      messages.add({
+        from: 'corrallm',
+        to: 'you',
+        kind: 'settled',
+        origin: 'party',
+        body: 'A later decision.',
+        state: 'delivered',
+        by: 'you',
+      });
+    expect(messages.toldStarting(`decided:${second}#`)).toEqual([]);
     await messages.durable();
     const again = await load();
     expect(LeadCopies.recover(again)).toBe(true);

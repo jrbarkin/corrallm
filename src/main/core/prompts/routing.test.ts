@@ -157,6 +157,30 @@ afterEach(async () => {
 });
 
 describe('routing', () => {
+  it('offers feedback only to you, while routed parties choose fixed decisions', () => {
+    grantees = ['orchestrator'];
+    const { id } = raise(
+      'work',
+      approval([
+        { value: 'yes', label: 'Yes', hint: 'allow_once', effects: {}, feedback: 'optional' },
+        { value: 'no', label: 'No', hint: 'reject_once', effects: {} },
+      ]),
+    );
+    expect(owner.items(CANVAS).find((item) => item.id === id)?.choices[0]?.feedback).toBe(
+      'optional',
+    );
+    for (const party of ['agent:mid', 'outside:orchestrator'])
+      expect(seenBy(party, id)?.choices.find(({ value }) => value === 'yes')?.feedback).toBe(
+        'none',
+      );
+  });
+
+  it('offers a routed lead question labels while keeping own words available to you', () => {
+    const { id } = raise('work', question);
+    expect(owner.items(CANVAS).find((item) => item.id === id)?.questions?.[0]?.other).toBe(true);
+    expect(seenBy('agent:mid', id)?.questions?.[0]?.other).toBe(false);
+  });
+
   it('routes a team’s prompt to the nearest granted ancestor, and to you at once', () => {
     const item = raise('work');
     expect(item.by).toEqual(['you', 'agent:mid']);

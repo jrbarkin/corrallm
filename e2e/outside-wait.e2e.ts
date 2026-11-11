@@ -84,6 +84,10 @@ test('serve wakes a granted orchestrator, whose wait hears it and whose reply al
       .toBe(false);
     // It answered, so it is not told that the request ended.
     const later = await wait(3, after);
+    expect([0, 1], 'The final wait must receive messages or time out normally').toContain(
+      later.code,
+    );
+    expect(later.line?.next, 'The final wait must return a valid cursor').toBeTruthy();
     expect(JSON.stringify(later.line?.messages ?? [])).not.toContain('no longer waits for you');
   } finally {
     await w.close();

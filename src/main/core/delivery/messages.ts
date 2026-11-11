@@ -13,6 +13,7 @@ import type { RecordRow } from '../../../shared/model/records';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
+  isLeadCopy,
   isOpenAsk,
   isQueueHandoff,
   isSettled,
@@ -248,6 +249,8 @@ export class MessageStore {
    * alone, never every message delivery acts on.
    */
   readonly #activeTo = new Map<PartyId, { line: Map<string, Kept>; last: number }>();
+  /** Open copies per lead: offering another never walks the lead's waiting party traffic. */
+  readonly #leadCopies = new Map<PartyId, number>();
   /** Only records eligible for pruning: globally, and by both parties, in original order. */
   readonly #settled = new Sequence();
   readonly #parties = new Map<PartyId, Sequence>();
@@ -340,6 +343,11 @@ export class MessageStore {
   activeTo(to: PartyId): Message[] {
     const kept = this.#activeTo.get(to);
     return kept === undefined ? [] : Array.from(kept.line.values(), ({ message }) => message);
+  }
+
+  /** The open host-built copies to `to`, counted as their rows change (B24's MAX_WAITING). */
+  leadCopiesTo(to: PartyId): number {
+    return this.#leadCopies.get(to) ?? 0;
   }
 
   /**
@@ -636,13 +644,32 @@ export class MessageStore {
     const was = message.to;
     const moved = this.update(id, { to, state: to === 'you' ? 'delivered' : 'pending' });
     const now = this.#kept.get(id);
-    // A note its first recipient was not yet told is never overwritten by a second move's.
-    if (
-      withdrawal !== undefined &&
-      now !== undefined &&
-      (now.withdrawal === undefined || now.withdrawal.told === true)
-    )
-      this.#keep({ ...now, withdrawal: { text: withdrawal, for: was } });
+    if (withdrawal !== undefined && now !== undefined) {
+      // Keep each former recipient's untold note under its original acknowledgement id: a native
+      // send may already carry it. Later notes use separate non-turn records, not another ask.
+      const previous = now.withdrawal;
+      if (previous !== undefined && previous.told !== true) {
+        const note: Message = {
+          id: randomUUID(),
+          canvas: this.canvas,
+          at: this.#now(),
+          from: 'corrallm',
+          to: was,
+          kind: 'notice',
+          body: withdrawal,
+          state: 'delivered',
+          replyTo: id,
+        };
+        this.#keep({
+          seq: this.#unjournaled === undefined ? this.#table.place() : ++this.#seq,
+          message: note,
+          bytes: 0,
+          origin: 'party',
+          withdrawal: { text: withdrawal },
+        });
+        for (const listener of this.#listeners) listener(note);
+      } else this.#keep({ ...now, withdrawal: { text: withdrawal, for: was } });
+    }
     return moved;
   }
 
@@ -787,6 +814,7 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexCopies(before?.message, kept.message);
     this.#indexTold(id, before?.told, kept.told);
     this.#indexRecord(before, kept);
     this.#indexResult(before, false);
@@ -847,6 +875,23 @@ export class MessageStore {
     return rows.sort((a, b) => a.seq - b.seq).map(({ message }) => message);
   }
 
+  /** Keeps the open-copy counts with the same membership as the active recipient lines. */
+  #indexCopies(before: Message | undefined, after: Message | undefined): void {
+    const recipient = (message: Message | undefined): PartyId | undefined =>
+      message?.from === 'corrallm' && isLeadCopy(message) && isActive(message)
+        ? message.to
+        : undefined;
+    const was = recipient(before);
+    const now = recipient(after);
+    if (was === now) return;
+    if (was !== undefined) {
+      const count = (this.#leadCopies.get(was) ?? 0) - 1;
+      if (count > 0) this.#leadCopies.set(was, count);
+      else this.#leadCopies.delete(was);
+    }
+    if (now !== undefined) this.#leadCopies.set(now, (this.#leadCopies.get(now) ?? 0) + 1);
+  }
+
   /** Keeps a message no more. */
   #delete(id: string): void {
     const kept = this.#kept.get(id);
@@ -857,6 +902,7 @@ export class MessageStore {
       this.#indexRecord(kept, undefined);
     }
     this.#kept.delete(id);
+    this.#indexCopies(kept?.message, undefined);
     this.#indexTold(id, kept?.told, undefined);
     this.#active.delete(id);
     if (kept !== undefined) this.#lineOf(kept, undefined);

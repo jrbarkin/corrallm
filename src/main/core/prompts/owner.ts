@@ -179,7 +179,12 @@ export interface PromptOwnerDeps {
    * B24 C9: an outside orchestrator you let answer approvals is woken, once, as one it may answer
    * is admitted, and told once more if it ends unanswered by it (a record for its `wait`).
    */
-  wake?: (wake: { canvas: CanvasId; need: string; name: string; type: 'raised' | 'ended' }) => void;
+  wake?: (wake: {
+    canvas: CanvasId;
+    need: string;
+    name: string;
+    type: 'raised' | 'ended' | 'answered';
+  }) => void;
   /**
    * B24 C7: a lead was cut off from a worker's prompts after LEAD_DENIALS rejections in a row
    * (`need` is the prompt whose answer made the last): the copy path tells it once.
@@ -445,9 +450,14 @@ export class PromptOwner implements PromptSink {
     return {
       ...seen,
       choices: [
-        ...yours.choices.filter(({ value }) => may.choices.includes(value)),
+        ...yours.choices
+          .filter(({ value }) => may.choices.includes(value))
+          .map((choice) => ({ ...choice, feedback: 'none' as const })),
         ...(may.handBack ? [HAND_BACK_CHOICE] : []),
       ],
+      ...(may.answers && yours.questions !== undefined
+        ? { questions: yours.questions.map((question) => ({ ...question, other: false })) }
+        : {}),
     };
   }
 
@@ -1208,9 +1218,13 @@ export class PromptOwner implements PromptSink {
     prompts.live.delete(occurrence.prompt.id);
     this.#unroute(occurrence, ended);
     for (const name of occurrence.woken) {
-      // One that answered it was told by its own reply.
-      if (ended.by === `outside:${name}`) continue;
-      this.#deps.wake?.({ canvas: occurrence.canvas, need: occurrence.need, name, type: 'ended' });
+      // A successful answer acknowledges the existing wake durably without sending another.
+      this.#deps.wake?.({
+        canvas: occurrence.canvas,
+        need: occurrence.need,
+        name,
+        type: ended.by === `outside:${name}` ? 'answered' : 'ended',
+      });
     }
     this.#keys.delete(keyOf(occurrence, occurrence.key));
     this.#bytes -= occurrence.bytes;
