@@ -187,6 +187,8 @@ function runTui() {
   let screen = trusted ? (untrusted.length > 0 ? 'hooks' : 'chat') : 'trust';
   let state = 'ready';
   let draft = '';
+  /** Whether the last key was a Ctrl+C on an empty composer. */
+  let armedToQuit = false;
   const lines = [];
   let spinner = 0;
   let spinning;
@@ -196,8 +198,8 @@ function runTui() {
 
   log({ event: 'start', args: argv, cwd: process.cwd(), term: process.env.TERM });
 
-  function quit(code) {
-    log({ event: 'exit', code });
+  function quit(code, by) {
+    log({ event: 'exit', code, ...(by === undefined ? {} : { by }) });
     out('\x1b[?1049l\x1b[?2004l');
     process.exit(code);
   }
@@ -207,9 +209,9 @@ function runTui() {
       // it closes (its close revoked it first).
       if (process.env.FAKE_MCP_LOG && api !== undefined) {
         void mcp.closingCall(api).finally(() => {
-          quit(0);
+          quit(0, 'signal');
         });
-      } else quit(0);
+      } else quit(0, 'signal');
     });
   }
 
@@ -390,9 +392,15 @@ function runTui() {
     }
     if (data.startsWith('\x1b')) return;
     for (const character of data) {
+      if (character !== '\x03') armedToQuit = false;
       if (character === '\r') void submit();
-      else if (character === '\x03') draft = '';
-      else if (character === '\x7f') draft = draft.slice(0, -1);
+      else if (character === '\x03') {
+        // As Codex does: Ctrl+C clears a draft; on an empty composer a second press in a row
+        // quits (corrallm's shutdown keys), rather than waiting to be killed.
+        if (draft !== '') draft = '';
+        else if (armedToQuit && state !== 'working' && state !== 'asking') quit(0, 'ctrl-c');
+        else armedToQuit = true;
+      } else if (character === '\x7f') draft = draft.slice(0, -1);
       else if (character === '\n' || character >= ' ') draft += character;
     }
     draw();
