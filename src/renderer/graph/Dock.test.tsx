@@ -72,7 +72,7 @@ const props = () => ({
   onStart: vi.fn(),
   onSettings: vi.fn(),
 });
-it('lists every agent once in its nested canvas group, with catalog image logos', () => {
+it('lists every agent once in its nested canvas group, with the adapters’ first-letter marks', () => {
   render(<Dock {...props()} />);
   const dock = within(screen.getByRole('navigation', { name: 'Canvas agents' }));
   const group = within(dock.getByRole('group', { name: 'Review team' }));
@@ -85,8 +85,8 @@ it('lists every agent once in its nested canvas group, with catalog image logos'
   expect(within(dock.getByRole('group', { name: 'Lead' })).getAllByRole('button')).toHaveLength(2);
   expect(dock.getAllByRole('button', { name: /, .*: Idle$/ })).toHaveLength(4);
   for (const image of dock.getAllByRole('img')) {
-    expect(image.tagName).toBe('IMG');
-    expect(image.getAttribute('src')).toMatch(/^data:image\/svg\+xml,/);
+    expect(image.tagName).toBe('SPAN');
+    expect(image.querySelector('img, svg')).toBeNull();
   }
 });
 it('shows a declared adapter without a logo as its first letter', async () => {

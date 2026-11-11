@@ -1,0 +1,23 @@
+# Groups the notes GitHub generates for a release (scripts/release.sh asks for them unless it is
+# given a notes file). Pull request titles are written for readers outside the project.
+changelog:
+  exclude:
+    labels:
+      - dependencies
+    authors:
+      - dependabot[bot]
+  categories:
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+        - fix
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other changes
+      labels:
+        - '*'

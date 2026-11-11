@@ -95,6 +95,7 @@ interface Logged {
   session?: string;
   cwd?: string;
   code?: number;
+  by?: string;
 }
 
 /** What the fake codex logged: how it was started, the prompts it got, how it ended. */
@@ -444,6 +445,11 @@ test('starts Codex with the model, effort and mode its agent is set to, from Cod
 
   await panel.getByRole('button', { name: 'Restart with these' }).click();
   await codexReady(2);
+  // Closing the first run was Codex's own quit on the two Ctrl+C keys corrallm sends it, not the
+  // kill that waits out corrallm's grace period (seconds the restart should not take).
+  expect((await logged()).filter((entry) => entry.event === 'exit')).toEqual([
+    { event: 'exit', code: 0, by: 'ctrl-c' },
+  ]);
   const again = (await starts())[1] ?? [];
   expect(again[again.indexOf('-m') + 1]).toBe('gpt-6-luna');
   expect(again).toContain('model_reasoning_effort="low"');

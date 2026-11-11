@@ -40,7 +40,7 @@ it('lists and fills the fields and open agents returned by templates.list', asyn
   fireEvent.change(screen.getByRole('combobox', { name: "Researcher's agent" }), {
     target: { value: 'codex' },
   });
-  expect(role && within(role).getByRole('img', { name: 'Codex' }).tagName).toBe('IMG');
+  expect(role && within(role).getByRole('img', { name: 'Codex' }).tagName).toBe('SPAN');
   fireEvent.click(screen.getByRole('button', { name: 'Create canvas' }));
   await waitFor(() => {
     expect(onPick).toHaveBeenCalledOnce();
