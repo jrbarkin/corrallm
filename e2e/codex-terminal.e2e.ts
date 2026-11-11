@@ -246,7 +246,7 @@ test('runs Codex itself in a terminal in the project folder, and follows its tur
 
   // It asks to approve a command: it needs the user, here and on the canvas.
   await typeIn(terminal, 'ask to run echo', 'Enter');
-  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await expect(status(view)).toHaveText('Needs you here');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
   await expect(view).toHaveCount(0);
   const card = page.locator('.react-flow__node');
