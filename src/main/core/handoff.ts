@@ -107,6 +107,8 @@ interface Following {
 interface Attached {
   runtime: HandoffRuntime;
   agents: Map<string, Following>;
+  /** Only active handoff requests: ordinary message changes need no agent walk. */
+  requests: Map<string, string>;
   exports: Map<string, Promise<void>>;
   stop: () => void;
 }
@@ -136,6 +138,7 @@ export class HandoffService {
     const attached: Attached = {
       runtime,
       agents: new Map(),
+      requests: new Map(),
       exports: new Map(),
       stop: () => {
         for (const stop of stops) stop();
@@ -419,6 +422,7 @@ export class HandoffService {
       connection,
       ...(during === undefined ? {} : { during }),
     };
+    attached.requests.set(message.id, agent);
     following.asked += 1;
     this.#changed(canvas, agent);
   }
@@ -427,20 +431,22 @@ export class HandoffService {
   #watched(canvas: CanvasId, id: string): void {
     const attached = this.#canvases.get(canvas);
     if (attached === undefined) return;
+    const agent = attached.requests.get(id);
+    if (agent === undefined) return;
     const message = attached.runtime.messages.get(id);
     if (message !== undefined && !ended(message)) return;
-    for (const [agent, following] of attached.agents) {
-      if (following.request?.id !== id) continue;
-      following.request = undefined;
-      // Not accepted (withdrawn, cut off, refused, or its reply wasn't one): failed at the last try.
-      if (following.armed && following.asked >= TRIES) following.failed = true;
-      this.#changed(canvas, agent);
-      queueMicrotask(() => {
-        if (this.#canvases.get(canvas) !== attached) return;
-        attached.runtime.engine.run.admissionChanged();
-        attached.runtime.delivery.schedule();
-      });
-    }
+    attached.requests.delete(id);
+    const following = attached.agents.get(agent);
+    if (following?.request?.id !== id) return;
+    following.request = undefined;
+    // Not accepted (withdrawn, cut off, refused, or its reply wasn't one): failed at the last try.
+    if (following.armed && following.asked >= TRIES) following.failed = true;
+    this.#changed(canvas, agent);
+    queueMicrotask(() => {
+      if (this.#canvases.get(canvas) !== attached) return;
+      attached.runtime.engine.run.admissionChanged();
+      attached.runtime.delivery.schedule();
+    });
   }
 
   /** One export at a time per agent: the next sees the proof of the copy the previous wrote. */

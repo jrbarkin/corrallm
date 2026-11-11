@@ -633,6 +633,45 @@ describe('a fault at every await of the switch (C4), and what a restart decides'
     expect(again.data()).toMatchObject(CLAUDE);
   });
 
+  it.each(['fresh', 'commit'] as const)(
+    'prepares a fresh conversation in the current workspace after availability changes during %s',
+    async (when) => {
+      const at = await world(canvasOf(worker()));
+      let workspace = 'original';
+      const freshened: string[] = [];
+      const moved = () => {
+        if (workspace !== 'original') return;
+        workspace = 'replacement';
+        at.service.availabilityChanged(CANVAS);
+      };
+      at.sessions.fresh.mockImplementation(() => {
+        freshened.push(workspace);
+        if (when === 'fresh') moved();
+        return Promise.resolve();
+      });
+      const change = at.documents.change.bind(at.documents);
+      const committing = vi.spyOn(at.documents, 'change').mockImplementation((canvas, write) => {
+        if (when === 'commit' && write.revision.op === 'fallback.switch') moved();
+        return change(canvas, write);
+      });
+      try {
+        await limited(at);
+        expect(freshened).toEqual(['original', 'replacement']);
+        expect(at.data()).toMatchObject(CLAUDE);
+        expect(at.revision()).toEqual({ op: 'fallback.switch', by_party: 'corrallm' });
+        expect(at.engine.run.snapshot().agents.worker?.attempts?.hello).toHaveLength(2);
+        expect(at.sent()).toEqual([
+          ['worker', 'codex.app-server', 'Say hello'],
+          ['worker', 'claude-code.terminal', 'Say hello'],
+        ]);
+      } finally {
+        committing.mockRestore();
+        at.service.close();
+        at.engine.reset();
+      }
+    },
+  );
+
   it('committing: a write that fails switches nothing, said; a restart switches it', async () => {
     const at = await world(canvasOf(worker()));
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
