@@ -144,7 +144,9 @@ export const claudeCode: Adapter = {
           form: 'answerable',
         },
         // Ask rules and safety checks are reported (sdk/raise.ts' signalsOf), as recorded with
-        // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl): B13 C4.
+        // Claude Code 2.1.311 (sdk/fixtures/ask-rule.jsonl, safety-check.jsonl: B13 C4) and 2.1.321
+        // (signals-*.jsonl: a hook's ask, an ask rule over a safety check, compound commands, auto
+        // mode's classifier: B13 C13). A compound command's `subcommandResults` counts as a safety check.
         signals: true,
         context: true,
         // corrallm's agent API: its host-registered channel (recorded on SDK 0.3.319).
