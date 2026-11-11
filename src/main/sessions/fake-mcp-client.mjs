@@ -100,7 +100,7 @@ export async function connectHttp(
  * fake connected, and its `reply` (if any) is the turn's reply; a rule with `once` fires once per
  * process. In a call's arguments `{task}` is the attempt a step's text names (its `task "<id>"`),
  * `{ask}` the question a framed question names (`question <id>`), and `{message}` the message a
- * framed message names: each the last one this fake has seen, so a continuation can still name
+ * framed message names, `{need}` and `{canvas}` the prompt and canvas a lead's copy names: each the last one this fake has seen, so a continuation can still name
  * its task. FAKE_MCP_LOG, a file of the test's own, gets one line per call (its rule, tool and
  * outcome: whether it was refused, and its structured result or refusal text), and one as the
  * fake connects naming a hash of its credential, so a test can tell generations apart: never the
@@ -113,6 +113,9 @@ const PATTERNS = {
   task: new RegExp(`task "${ID}"`),
   ask: new RegExp(`question ${ID}\\)`),
   message: new RegExp(`message ${ID}`),
+  // A lead copy's host-built card names the Need to answer and its canvas (B24).
+  need: /"to": "([^"]+)"/,
+  canvas: new RegExp(`needs \\{ "canvas": "${ID}"`),
 };
 
 /** Appends a line to FAKE_MCP_LOG, if the test gave one. */
@@ -131,7 +134,10 @@ export function logConnected(token) {
 
 function fill(value) {
   if (typeof value === 'string')
-    return value.replace(/\{(task|ask|message)\}/g, (whole, name) => seen[name] ?? whole);
+    return value.replace(
+      /\{(task|ask|message|need|canvas)\}/g,
+      (whole, name) => seen[name] ?? whole,
+    );
   if (Array.isArray(value)) return value.map(fill);
   if (value && typeof value === 'object')
     return Object.fromEntries(Object.entries(value).map(([key, one]) => [key, fill(one)]));

@@ -103,7 +103,9 @@ function stubApi(api: Partial<AppApi>) {
                           ? { agents: {} }
                           : args.topic === 'messages'
                             ? { items: {}, order: [], next: '' }
-                            : { items: [] };
+                            : args.topic === 'leads'
+                              ? { leads: [], outside: [] }
+                              : { items: [] };
                     return { ...answer, value: { ...answer.value, state } } as typeof answer;
                   });
   Object.defineProperty(window, 'api', {
