@@ -6,6 +6,7 @@ import type { FallbackView } from './fallback';
 import type { HandoffView } from './handoff';
 import type { SessionFeatures } from '../features';
 import type { BackgroundTask, SlashCommand } from '../session';
+import { isQueueHandoff } from './messages';
 import type { Message, MessageDisplay, MessageOrigin } from './messages';
 import type { QueueItem } from './queue';
 import type { Run } from './run';
@@ -244,15 +245,22 @@ export function messageView(
   );
 }
 
+/**
+ * Whether a message is one a queue shows beside its authored items (B19 X2): a party's or your
+ * message to the agent, or a queue hand-off for it (the run's work for another agent, shown
+ * read-only). Never the run's own direct send, nor a hand-off's evidence, which is its sender's.
+ */
+export function isQueueRowMessage(message: MessageView): boolean {
+  return message.kind === 'text' && (message.origin !== 'run' || isQueueHandoff(message));
+}
+
 /** A display projection, never runner input, document rows or authored wait targets. */
 export function queueRows(
   queue: readonly QueueItem[],
   messages: readonly MessageView[],
 ): readonly QueueRow[] {
   const rows: QueueRow[] = [];
-  const displayed = messages.filter(
-    (message) => message.kind === 'text' && message.origin !== 'run',
-  );
+  const displayed = messages.filter(isQueueRowMessage);
   const put = (after: string | undefined) => {
     for (const message of displayed.filter((one) => one.display?.after === after))
       rows.push(Object.freeze({ kind: 'message', key: `message/${message.id}`, message }));

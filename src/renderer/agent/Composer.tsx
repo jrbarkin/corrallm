@@ -394,8 +394,8 @@ export function Composer({
       {session.queued.length > 0 && (
         <ul className="agent-queued" aria-label="Queued messages">
           {session.queued.map((queued) => (
-            <li key={queued.id}>
-              {queued.text}
+            <li key={queued.id} data-from={queued.from}>
+              {queued.from === undefined ? queued.text : `From ${queued.from}: ${queued.text}`}
               {queued.images !== undefined && (
                 <span className="agent-queued-images">
                   {' '}
@@ -403,16 +403,19 @@ export function Composer({
                   ]
                 </span>
               )}
-              <button
-                type="button"
-                aria-label={`Edit queued message: ${queued.text}`}
-                title="Take it back to edit"
-                onClick={() => {
-                  controls.unqueue(queued.id);
-                  setDraft(queued.text);
-                  field.current?.focus();
-                }}
-              />
+              {/* A hand-off from a queue is the run's: Stop its run to take it back. */}
+              {queued.from === undefined && (
+                <button
+                  type="button"
+                  aria-label={`Edit queued message: ${queued.text}`}
+                  title="Take it back to edit"
+                  onClick={() => {
+                    controls.unqueue(queued.id);
+                    setDraft(queued.text);
+                    field.current?.focus();
+                  }}
+                />
+              )}
             </li>
           ))}
         </ul>

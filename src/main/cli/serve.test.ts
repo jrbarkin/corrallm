@@ -1178,6 +1178,15 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
       const first = await serve();
       const client = await connect(first.url);
       const slow = await midTurn(client);
+      // The run is journaled after the turn starts: killed before that, there is no run to discard.
+      await vi.waitFor(
+        () => {
+          expect(
+            readOnDisk(profile, (disk) => disk.prepare('SELECT count(*) AS n FROM run').get()?.n),
+          ).toBeGreaterThan(0);
+        },
+        { timeout: 10_000 },
+      );
       first.child.kill('SIGKILL');
       await first.exited;
       await rm(path.join(profile, 'api.json'));
@@ -1190,9 +1199,11 @@ describe.skipIf(process.platform === 'win32')('corrallm serve', () => {
           new RegExp(`\\[m1\\.corral\\] notice to outside:orchestrator about ${slow}: .*cut off`),
         );
       });
-      expect(server.stderr()).toMatch(
-        /\[m1\.corral\] The run progress could not be restored, so it was discarded \(/,
-      );
+      await vi.waitFor(() => {
+        expect(server.stderr()).toMatch(
+          /\[m1\.corral\] The run progress could not be restored, so it was discarded \(/,
+        );
+      });
     }, 30_000);
 
     it('sets a damaged database aside and serves on from its snapshot, saying so', async () => {

@@ -1,4 +1,6 @@
 import type { Link, NodeLike } from './canvas';
+import { agentOf } from './messages';
+import type { PartyId } from './messages';
 
 /** Frames are groups even when empty; an agent becomes a group when it has children. */
 export function isGroup(nodes: readonly NodeLike[], id: string): boolean {
@@ -69,6 +71,16 @@ export function teamOf(nodes: readonly NodeLike[], id: string): string[] {
 export function agentName(nodes: readonly NodeLike[], id: string): string {
   const node = nodes.find((n) => n.id === id);
   return node ? node.data.label || 'Unnamed agent' : 'Deleted agent';
+}
+
+/**
+ * A party as a view names it: "you", an agent by its name, corrallm, or an outside caller by the
+ * name it holds a token as.
+ */
+export function partyName(nodes: readonly NodeLike[], party: PartyId): string {
+  const agent = agentOf(party);
+  if (agent !== undefined) return agentName(nodes, agent);
+  return party.startsWith('outside:') ? party.slice('outside:'.length) : party;
 }
 
 /** Whether agents `a` and `b` are linked (can talk to each other), whichever way it was drawn. */

@@ -56,6 +56,11 @@ export interface SubmittedMessage {
   task?: { agent: string; item: string };
   /** The cancelled manual submission explicitly resent by the user. */
   retryOf?: string;
+  /**
+   * A queue hand-off from another agent's queue (B19 X2), read-only: `from` the sender's name as
+   * the view shows it, `item` the sender's item it carries. The run owns it, not this queue.
+   */
+  handoff?: { from: string; item: string };
   /** The previous process stopped before this submission had a definitive result. */
   unresolved?: boolean;
 }
@@ -292,6 +297,22 @@ export function findItem(
     }
   }
   return undefined;
+}
+
+/**
+ * The item at the top of `queue` that holds item `id`: the item itself, or the if-then or repeat
+ * whose step it is; none for an id the queue does not hold (or none given).
+ */
+export function topLevelOf(
+  queue: readonly QueueItem[],
+  id: string | undefined,
+): string | undefined {
+  if (id === undefined) return undefined;
+  const found = findItem(queue, id);
+  if (!found) return undefined;
+  if (found.repeat) return found.repeat.id;
+  return queue.find((item) => item.id === id || (isIf(item) && item.then.some((s) => s.id === id)))
+    ?.id;
 }
 
 /**

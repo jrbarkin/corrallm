@@ -231,6 +231,64 @@ const LIMIT = (): TurnResult => ({
   resetsAt: Date.now() + 60 * 60_000,
 });
 
+it('handles an unrelated settled message without walking the agents whose turns it followed', async () => {
+  await keep();
+  const core = await start(driven('codex').connector, driven('claude-code').connector);
+  await core.engines.open(CANVAS);
+  const open = core.engines.canvas(CANVAS);
+  if (open === undefined) throw new Error('No open canvas.');
+  let observed: Parameters<typeof open.engine.sessions.observe>[0] | undefined;
+  let watched: Parameters<typeof open.messages.watch>[0] | undefined;
+  const observe = vi.spyOn(open.engine.sessions, 'observe').mockImplementation((listener) => {
+    observed = listener;
+    return () => undefined;
+  });
+  const watch = vi.spyOn(open.messages, 'watch').mockImplementation((listener) => {
+    watched = listener;
+    return () => undefined;
+  });
+  const service = new HandoffService({
+    catalog: CATALOG,
+    canvas: () => open,
+    usage: { exhausted: () => undefined },
+    now: Date.now,
+  });
+  const detach = service.attach(CANVAS, open);
+  observe.mockRestore();
+  watch.mockRestore();
+  try {
+    if (observed === undefined || watched === undefined) throw new Error('Not attached.');
+    // Earlier agents' turns, including ones with no context report, have all been followed.
+    for (let i = 0; i < 64; i++)
+      observed(`earlier-agent-${String(i)}`, {
+        type: 'end',
+        id: `turn-${String(i)}`,
+        seconds: 1,
+        result: COMPLETED,
+      });
+    const message = open.messages.add({
+      from: 'you',
+      to: 'agent:worker',
+      kind: 'text',
+      origin: 'manual',
+      body: 'Ordinary work.',
+      state: 'replied',
+    });
+    // Only the synchronous watcher is measured: the rest of the core is outside this call.
+    const iteration = vi.spyOn(Map.prototype, Symbol.iterator);
+    let walks: number;
+    try {
+      watched(message.id);
+      walks = iteration.mock.calls.length;
+    } finally {
+      iteration.mockRestore();
+    }
+    expect(walks).toBe(0);
+  } finally {
+    detach();
+  }
+});
+
 describe('asking an agent for its handoff', () => {
   it('asks once a turn’s report passes its ask point, holding its next task, and keeps the exact reply', async () => {
     await keep();
