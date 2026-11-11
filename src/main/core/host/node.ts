@@ -28,6 +28,7 @@ export const NODE_HOST: HostServices = {
   askOpenLink: refuse,
   openExternal: refuse,
   showFile: refuse,
+  launcher: () => null,
 };
 
 /**

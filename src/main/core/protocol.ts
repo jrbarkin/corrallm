@@ -91,6 +91,8 @@ export interface CoreInit {
   locale: string;
   /** Main admits CORRALLM_FAKE_SESSIONS only in an unpackaged build. */
   fakeSessions: boolean;
+  /** The packaged app's `corrallm` launcher as a real path (HostServices.launcher), else null. */
+  launcher: string | null;
 }
 
 /**
@@ -100,7 +102,7 @@ export interface CoreInit {
  */
 export interface HostSide {
   requests: {
-    [K in Exclude<keyof HostServices, 'presence' | 'unnotify'>]: {
+    [K in Exclude<keyof HostServices, 'presence' | 'unnotify' | 'launcher'>]: {
       args: Parameters<HostServices[K]>;
       result: K extends 'pickCanvasToOpen' | 'pickCanvasToSave' | 'pickFolder'
         ? string | null

@@ -255,8 +255,10 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
           `claude mcp add --transport http corrallm-server ${server.url} --header 'Authorization: Bearer \${CORRALLM_OUTSIDE_TOKEN}'`,
         );
         expect(printed).toContain(
-          `codex mcp add corrallm-server --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
+          'Codex: in your orchestrator’s folder, add this to .codex/config.toml (corrallm doesn’t write it):',
         );
+        expect(printed).toContain(`url = "${server.url}"`);
+        expect(printed).not.toMatch(/codex mcp add/);
         const store = await kept();
         expect(JSON.stringify(store)).not.toContain(value);
         expect(store.tokens[sha256(value)]).toMatchObject({
@@ -347,10 +349,11 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
         expect(first.printed).toContain(
           `claude mcp add-json corrallm-server '{"type":"http","url":"${server.url}","headersHelper":"corrallm token header --from \\"${into}\\""}'`,
         );
-        // Codex reads its token from a variable as it starts: from the file, then.
-        expect(first.printed).toContain(
-          `codex mcp add corrallm-server --url ${server.url} --bearer-token-env-var CORRALLM_OUTSIDE_TOKEN`,
-        );
+        // Codex reads its token from a variable as it starts: from the file, then, in the
+        // orchestrator's own folder, never user-wide.
+        expect(first.printed).toContain(`url = "${server.url}"`);
+        expect(first.printed).toContain('.codex/config.toml');
+        expect(first.printed).not.toMatch(/codex mcp add/);
 
         /** What the helper a client runs at each connect prints: the current token's header. */
         const helper = async () => {

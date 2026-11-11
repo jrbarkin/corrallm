@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { AppUpdates } from './updates';
 import type { UpdateEvents } from './updates';
@@ -1003,17 +1006,31 @@ describe('starting the app’s core', () => {
       app.isPackaged = packaged;
       app.whenReady.mockResolvedValueOnce();
       vi.stubEnv('CORRALLM_FAKE_SESSIONS', '1');
-      await import('./index');
-      await vi.waitFor(() => {
-        expect(createWindow).toHaveBeenCalledOnce();
-      });
-      expect(request).toHaveBeenCalledExactlyOnceWith('init', {
-        app: { name: 'corrallm', version: '1.2.3' },
-        profile: '/app/profile',
-        distribution: 'local',
-        locale: 'en-US',
-        fakeSessions: !packaged,
-      });
+      // A packaged app's resources hold bin/corrallm; the core is handed its real path.
+      const resources = await mkdtemp(path.join(tmpdir(), 'resources-'));
+      let launcher: string | null = null;
+      try {
+        await mkdir(path.join(resources, 'bin'));
+        await writeFile(path.join(resources, 'bin', 'corrallm'), '#!/bin/sh\n');
+        Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resources });
+        if (packaged && process.platform !== 'win32') {
+          launcher = path.join(await realpath(resources), 'bin', 'corrallm');
+        }
+        await import('./index');
+        await vi.waitFor(() => {
+          expect(createWindow).toHaveBeenCalledOnce();
+        });
+        expect(request).toHaveBeenCalledExactlyOnceWith('init', {
+          app: { name: 'corrallm', version: '1.2.3' },
+          profile: '/app/profile',
+          distribution: 'local',
+          locale: 'en-US',
+          fakeSessions: !packaged,
+          launcher,
+        });
+      } finally {
+        await rm(resources, { recursive: true, force: true });
+      }
     },
   );
 });

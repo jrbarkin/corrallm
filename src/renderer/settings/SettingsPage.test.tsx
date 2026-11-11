@@ -48,7 +48,13 @@ it('shows the page with its sections in order and sends nothing for opening, rea
       within(page)
         .getAllByRole('heading', { level: 3 })
         .map((heading) => heading.textContent),
-    ).toEqual(['Default agent', 'Notifications', 'Consents', 'Links that open without asking']);
+    ).toEqual([
+      'Default agent',
+      'Notifications',
+      'Consents',
+      'Links that open without asking',
+      'The corrallm command',
+    ]);
     expect(
       within(page).getByText('For new agents; existing agents keep their choices.'),
     ).toBeTruthy();
@@ -558,7 +564,11 @@ it('shows neutral loading rows, never guessed values, until the first snapshot',
   const mirror = mirrorOf(() => new Promise(() => undefined));
   try {
     await renderReady(
-      <SettingsPage client={{ settingsSet: vi.fn() }} mirror={mirror} onClose={vi.fn()} />,
+      <SettingsPage
+        client={{ settingsSet: vi.fn(), appCommand: vi.fn() }}
+        mirror={mirror}
+        onClose={vi.fn()}
+      />,
     );
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByText('No notification attempted since corrallm started')).toBeNull();
@@ -586,7 +596,11 @@ it('shows a retryable read error when the settings cannot be read, then the page
   const mirror = mirrorOf(subscribe);
   try {
     await renderReady(
-      <SettingsPage client={{ settingsSet: vi.fn() }} mirror={mirror} onClose={vi.fn()} />,
+      <SettingsPage
+        client={{ settingsSet: vi.fn(), appCommand: vi.fn() }}
+        mirror={mirror}
+        onClose={vi.fn()}
+      />,
     );
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain(sentence);

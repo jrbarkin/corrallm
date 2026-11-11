@@ -146,6 +146,8 @@ export const SURFACE = {
   'topics.subscribe': { access: Y, kind: 'command', scope: 'none' },
   'topics.unsubscribe': { access: Y, kind: 'command', scope: 'none' },
   'app.info': { access: A, kind: 'read', scope: 'none' },
+  // B30 C2: linking the corrallm command onto your PATH is yours alone (the consent deviation).
+  'app.command': { access: Y, kind: 'command', scope: 'none' },
   'catalog.get': { access: A, kind: 'read', scope: 'none', reads: 'catalog' },
   'catalog.installed': { access: R, kind: 'read', scope: 'none' },
   'templates.list': { access: R, kind: 'read', scope: 'none' },
@@ -156,7 +158,7 @@ export const SURFACE = {
     kind: 'read',
     scope: 'none',
     reads: 'settings',
-    varies: ['notifications', 'links'],
+    varies: ['notifications', 'links', 'command'],
   },
   // B12 C2, B22a C1: your settings are yours alone to set (the consent deviation, Core Server D8).
   'settings.set': { access: Y, kind: 'command', scope: 'none' },

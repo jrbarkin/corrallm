@@ -27,6 +27,7 @@ import type { HostServices } from '../host';
 import type { StalledTurns } from '../stalled';
 import type { PromptOwner } from '../prompts/owner';
 import type { TokenStore } from '../tokens';
+import type { CommandLink } from '../command-link';
 import type { LeadStore } from '../leads';
 import { agentOps } from './agent';
 import { leadOps } from './leads';
@@ -74,6 +75,8 @@ export interface OpServices {
   topics: Pick<Topics, 'subscribe' | 'unsubscribe'>;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
+  /** The `corrallm` command's link (B30 C2): yours alone. */
+  command: Pick<CommandLink, 'status' | 'install' | 'remove'>;
   /** What every adapter declares. */
   catalog: Catalog;
   settings: Pick<Settings, 'get' | 'apiPort' | 'setDefaultAdapter' | 'resetConsent'>;

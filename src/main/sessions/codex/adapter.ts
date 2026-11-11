@@ -175,7 +175,15 @@ export const codex: Adapter = {
         usage: CODEX_USAGE,
       },
     ],
-    registerMcp: 'codex mcp add {server} --url {url} --bearer-token-env-var {var}',
+    // `codex mcp add` has no scope option: it registers user-wide. The entry goes in the
+    // orchestrator's own folder instead, where Codex loads it once that folder is trusted.
+    registerMcpIn: '.codex/config.toml',
+    registerMcp: '[mcp_servers.{server}]\nurl = "{url}"\nbearer_token_env_var = "{var}"',
+    // By file (0.162.1, fixtures/outside-registration.json): Codex runs the string through
+    // `sh -c` and sends the headers it prints, and runs it again after a 401 and for each new
+    // connection, so a renewal into the file needs no restart.
+    registerMcpHelper: '[mcp_servers.{server}]\nurl = "{url}"\nhttp_headers_helper = "{helper}"',
+    registerMcpRenews: true,
     consents: [
       {
         key: PLAN_CONSENT,

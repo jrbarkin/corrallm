@@ -71,6 +71,15 @@ const Consent = z.strictObject({
   connections: z.array(z.string()).min(1),
 });
 
+/** A registration template is at most 2 KiB. */
+const MAX_REGISTER_TEMPLATE = 2048;
+/**
+ * Where a registration goes in the orchestrator's folder: `/`-separated segments of letters,
+ * digits, `.`, `_` and `-`, none starting with `-`, none `.` or `..`.
+ */
+const REGISTER_IN_PATTERN =
+  /^(?!\.{1,2}(?:\/|$))[A-Za-z0-9._][A-Za-z0-9._-]*(?:\/(?!\.{1,2}(?:\/|$))[A-Za-z0-9._][A-Za-z0-9._-]*)*$/;
+
 const Adapter = z
   .strictObject({
     id: z.string(),
@@ -87,8 +96,10 @@ const Adapter = z
       z.strictObject({ name: z.string(), description: z.string(), job: z.enum(JOBS).optional() }),
     ),
     connections: z.array(Connection),
-    registerMcp: z.string().optional(),
-    registerMcpHelper: z.string().optional(),
+    registerMcp: z.string().max(MAX_REGISTER_TEMPLATE).optional(),
+    registerMcpHelper: z.string().max(MAX_REGISTER_TEMPLATE).optional(),
+    registerMcpIn: z.string().max(64).regex(REGISTER_IN_PATTERN).optional(),
+    registerMcpRenews: z.literal(true).optional(),
     consents: z.array(Consent).max(MAX_CONSENTS).optional(),
   })
   // Each consent by a key of its own, asked on its own adapter's connections, each named once.

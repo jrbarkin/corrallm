@@ -21,7 +21,7 @@ import { agentEnvironment, loginShellEnvironment } from '../sessions/environment
 import { installedClis } from '../sessions/installed';
 import type { ServeCommand } from './args';
 import { shown } from './output';
-import { registrations, SERVER_NAME } from './register';
+import { registrationLines, registrations, SERVER_NAME } from './register';
 import { TOKEN_VARIABLE, URL_VARIABLE } from './wait';
 
 /*
@@ -67,6 +67,13 @@ export async function serveCommand(command: ServeCommand, io: ServeIO): Promise<
   const say = (line: string) => {
     io.stderr.write(`${shown(line)}\n`);
   };
+  // Defense in depth, not a boundary: an agent that clears the marker is a process running as you.
+  if (command.newToken && io.env.CORRALLM_AGENT_SESSION === '1') {
+    say(
+      'corrallm serve: --new-token doesn’t run inside a corrallm agent: make tokens yourself, in your own terminal.',
+    );
+    return 1;
+  }
   if (command.newToken && !io.stderr.isTTY) {
     say(NOT_A_TERMINAL);
     return 1;
@@ -311,7 +318,7 @@ function tokenText(
   installed: Readonly<Record<string, boolean>>,
   findIt: readonly string[],
 ): string[] {
-  const commands = registrations(installed, url).byVariable;
+  const commands = registrationLines(registrations(installed, url).byVariable);
   return [
     `corrallm serve: a new token for "${name}" (${accessText(access)}, for ${String(hours)} hour${hours === 1 ? '' : 's'}), reaching ${served}. It replaces any earlier token named "${name}". It is shown only now; corrallm keeps only its hash:`,
     '',
@@ -320,7 +327,7 @@ function tokenText(
     `Keep it in ${TOKEN_VARIABLE} where your orchestrator runs, without echoing it (read -rs ${TOKEN_VARIABLE} && export ${TOKEN_VARIABLE}), and register corrallm by that variable, never by pasting the token:`,
     '',
     ...(commands.length > 0
-      ? commands.map((line) => `  ${line}`)
+      ? commands
       : [
           `  ${url}, as the MCP server ${SERVER_NAME}, with the header Authorization: Bearer <the token, from ${TOKEN_VARIABLE}>`,
         ]),

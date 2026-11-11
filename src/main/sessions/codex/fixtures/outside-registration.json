@@ -1,0 +1,823 @@
+{
+  "recordedWith": {
+    "codex": "0.162.1",
+    "platform": "macOS arm64",
+    "date": "2026-11-09",
+    "model": "none: a local stub Responses API; the App Server cases ran no model turn (mcpServer/tool/call), the TUI turn case spent no tokens",
+    "config": "a throwaway CODEX_HOME, HOME and orchestrator folder; per-run -c flags only (the stub model provider and, where trusted, the folder trust); a probe MCP server (streamable HTTP) answering 401 to any token it does not hold as valid; canary tokens; `corrallm` on PATH a wrapper running dist-cli/corrallm.cjs"
+  },
+  "canaries": {
+    "old": "canary-old-00000000000000000000000000000000",
+    "new": "canary-new-00000000000000000000000000000000",
+    "note": "shown cut: the real canaries are 43 characters, padded with zeros"
+  },
+  "entries": {
+    "env": "[mcp_servers.corrallm-server]\nurl = \"http://127.0.0.1:<port>/mcp\"\nbearer_token_env_var = \"CORRALLM_OUTSIDE_TOKEN\"\ndefault_tools_approval_mode = \"approve\"\n",
+    "helper": "[mcp_servers.corrallm-server]\nurl = \"http://127.0.0.1:<port>/mcp\"\nhttp_headers_helper = \"corrallm token header --from \\\"/work/smoke/tokens/orchestrator.token\\\"\"\ndefault_tools_approval_mode = \"approve\"\n"
+  },
+  "cases": {
+    "as-env-trusted": {
+      "how": "App Server, trusted folder, entry by bearer_token_env_var; the variable holds the old canary.",
+      "surface": "app-server",
+      "trusted": true,
+      "events": [
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        }
+      ],
+      "loaded": ["corrallm-server"],
+      "projectLayer": {
+        "disabled": false
+      },
+      "status": {
+        "statusStart": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "bearerToken"
+          }
+        ]
+      },
+      "calls": {}
+    },
+    "as-env-untrusted": {
+      "how": "App Server, folder not trusted, the same entry.",
+      "surface": "app-server",
+      "trusted": false,
+      "events": [],
+      "loaded": [],
+      "projectLayer": {
+        "disabled": true,
+        "reason": "To load project-local config, hooks, and exec policies, add <folder> as a trusted project in <CODEX_HOME>/config.toml."
+      },
+      "status": {
+        "statusStart": []
+      },
+      "calls": {}
+    },
+    "tui-env-trusted": {
+      "how": "TUI, trusted folder, the same entry.",
+      "surface": "tui",
+      "trusted": true,
+      "events": [
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        }
+      ],
+      "screen": []
+    },
+    "tui-env-untrusted": {
+      "how": "TUI, folder not trusted (its trust question shown, never answered), the same entry.",
+      "surface": "tui",
+      "trusted": false,
+      "events": [],
+      "screen": ["Trust", "trust", "› 1. Trust and continue"]
+    },
+    "as-helper": {
+      "how": "App Server, trusted folder, entry by http_headers_helper naming `corrallm token header --from \"<file>\"`; a wrapper named corrallm on PATH runs the built command.",
+      "surface": "app-server",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        }
+      ],
+      "loaded": ["corrallm-server"],
+      "projectLayer": {
+        "disabled": false
+      },
+      "status": {
+        "statusStart": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ]
+      },
+      "calls": {}
+    },
+    "as-helper-untrusted": {
+      "how": "App Server, folder not trusted, the helper entry.",
+      "surface": "app-server",
+      "trusted": false,
+      "events": [],
+      "loaded": [],
+      "projectLayer": {
+        "disabled": true,
+        "reason": "To load project-local config, hooks, and exec policies, add <folder> as a trusted project in <CODEX_HOME>/config.toml."
+      },
+      "status": {
+        "statusStart": []
+      },
+      "calls": {}
+    },
+    "as-helper-shell": {
+      "how": "App Server, the helper string `E1_MARK=1 corrallm token header --from \"<file>\" && true`: a shell-only string.",
+      "surface": "app-server",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "env": {
+            "E1_MARK": "1"
+          },
+          "via": "sh -c E1_MARK=1 corrallm token header --from \"/work/smoke/tokens/orchestrator.token\" && true",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        }
+      ],
+      "loaded": ["corrallm-server"],
+      "projectLayer": {
+        "disabled": false
+      },
+      "status": {
+        "statusStart": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ]
+      },
+      "calls": {}
+    },
+    "tui-helper": {
+      "how": "TUI, trusted folder, the helper entry.",
+      "surface": "tui",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        }
+      ],
+      "screen": []
+    },
+    "tui-helper-shell": {
+      "how": "TUI, the shell-only helper string.",
+      "surface": "tui",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "env": {
+            "E1_MARK": "1"
+          },
+          "via": "sh -c E1_MARK=1 corrallm token header --from \"/work/smoke/tokens/orchestrator.token\" && true",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        }
+      ],
+      "screen": []
+    },
+    "as-renew-call": {
+      "how": "App Server, helper entry. A thread starts; mcpServer/tool/call probe_read; the file is renewed and the probe refuses the old canary; mcpServer/tool/call again.",
+      "surface": "app-server",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "call before renewal"
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "renewed: the file holds the new canary, the probe refuses the old"
+        },
+        {
+          "step": "call after renewal"
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-old-…",
+          "status": 401
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        }
+      ],
+      "loaded": ["corrallm-server"],
+      "projectLayer": {
+        "disabled": false
+      },
+      "status": {
+        "statusStart": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ],
+        "statusEnd": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ]
+      },
+      "calls": {
+        "callBefore": {
+          "content": ["ok"]
+        },
+        "callAfter": {
+          "content": ["ok"]
+        }
+      }
+    },
+    "as-renew-reload": {
+      "how": "App Server, helper entry. As above, but config/mcpServer/reload runs between the renewal and the second call.",
+      "surface": "app-server",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "call before renewal"
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "renewed: the file holds the new canary, the probe refuses the old"
+        },
+        {
+          "step": "reload"
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "step": "call after renewal"
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-old-…",
+          "status": 401
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        }
+      ],
+      "loaded": ["corrallm-server"],
+      "projectLayer": {
+        "disabled": false
+      },
+      "status": {
+        "statusStart": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ],
+        "statusAfterReload": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ],
+        "statusEnd": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ]
+      },
+      "calls": {
+        "callBefore": {
+          "content": ["ok"]
+        },
+        "callAfter": {
+          "content": ["ok"]
+        }
+      },
+      "reload": "answered {}"
+    },
+    "as-renew-restart": {
+      "how": "App Server, helper entry. The file is renewed; a second app server is started and lists the server.",
+      "surface": "app-server",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "renewed: the file holds the new canary, the probe refuses the old"
+        },
+        {
+          "step": "second app server started, after the renewal"
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/templates/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "resources/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        }
+      ],
+      "loaded": ["corrallm-server"],
+      "projectLayer": {
+        "disabled": false
+      },
+      "status": {
+        "statusStart": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ],
+        "statusRestarted": [
+          {
+            "name": "corrallm-server",
+            "tools": ["probe_read"],
+            "authStatus": "unknown"
+          }
+        ]
+      },
+      "calls": {}
+    },
+    "tui-renew-turn": {
+      "how": "TUI, helper entry. After it connects, the file is renewed (old refused); a stub-model turn then calls the tool.",
+      "surface": "tui",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "renewed: the file holds the new canary, the probe refuses the old"
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-old-…",
+          "status": 401
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "tools/call",
+          "tool": "probe_read",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        }
+      ],
+      "screen": ["corrallm-server.probe_read", "done"]
+    },
+    "tui-renew-mcp": {
+      "how": "TUI, helper entry. After it connects, the file is renewed (old refused); /mcp is typed.",
+      "surface": "tui",
+      "trusted": true,
+      "events": [
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-old-…",
+          "status": 200
+        },
+        {
+          "step": "renewed: the file holds the new canary, the probe refuses the old"
+        },
+        {
+          "helper": "token header --from /work/smoke/tokens/orchestrator.token",
+          "via": "exec by codex",
+          "cwd": "/work/smoke/orchestrator"
+        },
+        {
+          "probe": "initialize",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "notifications/initialized",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        },
+        {
+          "probe": "tools/list",
+          "authorization": "Bearer canary-new-…",
+          "status": 200
+        }
+      ],
+      "screen": [
+        "list MCP tools; use /mcp verbose or /mcp login <name>",
+        "Loading MCP inventory",
+        "MCP Tools",
+        "corrallm-server"
+      ]
+    }
+  }
+}

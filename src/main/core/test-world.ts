@@ -749,9 +749,14 @@ export async function startWorld(): Promise<{
   let cap = MAX_CREATED_AGENTS;
   const proposals = Object.values(PROPOSED).map((id) => id.slice('proposal/'.length));
   const spending = silent(SPENDING.adapter.id);
+  const launcher = path.join(profile, 'corrallm.app', 'Contents', 'Resources', 'bin', 'corrallm');
+  await mkdir(path.dirname(launcher), { recursive: true });
+  await writeFile(launcher, '#!/bin/sh\n', { mode: 0o755 });
+  await mkdir(path.join(profile, 'command-home'));
   const core = await createCore(
     {
       profile,
+      home: path.join(profile, 'command-home'),
       app: { name: 'corrallm', version: '1.0.0' },
       check: true,
       distribution: 'local',
@@ -824,7 +829,9 @@ export async function startWorld(): Promise<{
         });
       },
     },
-    NO_DESKTOP,
+    // Its desktop has a launcher in the world's own folder, and a home folder of its own to link
+    // the command under, never the user's.
+    { ...NO_DESKTOP, launcher: () => launcher },
   );
   await core.engines.open(CANVAS);
   await core.engines.canvas(CANVAS)?.engine.sessions.ready(CONTROL_AGENT);
@@ -1049,6 +1056,23 @@ function reportOf(agent: 'lead' | 'worker', request: string) {
 /** What the generated tests call each of the registry's operations with. */
 export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
   'app.info': { valid: [{}, undefined], invalid: [{ verbose: true }, 'text', null] },
+  // Yours alone (the consent deviation): links the command under the world's own home, then
+  // removes the link again. Nothing here can name a path.
+  'app.command': {
+    valid: [
+      { action: 'install', request: settingRequest(4) },
+      { action: 'remove', request: settingRequest(5) },
+    ],
+    invalid: [
+      {},
+      { action: 'link' },
+      { action: 'install', path: '/usr/local/bin/corrallm' },
+      { action: 'install', into: '/tmp' },
+      { action: 'install', canvas: CANVAS },
+      'text',
+      null,
+    ],
+  },
   'catalog.get': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
   'catalog.installed': { valid: [{}, undefined], invalid: [{ canvas: CANVAS }, 'text', null] },
   'templates.list': {

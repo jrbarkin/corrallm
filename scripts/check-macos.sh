@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Check a freshly packaged macOS app: pnpm package, then bash scripts/check-macos.sh [arm64|x64].
-# No build or download here; verify the exact bundle that would be distributed.
+# No build or download of the bundle here; verify the exact bundle that would be distributed.
+# The headless check also needs the test-only seeding bundle (never packed), built below.
 #
 # --release adds what a signed release must hold, on the packaged app and on every zip's app and
 # every disk image named:
@@ -190,6 +191,9 @@ done
 
 step 'Shipped command self-test (empty PATH)' env PATH= CORRALLM_NATIVE_SELFTEST=1 "$command"
 step 'Shipped command help (empty PATH)' env -u CORRALLM_NATIVE_SELFTEST PATH= "$command" --help
+step 'Build the headless check seeding bundle (test-only, never packed)' pnpm build:seed
+step 'Shipped command headless round trip (empty PATH)' \
+  bash scripts/lib/headless-smoke.sh "$command" "$app/Contents/Resources/cli/node" "$PWD/dist-check/seed-profile.cjs"
 
 if [ "$release" -eq 1 ]; then
   step 'Release checks on the packaged app' check_release_app "$app"

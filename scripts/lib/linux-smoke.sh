@@ -3,6 +3,8 @@
 source "$(dirname "$0")/linux-steps.sh"
 app=${1:?app executable required}
 command=${2:?shipped command required}
+# The test-only seeding bundle for the headless check (never packed into the app or a package).
+seed=${3:?seeding bundle required}
 [ "$(id -u)" -ne 0 ] || die 'Run app checks as a non-root user; keep the Chromium sandbox on'
 [ -x "$app" ] && [ -x "$command" ] || die 'Missing app or shipped command'
 run_app() { xvfb-run -a -s '-screen 0 1280x1024x24' "$app" "$@"; }
@@ -18,3 +20,7 @@ for switch in --remote-debugging-port=0 --gpu-launcher=refused --renderer-cmd-pr
 done
 step 'Shipped command self-test (empty PATH)' env PATH= CORRALLM_NATIVE_SELFTEST=1 "$command"
 step 'Shipped command help (empty PATH)' env PATH= "$command" --help
+# The shipped Node runs the seeding bundle: an installed package's image has no other Node.
+shipped_node=$(dirname "$(readlink -f "$command")")/../cli/node
+step 'Shipped command headless round trip (empty PATH)' \
+  bash "$(dirname "$0")/headless-smoke.sh" "$command" "$shipped_node" "$seed"

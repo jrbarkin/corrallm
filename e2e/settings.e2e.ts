@@ -135,6 +135,26 @@ test('opens over a running canvas and over Start without touching work, and clos
   }
 });
 
+test('an unpackaged build says the corrallm command is unavailable, offers nothing, and sends nothing', async () => {
+  const { app, close } = await launchApp({ env: { CORRALLM_FAKE_SESSIONS: '1' } });
+  try {
+    const page = await app.firstWindow();
+    const problems = watch(page);
+    await page.waitForLoadState('load');
+    await dismissStart(page);
+    const panel = await openFromDock(page);
+    const section = panel.locator('section', {
+      has: page.getByRole('heading', { name: 'The corrallm command', exact: true }),
+    });
+    await expect(section).toContainText('ships no command to link');
+    await expect(section.getByRole('button')).toHaveCount(0);
+    await expect(section.getByRole('textbox')).toHaveCount(0);
+    expect(problems).toEqual([]);
+  } finally {
+    await close();
+  }
+});
+
 test('a default chosen in Settings is used by the next Add and leaves existing agents alone', async () => {
   const { app, close } = await launchApp({ env: { CORRALLM_FAKE_SESSIONS: '1' } });
   try {
