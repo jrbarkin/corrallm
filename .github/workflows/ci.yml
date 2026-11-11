@@ -206,6 +206,15 @@ jobs:
         run: |
           sudo git lfs uninstall --system || true
           pnpm test:e2e --reporter=list --shard=${{ matrix.shard }}/2
+      # Playwright's output folder holds the retry traces (e2e/branches.e2e.ts), the only record of a flake.
+      - name: Upload e2e results (macOS)
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results-${{ matrix.os }}-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Allow Chromium sandbox (Linux)
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

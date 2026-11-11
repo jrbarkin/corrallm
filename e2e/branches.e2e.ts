@@ -14,7 +14,46 @@ import { closeLastWindow, reopenWindow } from './last-window';
 // lands in Git.
 test.skip(process.platform === 'win32', 'These fake executables use POSIX.');
 
-async function world({ gated = false }: { gated?: boolean } = {}) {
+/**
+ * Evidence for a spec that hangs on CI with a bare timeout. `watched` names each await of a test
+ * as it starts and ends, with the time, so the log of a run that times out says which one never
+ * ended; the trace of the first retry shows what the window and the app were doing meanwhile.
+ */
+async function watched<T>(name: string, run: () => Promise<T>): Promise<T> {
+  const log = (what: string) => {
+    console.log(`[merge-close ${new Date().toISOString()}] ${what}: ${name}`);
+  };
+  log('start');
+  const result = await test.step(name, run);
+  log('done');
+  return result;
+}
+
+/** The trace the running test is recording, stopped and attached after it, however it ended. */
+let recording: { stop: (path: string) => Promise<void> } | undefined;
+
+test.afterEach(async () => {
+  const info = test.info();
+  const trace = recording;
+  recording = undefined;
+  if (trace === undefined) return;
+  const file = info.outputPath('trace.zip');
+  // A hang can leave the app unresponsive: do not let stopping the trace hang the hook too.
+  let timer: NodeJS.Timeout | undefined;
+  const stopped = await Promise.race([
+    trace.stop(file).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => {
+        resolve(false);
+      }, 20_000);
+    }),
+  ]).catch(() => false);
+  clearTimeout(timer);
+  if (stopped) await info.attach('trace', { path: file, contentType: 'application/zip' });
+  else console.log('[merge-close] the trace could not be stopped');
+});
+
+async function world({ gated = false, trace = false }: { gated?: boolean; trace?: boolean } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'corrallm-branches-e2e-'));
   const env = gitEnvironment(path.join(root, 'home'));
   const project = path.join(root, 'project');
@@ -85,6 +124,15 @@ exec '${real}' "$@"
   let page = await running.app.firstWindow();
   let successor: Page | undefined;
   try {
+    // Playwright records fixtures' contexts only; an Electron app's is started by hand, on the
+    // first retry of a spec that asks.
+    if (trace && test.info().retry === 1) {
+      const tracing = running.app.context().tracing;
+      await tracing.start({ screenshots: true, snapshots: true, sources: true });
+      recording = {
+        stop: (file) => tracing.stop({ path: file }),
+      };
+    }
     await page.waitForLoadState('load');
     await dismissStart(page);
     await running.app.evaluate(({ dialog }, project) => {
@@ -398,35 +446,45 @@ test('a path with a filter driver is refused, and the driver never runs', async 
 });
 
 test('closing the window in the middle of a merge does not stop it; reopening shows it settled', async () => {
-  const w = await world({ gated: true });
+  const w = await watched('open the app and its project', () =>
+    world({ gated: true, trace: true }),
+  );
   try {
-    const worker = await w.worker({ 'done.txt': 'done\n' });
-    const dialog = await w.open(worker.id, true);
-    await writeFile(w.gate, 'closed');
-    await confirm(dialog).click();
-    await expect.poll(() => existsSync(w.reached), { timeout: 15_000 }).toBe(true);
+    const worker = await watched('give an agent a checkout with a commit', () =>
+      w.worker({ 'done.txt': 'done\n' }),
+    );
+    const dialog = await watched('open the merge dialog', () => w.open(worker.id, true));
+    await watched('close the gate', () => writeFile(w.gate, 'closed'));
+    await watched('click Merge', () => confirm(dialog).click());
+    await watched('wait for Git to reach the gate', () =>
+      expect.poll(() => existsSync(w.reached), { timeout: 15_000 }).toBe(true),
+    );
     expect(existsSync(path.join(w.project, 'done.txt'))).toBe(false);
-    await w.closeWindow();
-    await rm(w.gate);
-    await expect
-      .poll(() => existsSync(path.join(w.project, 'done.txt')), { timeout: 15_000 })
-      .toBe(true);
+    await watched('close the window', () => w.closeWindow());
+    await watched('open the gate', () => rm(w.gate));
+    await watched('wait for the merge to land in the project', () =>
+      expect
+        .poll(() => existsSync(path.join(w.project, 'done.txt')), { timeout: 15_000 })
+        .toBe(true),
+    );
     expect(git(w.project, w.env, 'status', '--porcelain')).toBe('');
-    await w.reopen();
-    await expect
-      .poll(
-        async () =>
-          (
-            await w.page().evaluate(async (canvas) => {
-              const result = await window.api.worktreeList({ canvas });
-              if (!result.ok) throw new Error(result.error.sentence);
-              return result.value.items.map((item) => item.merge);
-            }, w.canvas)
-          )[0],
-        { timeout: 15_000 },
-      )
-      .toMatchObject({ merged: true });
+    await watched('reopen the window', () => w.reopen());
+    await watched('wait for the merge to show settled', () =>
+      expect
+        .poll(
+          async () =>
+            (
+              await w.page().evaluate(async (canvas) => {
+                const result = await window.api.worktreeList({ canvas });
+                if (!result.ok) throw new Error(result.error.sentence);
+                return result.value.items.map((item) => item.merge);
+              }, w.canvas)
+            )[0],
+          { timeout: 15_000 },
+        )
+        .toMatchObject({ merged: true }),
+    );
   } finally {
-    await w.close();
+    await watched('quit the app', () => w.close());
   }
 });

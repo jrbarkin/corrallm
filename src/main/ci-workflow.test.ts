@@ -38,6 +38,15 @@ describe('.github/workflows/ci.yml', async () => {
     expect(build).toMatch(/github\.ref == 'refs\/heads\/main' && '\[[^\]]*windows-latest/);
   });
 
+  it('uploads the macOS e2e results, and only on a macOS failure, for a week', () => {
+    const upload = step(job(workflow, 'e2e'), 'Upload e2e results (macOS)');
+    expect(upload).toContain("if: failure() && runner.os == 'macOS'");
+    expect(upload).toMatch(/uses: actions\/upload-artifact@v\d+$/m);
+    expect(upload).toContain('path: test-results/');
+    expect(upload).toContain('matrix.shard');
+    expect(upload).toContain('retention-days: 7');
+  });
+
   describe('the dco job', () => {
     const dco = job(workflow, 'dco');
 

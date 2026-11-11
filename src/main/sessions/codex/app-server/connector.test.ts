@@ -885,11 +885,12 @@ describe('the App Server connection', () => {
   it.each(['missing', 'unknown', 'fail', 'hang'])(
     'warns with the command id and releases the next turn when termination is %s',
     async (behavior) => {
-      // Codex's answer is waited for 100 ms here, not two seconds: a hang is one all the same.
+      // A hang is waited for 100 ms here, not two seconds. The other answers come back at once and
+      // are never raced against that wait: one that arrived after it would be a hang, not an answer.
       const { session, heard, ended, events } = await start(
         {},
         { FAKE_CODEX_TERMINATE: behavior },
-        { terminateMs: 100 },
+        behavior === 'hang' ? { terminateMs: 100 } : {},
       );
       await session.send({ id: 'm1', text: 'slow' });
       await heard('tool', { detail: { kind: 'output' } });
