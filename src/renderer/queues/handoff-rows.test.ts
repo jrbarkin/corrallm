@@ -48,6 +48,71 @@ function running(current: string | undefined) {
 }
 
 describe('queue hand-offs in the recipient’s queue', () => {
+  it('leaves authored steps unread when the recipient has no mailbox rows', () => {
+    let reads = 0;
+    const nodes = nodesOf([
+      {
+        id: 'one',
+        get action() {
+          reads += 1;
+          return 'Read';
+        },
+      },
+    ]);
+    const messages = topic();
+    expect(messageQueues(nodes, messages)[1]).toBe(nodes[1]);
+    expect(messageQueues(nodes, messages, undefined, running('one'))[1]).toBe(nodes[1]);
+    expect(reads).toBe(0);
+  });
+
+  it('indexes mailbox rows once for all recipient queues and reuses that index as the run moves', () => {
+    const nodes = Array.from({ length: 32 }, (_, i): CanvasNode => ({
+      id: `agent-${String(i)}`,
+      type: 'agent',
+      position: { x: 0, y: 0 },
+      data: { label: `Agent ${String(i)}`, queue: QUEUE },
+    }));
+    let recipients = 0;
+    let replies = 0;
+    const messages = topic(
+      ...nodes.map(
+        (node) =>
+          new Proxy(handoff('agent-0', node.id), {
+            get(target, key, receiver) {
+              if (key === 'to') recipients += 1;
+              if (key === 'replyTo') replies += 1;
+              return Reflect.get(target, key, receiver) as unknown;
+            },
+          }),
+      ),
+    );
+    messageQueues(nodes, messages);
+    // One shared recipient/reply index, never a mailbox walk per agent or displayed row.
+    expect(recipients).toBeLessThanOrEqual(64);
+    expect(replies).toBeLessThanOrEqual(64);
+    const before = { recipients, replies };
+    messageQueues(nodes, messages, undefined, {
+      agents: { 'agent-1': { current: 'one' } },
+    });
+    expect(recipients - before.recipients).toBeLessThanOrEqual(2);
+    expect(replies - before.replies).toBeLessThanOrEqual(2);
+  });
+
+  it('keeps an unaffected recipient’s projected queue when another hand-off changes', () => {
+    const nodes = nodesOf();
+    const one = handoff('lead', 'worker');
+    const other = handoff('worker', 'lead');
+    const first = messageQueues(nodes, topic(one, other));
+    const changed = messageQueues(nodes, topic({ ...one, state: 'delivered' }, other));
+    expect(changed[0]).toBe(first[0]);
+    expect(changed[1]).not.toBe(first[1]);
+    expect(rowsOf(changed).find(({ id }) => id === one.id)).toMatchObject({
+      submission: { status: 'running' },
+    });
+    // Removing the last incoming row restores the authored node, with no stale projection.
+    expect(messageQueues(nodes, topic(other))[1]).toBe(nodes[1]);
+  });
+
   it('shows a pending hand-off read-only, from its sender, after the task the recipient is on', () => {
     const offered = handoff('lead', 'worker', { item: 'hand' });
     const nodes = nodesOf();

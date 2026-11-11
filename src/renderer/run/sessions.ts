@@ -16,7 +16,6 @@ import { isQueueHandoff } from '../../shared/model/messages';
 import { NEW_SESSION } from '../../shared/model/session';
 import type { Entry, Session } from '../../shared/model/session';
 import type { NodeLike } from '../../shared/model/canvas';
-import { agentName } from '../../shared/model/queries';
 import type { EntryView, MessageView, SessionSummary, SessionView } from '../../shared/model/views';
 import { submissionOf } from '../queues/messages';
 import { orderedEntries } from '../api/runtime';
@@ -315,14 +314,27 @@ export function useDisplayedSession(
     ),
     useCallback(() => (topic === undefined ? undefined : mirror.snapshot(topic)), [mirror, topic]),
   );
-  return useMemo(
+  const displayed = useMemo(
     () =>
       sessionDisplay(
         view?.summary ?? (agent === undefined ? undefined : summaries?.[agent]),
         view,
         agent === undefined ? [] : Object.values(messages?.items ?? {}),
-        { images: pasted, agentName: (id) => agentName(nodes, id) },
+        { images: pasted },
       ),
-    [agent, summaries, view, messages, pasted, nodes],
+    [agent, summaries, view, messages, pasted],
   );
+  // Canvas names affect only queued hand-offs, never the native history or its projection.
+  return useMemo(() => {
+    if (!displayed.queued.some((message) => message.from !== undefined)) return displayed;
+    const names = new Map(nodes.map((node) => [node.id, node.data.label || 'Unnamed agent']));
+    return {
+      ...displayed,
+      queued: displayed.queued.map((message) =>
+        message.from === undefined
+          ? message
+          : { ...message, from: names.get(message.from) ?? 'Deleted agent' },
+      ),
+    };
+  }, [displayed, nodes]);
 }

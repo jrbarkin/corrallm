@@ -49,6 +49,7 @@ function bar(entries: readonly EntryView[], session: Partial<Session> = {}) {
       agentId="a"
       cli="Claude Code"
       backend={NO_TERMINAL}
+      keys={{ shiftEnter: null }}
       session={{ ...NEW_SESSION, entries: [...entries] as Session['entries'], ...session }}
       note=""
       onStart={vi.fn()}

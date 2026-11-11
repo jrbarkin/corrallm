@@ -91,6 +91,12 @@ it('shows a pending hand-off in All queues and the recipient’s view, read-only
   expect(order.indexOf('Check the parser')).toBeGreaterThan(order.indexOf('Read'));
   expect(order.indexOf('Check the parser')).toBeLessThan(order.indexOf('Bash'));
 
+  await events.click(screen.getByRole('button', { name: 'Show all queues' }));
+  await events.click(screen.getByRole('button', { name: /^Worker,/ }));
+  const own = within(screen.getByRole('complementary', { name: 'Questions and queue' }));
+  const received = own.getByText('From Lead').closest('.graph-queue-submission');
+  expect(received?.textContent).toContain('Check the parser');
+  expect(received?.querySelector('button, textarea, input')).toBeNull();
   expect(canvas.core.operations).toEqual([]);
   expect(JSON.stringify(canvas.document.nodes)).toBe(before);
 });
