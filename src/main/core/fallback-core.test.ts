@@ -386,6 +386,11 @@ describe('the fallback chain through the core', () => {
     expect(codex.sent).toHaveLength(1);
     // Your own message, typed as the task goes, is the turn its switch waits for.
     await core.call('message', { canvas: CANVAS, to: 'worker', body: 'Mine' }, CALLERS.you);
+    // Journaled before it reaches the busy session's queue: ending the turn earlier would leave the
+    // session idle with nothing queued, and the switch would not wait for this message.
+    await vi.waitFor(() => {
+      expect(engine.sessions.of('worker').queued).toHaveLength(1);
+    });
     codex.end(LIMIT(Date.now() + 60 * 60_000));
     await codex.received(2);
     expect(codex.sent).toHaveLength(2);

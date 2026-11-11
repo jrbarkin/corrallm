@@ -2243,6 +2243,40 @@ describe('telling an agent of a withdrawal after receipt', () => {
     return fake;
   }
 
+  /** A fake whose first message's turn runs until its real interrupt; every later turn ends at once. */
+  function heldFirstTurnConnector() {
+    let waiting: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    let sent = 0;
+    const fake = fakeConnector({
+      adapter: 'codex',
+      step: () => waiting ?? Promise.resolve(),
+    });
+    const start = fake.start.bind(fake);
+    vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+      const session = await start(spec, host);
+      const send = session.send.bind(session);
+      const interrupt = session.interrupt.bind(session);
+      session.send = (message) => {
+        if (++sent === 1) {
+          const gate = Promise.withResolvers<undefined>();
+          waiting = gate.promise;
+          release = () => {
+            gate.resolve(undefined);
+          };
+        } else waiting = undefined;
+        return send(message);
+      };
+      session.interrupt = () => {
+        const stopped = interrupt();
+        release?.();
+        return stopped;
+      };
+      return session;
+    });
+    return fake;
+  }
+
   it('withdraws a Terminal message waiting at folder trust without a false receipt or note', async () => {
     const terminal = await startAtTrust();
     await terminal.start();
@@ -2422,6 +2456,11 @@ describe('telling an agent of a withdrawal after receipt', () => {
   it.each(['builder', 'shell'])(
     'shows the exact withdrawal-bearing messages sent to %s, in order, live and after resuming',
     async (agent) => {
+      // The received turn is held until its interrupt, not for a 100 ms pause the withdrawal must
+      // beat; the turns after it, a shell's two among them, end at once instead of 400 ms each
+      // against the one second the waits below give them.
+      appServer = heldFirstTurnConnector();
+      terminal = heldFirstTurnConnector();
       await keepCanvas();
       await start();
       const id = await withdrawReceived(agent);
