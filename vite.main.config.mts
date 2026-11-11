@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 
 import { defineConfig } from 'vite';
 
+import { noticesPlugin } from './build/notices.ts';
+
 /**
  * How the build is offered (src/main/sessions/codex/login.ts): an app the user runs locally, as
  * corrallm is by default, or a commercial or hosted product (CORRALLM_DISTRIBUTION=commercial or
@@ -36,6 +38,7 @@ export const NATIVE_EXTERNALS = ['node-pty'];
 // external). Native modules ship in node_modules instead (see NATIVE_MODULES in build/native-modules.ts).
 export default defineConfig(({ command }) => ({
   define: mainDefine,
+  plugins: [noticesPlugin()],
   build: {
     // Forge 8.0.1 sets its own externals (Node builtins, electron) under `rollupOptions`, and Vite 8
     // lets a `rolldownOptions` override that wholesale: ours stays beside Forge's until Forge moves.

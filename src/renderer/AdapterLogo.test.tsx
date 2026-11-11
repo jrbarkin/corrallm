@@ -13,14 +13,28 @@ afterEach(async () => {
   await loadCatalog(() => Promise.resolve(shipped));
 });
 
-it.each(shipped.adapters)('draws $name’s catalog logo only as a data image', (adapter) => {
+it.each(shipped.adapters)('draws shipped $name as its first letter, not a mark', (adapter) => {
+  expect(adapter.logo).toBeUndefined();
   const { container } = render(<AdapterLogo adapter={adapter.id} size={30} />);
-  const logo = screen.getByRole<HTMLImageElement>('img', { name: adapter.name });
-  expect(logo.tagName).toBe('IMG');
-  expect(logo.src).toMatch(/^data:image\/svg\+xml,/);
-  expect(decodeURIComponent(logo.src.slice(logo.src.indexOf(',') + 1))).toBe(adapter.logo);
-  expect(logo.width).toBe(30);
-  expect(logo.height).toBe(30);
+  const logo = screen.getByRole('img', { name: adapter.name });
+  expect(logo.tagName).toBe('SPAN');
+  expect(logo.textContent).toBe(Array.from(adapter.name)[0]?.toLocaleUpperCase());
+  expect(container.querySelector('img, svg')).toBeNull();
+});
+
+it('draws a catalog logo only as a data image', async () => {
+  const logo = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+  await loadCatalog(() =>
+    Promise.resolve({
+      ...MADE_UP,
+      adapters: MADE_UP.adapters.map((adapter) => ({ ...adapter, logo })),
+    }),
+  );
+  const { container } = render(<AdapterLogo adapter="zed" size={30} />);
+  const image = screen.getByRole<HTMLImageElement>('img', { name: 'Zed Agent' });
+  expect(image.tagName).toBe('IMG');
+  expect(image.src).toMatch(/^data:image\/svg\+xml,/);
+  expect(decodeURIComponent(image.src.slice(image.src.indexOf(',') + 1))).toBe(logo);
   expect(container.querySelector('svg')).toBeNull();
 });
 
