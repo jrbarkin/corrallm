@@ -752,7 +752,7 @@ describe('the message store', () => {
     let fail = false;
     const marked: string[] = [];
     messages.writeWith(() => {
-      database.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/beside', CANVAS);
+      database.run('UPDATE canvas SET project = ? WHERE id = ?', '/beside', CANVAS);
       if (fail) throw new Error('The run is too large');
       return () => marked.push('beside');
     });
@@ -777,7 +777,7 @@ describe('the message store', () => {
     await messages.durable();
     let staged: ReturnType<MessageStore['stageWithin']> | undefined;
     await database.writeBlocking(() => {
-      database.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/beside', CANVAS);
+      database.run('UPDATE canvas SET project = ? WHERE id = ?', '/beside', CANVAS);
       staged = messages.stageWithin(draft('corrallm', 'outside:orchestrator', 'delivered'));
       // Kept in its place at once, so no reader reads past it; not yet told.
       expect(messages.seqOf(staged.message.id)).toBeGreaterThan(messages.seqOf(before.id) ?? 0);
@@ -1602,5 +1602,18 @@ describe('readdress (B24 C4)', () => {
       settled: { v: 1, type: 'expired' } as never,
     });
     expect(messages.readdress(via.id, 'you')).toBeUndefined();
+  });
+});
+
+describe('its writes', () => {
+  it('are planned writes, which read nothing, even for a canvas that has no row yet', async () => {
+    const blocking = vi.spyOn(database, 'writeBlocking');
+    const planned = vi.spyOn(database, 'write');
+    const messages = await store();
+    messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
+    await messages.durable();
+    expect(blocking).not.toHaveBeenCalled();
+    expect(planned).toHaveBeenCalled();
+    expect(rows()).toHaveLength(1);
   });
 });

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
@@ -228,5 +228,18 @@ describe('as the canvas opens', () => {
     store.exported('other', { state: 'failed' });
     await store.durable();
     expect(loaded().of('other')).toEqual({ handoff: HANDOFF, export: 'failed' });
+  });
+});
+
+describe('its writes', () => {
+  it('are planned writes, which read nothing', async () => {
+    const blocking = vi.spyOn(database, 'writeBlocking');
+    const planned = vi.spyOn(database, 'write');
+    const store = loaded();
+    store.accept('worker', HANDOFF);
+    await store.durable();
+    expect(blocking).not.toHaveBeenCalled();
+    expect(planned).toHaveBeenCalled();
+    expect(rows()).toEqual([expect.objectContaining({ agent_id: 'worker', text: HANDOFF.text })]);
   });
 });

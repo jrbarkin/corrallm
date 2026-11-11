@@ -350,7 +350,7 @@ describe('RunJournal', () => {
 
     // Forgotten with its canvas, as canvas memory forgets the canvases used least recently: its run
     // is written whole again, and its canvas kept again.
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await memory.forget(canvas);
     await runs.save(canvas, token, { ...edited, updatedAt: 458 });
     expect(ran(canvas)).toMatchObject({
       state: expect.stringContaining('two') as string,

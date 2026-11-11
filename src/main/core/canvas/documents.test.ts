@@ -126,6 +126,19 @@ async function restart(deps?: StoreDeps): Promise<void> {
   memory = new CanvasMemory(store);
   documents = documentsOf();
 }
+/**
+ * Canvas memory forgets `canvas` (its row, with everything under it) while the document is still
+ * loaded: as it forgets the canvases used least recently, before the document hears of it.
+ */
+async function forgetWhileLoaded(canvas: CanvasId): Promise<void> {
+  const keeps = vi.spyOn(memory, 'keeps').mockReturnValue(true);
+  try {
+    await memory.forget(canvas);
+    await memory.flush();
+  } finally {
+    keeps.mockRestore();
+  }
+}
 /** A canvas kept in a file of its own, `bytes` its file's (its text as toFile writes it). */
 async function filed(document: CanvasDocument, bytes = toFile(document)): Promise<string> {
   const file = path.join(profile, `${document.id}.corral`);
@@ -565,12 +578,12 @@ describe('a canvas’s document', () => {
     const file = await filed(canvasOf(canvas));
     const { document } = await documents.load(canvas);
     // Forgotten as canvas memory forgets the canvases used least recently, with all of it.
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await forgetWhileLoaded(canvas);
     await commit(canvas, renamed(document, 'lead', 'Head'));
     await restart();
     expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
 
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await forgetWhileLoaded(canvas);
     await documents.save(canvas, mintTrustedPath(file));
     await restart();
     expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
@@ -830,7 +843,7 @@ describe('the agents a party created', () => {
     ];
     expect(creators(canvas)).toEqual(kept);
     // Forgotten with its canvas while it was loaded, written whole again: with who created each.
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await forgetWhileLoaded(canvas);
     await commit(canvas, renamed(documents.live(canvas).document, 'lead', 'Head'));
     await restart();
     await documents.load(canvas);
@@ -925,7 +938,7 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
     // loaded), after a restart too.
     await restart();
     await documents.load(filled);
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(filled);
+    await forgetWhileLoaded(filled);
     await commit(filled, renamed(documents.live(filled).document, 'lead', 'Head'));
     expect(createdBy(filled)).toBe(ORCHESTRATOR);
     expect(documents.createdBy(ORCHESTRATOR).sort()).toEqual([empty, filled].sort());

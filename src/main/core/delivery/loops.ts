@@ -52,25 +52,25 @@ export class LoopTable {
 
   /** Queues `write` for the database's next commit: resolves once that commit has returned. */
   write<T>(write: () => T): Promise<T> {
-    return this.#store.writeBlocking(write);
+    return this.#store.write(write);
   }
 
   /** Within a write: a pair's row, as kept. */
   keep(canvas: CanvasId, [a, b]: Pair, turns: number): void {
     this.#memory.ensure(canvas);
-    this.#store
-      .prepare(
-        `INSERT INTO loop_pair (canvas_id, a, b, turns) VALUES (?, ?, ?, ?)
+    this.#store.run(
+      `INSERT INTO loop_pair (canvas_id, a, b, turns) VALUES (?, ?, ?, ?)
          ON CONFLICT (canvas_id, a, b) DO UPDATE SET turns = excluded.turns`,
-      )
-      .run(canvas, a, b, turns);
+      canvas,
+      a,
+      b,
+      turns,
+    );
   }
 
   /** Within a write: deletes a pair's row. */
   forget(canvas: CanvasId, [a, b]: Pair): void {
-    this.#store
-      .prepare('DELETE FROM loop_pair WHERE canvas_id = ? AND a = ? AND b = ?')
-      .run(canvas, a, b);
+    this.#store.run('DELETE FROM loop_pair WHERE canvas_id = ? AND a = ? AND b = ?', canvas, a, b);
   }
 }
 

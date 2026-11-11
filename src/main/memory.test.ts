@@ -583,3 +583,100 @@ describe('CanvasMemory', () => {
     await expect(memory.flush()).rejects.toThrow(why);
   });
 });
+
+describe('ensure, within a planned write', () => {
+  const rowsOf = () => reader.prepare('SELECT id FROM canvas ORDER BY used_at').all();
+
+  it('gives no statement for a canvas it keeps, and a row for one it does not', async () => {
+    const memory = new CanvasMemory(store);
+    const run = vi.spyOn(store, 'run');
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(rowsOf()).toEqual([{ id: TEAM }]);
+    run.mockClear();
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).not.toHaveBeenCalled();
+    // Kept from the database too, when it is made.
+    const again = new CanvasMemory(store);
+    await store.write(() => {
+      again.ensure(TEAM);
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('gives the canvas the use after every other’s, whatever the clock says', async () => {
+    const memory = new CanvasMemory(store);
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    vi.spyOn(Date, 'now').mockReturnValue(10);
+    await store.write(() => {
+      memory.ensure(OTHER);
+    });
+    expect(reader.prepare('SELECT id FROM canvas ORDER BY used_at DESC').all()).toEqual([
+      { id: OTHER },
+      { id: TEAM },
+    ]);
+  });
+
+  it('forgets the drafts used least recently in the same commit', async () => {
+    const memory = new CanvasMemory(store, 1);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    await store.write(() => {
+      memory.ensure(OTHER);
+    });
+    // On disk once the second write resolves: its commit held the forgetting too.
+    expect(rowsOf()).toEqual([{ id: OTHER }]);
+    // And the canvas forgotten is a new one again.
+    const run = vi.spyOn(store, 'run');
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).toHaveBeenCalled();
+    expect(rowsOf()).toEqual([{ id: TEAM }]);
+  });
+
+  it('forgets nothing a failed write made', async () => {
+    const memory = new CanvasMemory(store);
+    await expect(
+      store.write(() => {
+        memory.ensure(TEAM);
+        throw new Error('The write failed');
+      }),
+    ).rejects.toThrow('The write failed');
+    expect(rowsOf()).toEqual([]);
+    const run = vi.spyOn(store, 'run');
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(rowsOf()).toEqual([{ id: TEAM }]);
+  });
+
+  it('moves a canvas’s generation each time it forgets the canvas’s row', async () => {
+    const memory = new CanvasMemory(store);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(memory.generation(TEAM)).toBe(0);
+    await expect(memory.forget(TEAM)).resolves.toBe(true);
+    expect(memory.generation(TEAM)).toBe(1);
+    expect(memory.generation(OTHER)).toBe(0);
+    // Forgotten by use, too.
+    const small = new CanvasMemory(store, 1);
+    await store.write(() => {
+      small.ensure(TEAM);
+    });
+    await store.write(() => {
+      small.ensure(OTHER);
+    });
+    expect(small.generation(TEAM)).toBe(1);
+  });
+});

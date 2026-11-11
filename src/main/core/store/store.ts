@@ -298,7 +298,17 @@ export class Store {
     const context = new WriteContext('tx');
     let value: T;
     try {
-      value = transaction(this.#connection, () => this.#within(context, run));
+      value = transaction(this.#connection, () => {
+        const value = this.#within(context, run);
+        // Right after it, in the same transaction.
+        for (
+          let next = context.followUps.shift();
+          next !== undefined;
+          next = context.followUps.shift()
+        )
+          this.#within(context, next);
+        return value;
+      });
     } catch (error) {
       context.restore();
       throw error;
@@ -396,7 +406,6 @@ export class Store {
    */
   followUp(run: () => void): void {
     const context = this.#context('followUp');
-    if (context.kind === 'tx') throw new Error('followUp is only available within a write.');
     context.followUps.push(run);
   }
 

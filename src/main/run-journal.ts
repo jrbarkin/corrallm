@@ -257,7 +257,7 @@ export class RunJournal {
     memory.ensure(canvas);
     this.#markOpen(canvas, false);
     if (checkpoint === null) {
-      store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
+      store.run('DELETE FROM run WHERE canvas_id = ?', canvas);
       return;
     }
     if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
@@ -276,25 +276,28 @@ export class RunJournal {
     // Its submission records, read before anything is written.
     const submissions = recordsIn(parsed.messages);
     // Its state is a JSON text (parseRunCheckpoint read it): kept as it is.
-    store
-      .prepare(
-        `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)
+    store.run(
+      `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)
          ON CONFLICT (canvas_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
-      )
-      .run(canvas, `{"format":3,"run":${state}}`, updatedAt);
+      canvas,
+      `{"format":3,"run":${state}}`,
+      updatedAt,
+    );
     keepSubmissions(messages, submissions, Date.now());
     return undefined;
   }
 
   /** Keep the last good checkpoint and this bound's marker in the containing message write. */
   #refused(canvas: CanvasId, checkpoint: RunCheckpoint, problem: string): string {
-    this.#deps.store
-      .prepare(
-        `INSERT INTO run (canvas_id, state, updated_at)
+    this.#deps.store.run(
+      `INSERT INTO run (canvas_id, state, updated_at)
            VALUES (?, json_object('format', 3, 'saveError', ?), ?)
          ON CONFLICT(canvas_id) DO UPDATE SET state = json_set(run.state, '$.saveError', ?)`,
-      )
-      .run(canvas, problem, checkpoint.updatedAt, problem);
+      canvas,
+      problem,
+      checkpoint.updatedAt,
+      problem,
+    );
     return problem;
   }
 
@@ -343,12 +346,13 @@ export class RunJournal {
   /** Within a write: moves `party`'s read position in the canvas's messages forward to `seq`. */
   moveRead(canvas: CanvasId, party: PartyId, seq: number): void {
     this.#deps.memory.ensure(canvas);
-    this.#deps.store
-      .prepare(
-        `INSERT INTO read_position (canvas_id, party, seq) VALUES (?, ?, ?)
+    this.#deps.store.run(
+      `INSERT INTO read_position (canvas_id, party, seq) VALUES (?, ?, ?)
          ON CONFLICT (canvas_id, party) DO UPDATE SET seq = max(seq, excluded.seq)`,
-      )
-      .run(canvas, party, seq);
+      canvas,
+      party,
+      seq,
+    );
   }
 
   /**
@@ -375,9 +379,11 @@ export class RunJournal {
    */
   async saved(canvas: CanvasId): Promise<void> {
     await this.#write(() => {
-      this.#deps.store
-        .prepare('UPDATE open_canvas SET opened_at = ? WHERE canvas_id = ?')
-        .run(this.#nextOpen(), canvas);
+      this.#deps.store.run(
+        `UPDATE open_canvas SET opened_at = ${NEXT_OPEN} WHERE canvas_id = ?`,
+        Date.now(),
+        canvas,
+      );
       this.#tell(canvas);
     });
   }
@@ -419,24 +425,13 @@ export class RunJournal {
   #markOpen(canvas: CanvasId, used = true): void {
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
-    store
-      .prepare(
-        `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ?)
+    store.run(
+      `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ${NEXT_OPEN})
          ON CONFLICT (canvas_id) ${used ? 'DO UPDATE SET opened_at = excluded.opened_at' : 'DO NOTHING'}`,
-      )
-      .run(canvas, this.#nextOpen());
+      canvas,
+      Date.now(),
+    );
     this.#tell(canvas);
-  }
-
-  /**
-   * Within a write: when a canvas used now was: now, unless another was opened at or after it (in
-   * the same millisecond, or by a clock set back since), then just after that one.
-   */
-  #nextOpen(): number {
-    const last = this.#deps.store
-      .prepare('SELECT max(opened_at) AS last FROM open_canvas')
-      .get()?.last;
-    return Math.max(Date.now(), typeof last === 'number' ? last + 1 : 0);
   }
 
   /** Tells what hears it of `canvas`. */
@@ -450,6 +445,13 @@ export class RunJournal {
     }
   }
 }
+
+/**
+ * When a canvas opened now was opened, in a statement (so that a write reads nothing): the time it
+ * is given, unless another canvas was opened at or after it (in the same millisecond, or by a clock
+ * set back since), then just after that one.
+ */
+const NEXT_OPEN = 'max(?, coalesce((SELECT max(opened_at) FROM open_canvas) + 1, 0))';
 
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);

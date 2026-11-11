@@ -347,3 +347,16 @@ describe('the counts kept', () => {
     expect(store.pending()).toBe(false);
   });
 });
+
+describe('its writes', () => {
+  it('are planned writes, which read nothing', async () => {
+    const blocking = vi.spyOn(database, 'writeBlocking');
+    const planned = vi.spyOn(database, 'write');
+    const store = loaded();
+    store.count('a', 'b');
+    await store.durable();
+    expect(blocking).not.toHaveBeenCalled();
+    expect(planned).toHaveBeenCalled();
+    expect(rows()).toEqual([{ a: 'a', b: 'b', turns: 1 }]);
+  });
+});

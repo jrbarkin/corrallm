@@ -17,9 +17,6 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..', '..', '..');
 const BLOCKING: Readonly<Record<string, number>> = {
   'src/main/core/canvas/documents.ts': 5,
   'src/main/core/canvas/proposals.ts': 2,
-  'src/main/core/delivery/handoffs.ts': 1,
-  'src/main/core/delivery/loops.ts': 1,
-  'src/main/core/delivery/messages.ts': 1,
   'src/main/core/engines.ts': 2,
   'src/main/core/leads.ts': 3,
   'src/main/core/selftest.ts': 1,
