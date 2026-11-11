@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../shared/canvas';
 import { serveTokenSocket } from '../core/token-socket';
@@ -67,6 +67,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await owner.close();
   await rm(dir, { recursive: true, force: true });
 });
@@ -110,13 +111,14 @@ function command(over: { into?: string } = {}): TokenCommand {
 
 /** The environment of a login shell with these fake CLIs installed and this PATH. */
 async function login(searchPath: string): Promise<Record<string, string>> {
-  return {
-    PATH: searchPath,
-    CORRALLM_AGENT_PATHS: JSON.stringify({
-      codex: await executable(path.join(dir, 'tools', 'codex')),
-      'claude-code': await executable(path.join(dir, 'tools', 'claude')),
-    }),
-  };
+  const paths = JSON.stringify({
+    codex: await executable(path.join(dir, 'tools', 'codex')),
+    'claude-code': await executable(path.join(dir, 'tools', 'claude')),
+  });
+  // Finding a CLI reads this process's own CORRALLM_AGENT_PATHS, so the fakes are given there too:
+  // a machine with no real CLIs installed (CI) finds them the same.
+  vi.stubEnv('CORRALLM_AGENT_PATHS', paths);
+  return { PATH: searchPath, CORRALLM_AGENT_PATHS: paths };
 }
 
 describe.skipIf(process.platform === 'win32')('corrallm token in a corrallm agent', () => {
