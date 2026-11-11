@@ -13,11 +13,11 @@ describe('a chunked worktrees snapshot (B9a §7)', () => {
     ];
     const kept = [{ workspace: '22222222-2222-4222-8222-222222222222', state: 'retained' }];
     expect(
-      assembledState(`worktrees:${CANVAS}`, {}, [
+      assembledState(`worktrees:${CANVAS}`, { into: null }, [
         ...items.map((item) => [`item/${encodeURIComponent(item.agent)}`, item] as const),
         ...kept.map((tree, index) => [`kept/${String(index)}`, tree] as const),
       ]),
-    ).toEqual({ items, kept });
+    ).toEqual({ items, kept, into: null });
   });
 
   it('keeps the branch the project checkout is on, which the core sends in the summary', () => {
