@@ -3,7 +3,7 @@ import { closeSync, existsSync, openSync, rmSync } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-import { beginLog, JOURNAL_SIZE_LIMIT } from './checkpointer';
+import { beginLog, JOURNAL_SIZE_LIMIT, SYNC_SET_UP } from './checkpointer';
 import { faults } from './faults';
 import { migrate, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
 import { settleRestored } from './restored';
@@ -20,6 +20,7 @@ import type { Connection } from './sqlite';
 import { Store, SYSTEM_DEPS } from './store';
 import type { StoreDeps } from './store';
 import { transaction } from './transaction';
+import { Writer } from './writer';
 
 /*
  * Opening the profile's database (Core Database §5): <profile>/core.db, made 0600 before SQLite
@@ -67,6 +68,22 @@ const BUSY_TIMEOUT_MS = 0;
  */
 const SIDECARS = ['-wal', '-shm', '-journal'];
 
+/** How the store is opened beyond its profile and clock. */
+export interface OpenOptions {
+  /**
+   * Hand writing to a thread of its own once the database is open and migrated (Store Writer, step
+   * 6a): the store's connection then only reads. Not yet how the core opens it.
+   */
+  writer?: boolean;
+}
+
+/**
+ * What `openStore` does unless told otherwise. Production never changes it (the core opens the
+ * store as it always has); the writer matrix (test-writer-matrix.ts) sets it for a test run.
+ * Step 6b deletes it, with the local executor.
+ */
+export const OPEN_DEFAULTS: Required<OpenOptions> = { writer: false };
+
 /** What opening the store found: the store, or none, and what to say. */
 export interface Opened {
   /** None if it couldn't be opened: `said` says why. */
@@ -76,7 +93,11 @@ export interface Opened {
 }
 
 /** Opens the profile's database, as the core opens it once it holds core.lock. Never rejects. */
-export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS): Promise<Opened> {
+export async function openStore(
+  profile: string,
+  deps: StoreDeps = SYSTEM_DEPS,
+  options: OpenOptions = {},
+): Promise<Opened> {
   const file = path.join(profile, STORE_FILE);
   const said: string[] = [];
   try {
@@ -99,13 +120,59 @@ export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS):
     beginLog(connection);
     const [newest] = await snapshots(profile).catch(() => []);
     const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
-    return { store: new Store(connection, { profile, file, deps, snapshotAt }), said };
+    if (!(options.writer ?? OPEN_DEFAULTS.writer)) {
+      return { store: new Store(connection, { profile, file, deps, snapshotAt }), said };
+    }
+    const handedOver = await handOver(connection, file, deps);
+    return {
+      store: new Store(handedOver.reader, {
+        profile,
+        file,
+        deps,
+        snapshotAt,
+        writer: handedOver.writer,
+      }),
+      said,
+    };
   } catch (error) {
     const why =
       error instanceof Refusal
         ? error.message
         : `The core’s database could not be opened (${reason(error)}).`;
     return { store: undefined, said: [...said, why] };
+  }
+}
+
+/**
+ * Hands the database over to the writer's thread, as the last step of opening: the thread connects
+ * (and says its pragmas are set), then this thread opens its connection that only reads, and
+ * closes the one that opened the database. That one isn't the last connection, so it neither
+ * checkpoints the log nor removes it.
+ */
+async function handOver(
+  connection: Connection,
+  file: string,
+  deps: StoreDeps,
+): Promise<{ writer: Writer; reader: Connection }> {
+  let writer: Writer | undefined;
+  try {
+    writer = await Writer.start(file, { hold: deps.hold, started: deps.writerStarted });
+    const reader = connect(file, { readOnly: true, timeout: BUSY_TIMEOUT_MS });
+    try {
+      reader.exec('PRAGMA trusted_schema = OFF');
+      // A read of the database, which keeps this connection holding it: the writer, closing while
+      // it does, never checkpoints the log nor removes it (the failed-flush cut-back needs that).
+      reader.prepare('SELECT count(*) FROM sqlite_schema').get();
+    } catch (error) {
+      reader.close();
+      throw error;
+    }
+    connection.close();
+    return { writer, reader };
+  } catch (error) {
+    await writer?.close();
+    connection.close();
+    throw error;
   }
 }
 
@@ -315,12 +382,9 @@ function setUp(connection: Connection): void {
   if (mode !== 'wal') {
     throw new Error(`SQLite would not keep a write-ahead log: its journal mode is ${String(mode)}`);
   }
-  connection.exec('PRAGMA synchronous = NORMAL');
-  if (process.platform === 'darwin') {
-    connection.exec('PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON');
-  }
-  connection.exec(`PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;
-    PRAGMA journal_size_limit = ${String(JOURNAL_SIZE_LIMIT)}; PRAGMA wal_autocheckpoint = 0`);
+  // The pragmas every connection that writes shares: the writer's thread and the checkpointer's.
+  connection.exec(SYNC_SET_UP);
+  connection.exec('PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF');
   migrate(connection);
 }
 

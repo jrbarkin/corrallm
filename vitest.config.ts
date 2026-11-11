@@ -19,6 +19,24 @@ export default defineConfig({
           globalSetup: ['./src/main/cli/global-setup.ts'],
         },
       },
+      // The same suites with every store on the writer's thread (Store Writer, step 6a), opt-in:
+      // CORRALLM_STORE_WRITER=1 pnpm exec vitest run --project main-writer
+      ...(process.env.CORRALLM_STORE_WRITER === '1'
+        ? [
+            {
+              test: {
+                name: 'main-writer',
+                environment: 'node' as const,
+                include: [
+                  'src/main/core/**/*.test.ts',
+                  'src/main/{memory,run-journal,canvas,project}.test.ts',
+                ],
+                exclude: ['src/main/core/store/snapshots-loop.test.ts'],
+                setupFiles: ['./src/main/core/store/test-writer-matrix.ts'],
+              },
+            },
+          ]
+        : []),
       {
         test: {
           name: 'store-performance',
