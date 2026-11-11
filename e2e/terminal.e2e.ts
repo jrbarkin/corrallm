@@ -315,7 +315,7 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await expect(view).toBeVisible();
 
   // It asks for permission: it needs the user, here and on the canvas, where the Needs you
-  // sidebar says what it asks (as its hooks told), to answer in the terminal.
+  // sidebar says what it asks (as its hook told: held, so answerable there or in the terminal).
   await typeIn(terminal, 'ask to run echo', 'Enter');
   await expect(status(view)).toHaveText('Needs you, in the terminal');
   await view.getByRole('button', { name: 'Back to the canvas' }).click();
@@ -324,11 +324,13 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   await expect(card).toHaveClass(/\basking\b/);
   await openNeeds(page);
   const needsYou = page.getByRole('complementary', { name: 'Needs you' });
-  const asked = needsYou.getByRole('group', { name: 'Agent 1 asks, in its terminal' });
+  const asked = needsYou.getByRole('group', { name: 'Agent 1 asks, here or in its terminal' });
   await expect(asked).toContainText('Claude wants to use Bash');
   await expect(asked).toContainText('echo hello');
-  await expect(asked).toContainText('Answer it in the terminal.');
-  await expect(asked.getByRole('button', { name: 'Yes', exact: true })).toHaveCount(0);
+  await expect(asked).toContainText('Or answer it in its terminal.');
+  await expect(asked.getByRole('button', { name: 'Yes', exact: true })).toBeVisible();
+  // Held, never answered by typing: it moves to its terminal at its deadline, with a countdown.
+  await expect(asked.getByRole('timer')).toContainText('Moves to its terminal in');
 
   // The session ran on with its view closed; opened again, it shows the same terminal.
   await asked.getByRole('button', { name: 'Open terminal' }).click();
@@ -357,7 +359,7 @@ test('a new canvas agent defaults to real Claude Code in its Terminal, without a
   ]) {
     await expect(asked).toContainText(words);
   }
-  await expect(asked.getByRole('textbox')).toHaveCount(0);
+  await expect(asked).toContainText('Or answer it in its terminal.');
   await asked.getByRole('button', { name: 'Open terminal' }).click();
   await typeIn(terminal, '1');
   await expect(status(view)).toHaveText('Idle');
@@ -787,4 +789,85 @@ test('resumes the agent’s session after the app restarts', async () => {
   await openShop(2);
   await expect.poll(starts).toHaveLength(2);
   expect((await starts()).at(-1)).toContain(`--resume=${id}`);
+});
+
+/** The decisions the fake's held PermissionRequest hook was answered with. */
+async function decisions() {
+  return (await logged()).flatMap((entry) =>
+    entry.event === 'hook-decision'
+      ? [(entry as unknown as { decision: Record<string, unknown> }).decision]
+      : [],
+  );
+}
+
+test('answers a held permission from Needs through its hook, and a question with its picks, never by typing', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view } = await openShop();
+  await expect(status(view)).toHaveText('Idle');
+  const typed = (await pastes()).length;
+  const terminal = view.locator('.agent-terminal');
+
+  // Approve: the fake reads the decision its hook was answered with.
+  await typeIn(terminal, 'ask to run echo', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  const needsYou = page.getByRole('complementary', { name: 'Needs you' });
+  const asked = needsYou.getByRole('group', { name: 'Shop asks, here or in its terminal' });
+  await asked.getByRole('button', { name: 'Yes', exact: true }).click();
+  await expect.poll(decisions).toEqual([{ behavior: 'allow' }]);
+  await expect(needsYou).toHaveCount(0);
+
+  // Deny with words: the hook's deny carries them, framed as the user's.
+  await page.locator('.react-flow__node').dblclick();
+  await typeIn(terminal, 'ask to run echo again', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  await asked
+    .getByRole('button', { name: 'No, and tell Claude what to do differently', exact: true })
+    .click();
+  await asked.getByRole('textbox', { name: 'Feedback' }).fill('use a branch');
+  await asked.getByRole('button', { name: 'Send feedback' }).click();
+  await expect.poll(async () => (await decisions()).length).toBe(2);
+  expect((await decisions())[1]).toMatchObject({
+    behavior: 'deny',
+    message: expect.stringContaining('use a branch'),
+  });
+
+  // A question: its picks go in the hook's reply, keyed by its text.
+  await page.locator('.react-flow__node').dblclick();
+  await typeIn(terminal, 'question about the database', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  await asked.getByRole('radio', { name: 'SQLite', exact: true }).check();
+  await asked.getByRole('button', { name: 'Send answers', exact: true }).click();
+  await expect.poll(async () => (await decisions()).length).toBe(3);
+  expect((await decisions())[2]).toMatchObject({
+    updatedInput: { answers: { 'Which database?': 'SQLite' } },
+  });
+  // Nothing was typed into the terminal for any of them.
+  expect((await pastes()).length).toBe(typed);
+});
+
+test('an answer given in the terminal first ends the card answered there, and the held request is released', async () => {
+  await canvasFile();
+  await chooseProject();
+  const { view, terminal } = await openShop();
+  await typeIn(terminal, 'ask to run echo', 'Enter');
+  await expect(status(view)).toHaveText('Needs you, in the terminal');
+  await view.getByRole('button', { name: 'Back to the canvas' }).click();
+  await openNeeds(page);
+  const needsYou = page.getByRole('complementary', { name: 'Needs you' });
+  await expect(
+    needsYou.getByRole('group', { name: 'Shop asks, here or in its terminal' }),
+  ).toBeVisible();
+  await page.locator('.react-flow__node').dblclick();
+  await typeIn(terminal, '1');
+  await expect(status(view)).toHaveText('Idle');
+  // The terminal answered: corrallm decided nothing.
+  expect(await decisions()).toEqual([]);
+  await expect(needsYou).toHaveCount(0);
 });

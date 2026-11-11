@@ -40,4 +40,6 @@ Server discovery verifies api.json’s OS process identity with the same reader 
 
 B21's pure agent API contracts are prepared in `src/shared/api/agent-api.ts` and `src/main/sessions/connector.ts`; every native connection's route is on since B21 C7, so agents run under `serve` get corrallm's MCP as in the app, and ask and complete are registered (B21 C4, C5). They change neither outside-token issuance nor the CLI's tools. The shared test client (`src/main/sessions/fake-mcp-client.mjs`) uses only a fake's delivered HTTP route or bound channel; it discovers no server and reads no credentials from files or the environment.
 
+Headless, nobody answers a Terminal agent's prompt until B24's grants (B23): a held one (a Claude Code permission or question, a Codex command or MCP tool approval) is yours alone, so with no window and no allowance it is released with no decision at its 20 s deadline and moves to the CLI's own terminal (`moved`), where only the terminal answers it; a token's reply to one is refused.
+
 An outside orchestrator you let answer approvals (`outside.setGrant`, never a `serve` or `corrallm token` flag) is woken by a `notice` record for its `wait` when an approval it may answer waits, and told once more when that ends unanswered by it.

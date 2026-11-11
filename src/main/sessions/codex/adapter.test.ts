@@ -47,9 +47,9 @@ describe("Codex's adapter", () => {
     expect(connection('codex.terminal').context).toBe(false);
   });
 
-  it('declares App Server prompts answerable and Terminal approvals seen, without authority signals', () => {
+  it('declares App Server prompts answerable and Terminal approvals answerable through its hook, without authority signals', () => {
     expect(connection('codex.terminal')).toMatchObject({
-      prompts: { approval: 'seen', question: 'none', plan: 'none', form: 'none' },
+      prompts: { approval: 'answerable', question: 'none', plan: 'none', form: 'none' },
       signals: false,
     });
     expect(connection('codex.app-server')).toMatchObject({

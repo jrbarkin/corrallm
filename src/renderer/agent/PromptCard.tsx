@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { MAX_ANSWER_LENGTH } from '../../shared/api/limits';
 import type { ArgsOf } from '../../shared/api/registry';
@@ -135,6 +135,20 @@ function Card({
               )}
             </>
           )}
+          {live.answerIn === 'api' && live.until !== undefined && (
+            <p>Its terminal waits on corrallm. Answer it here, or choose Answer in terminal.</p>
+          )}
+          {live.answerIn === 'both' && (
+            <>
+              <p>Or answer it in its terminal.</p>
+              {onOpenTerminal && (
+                <button type="button" onClick={onOpenTerminal}>
+                  Open terminal
+                </button>
+              )}
+            </>
+          )}
+          {live.until !== undefined && <Countdown until={live.until} />}
           {live.answerIn !== 'terminal' && live.kind === 'question' && (
             <QuestionFields
               questions={questions}
@@ -351,6 +365,24 @@ export function QuestionFields({
     </>
   );
 }
+/** How long until a held prompt moves to its terminal (its `until`), counted down live. */
+function Countdown({ until }: { until: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+  const seconds = Math.max(0, Math.ceil((until - now) / 1000));
+  return (
+    <p role="timer" className="prompt-countdown">
+      {seconds === 0 ? 'Moving to its terminal…' : `Moves to its terminal in ${String(seconds)} s.`}
+    </p>
+  );
+}
 function hostOf(url: string) {
   try {
     return new URL(url).hostname;
@@ -370,6 +402,8 @@ function outcomeWords(outcome: LiveOutcome): string {
       return 'No longer waiting.';
     case 'answered-in-terminal':
       return 'Answered in the terminal.';
+    case 'moved':
+      return 'Moved to its terminal.';
     case 'dismissed':
       return 'Not waiting.';
     case 'choice':

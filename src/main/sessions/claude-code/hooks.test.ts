@@ -46,4 +46,21 @@ describe('hookSettings', () => {
       },
     ]);
   });
+
+  it('tells Claude Code to wait 30 s for the one hook corrallm may hold, 5 s for every other', () => {
+    const settings = hookSettings('http://127.0.0.1:4000/hook', 'secret');
+    const timeouts = Object.fromEntries(
+      Object.entries(settings.hooks).map(([name, groups]) => [
+        name,
+        groups.flatMap((group) => group.hooks.map((hook) => hook.timeout)),
+      ]),
+    );
+    expect(timeouts.PermissionRequest).toEqual([30]);
+    expect(timeouts.SessionStart).toEqual([10]);
+    for (const name of Object.keys(timeouts).filter(
+      (one) => one !== 'PermissionRequest' && one !== 'SessionStart',
+    )) {
+      expect(timeouts[name], name).toEqual([5]);
+    }
+  });
 });

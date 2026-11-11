@@ -14,7 +14,14 @@ import { boundedInput, Cuts, shownDetail } from './sdk/raise';
 import { proposedDetail, property, text as textOf, toolSummary } from './sdk/tools';
 import type { Places } from './sdk/tools';
 
-import type { Launch, StatusLineReading, TerminalCli, TerminalSignal } from '../terminal/cli';
+import type {
+  Launch,
+  StatusLineReading,
+  TerminalCli,
+  TerminalHold,
+  TerminalSignal,
+} from '../terminal/cli';
+import { claudeHold } from './hold';
 import { hookSettings } from './hooks';
 import type { HookEvent, HookRegistration } from '../terminal/hooks';
 import { hooksOff, hooksOffWarning, managedSettingsFolder } from './hooks-off';
@@ -309,6 +316,11 @@ export class ClaudeCode implements TerminalCli<PermissionMode> {
       }
     }
     return signals;
+  }
+
+  /** A permission request or a question is held until corrallm answers it (hold.ts, B23). */
+  hold(event: HookEvent): TerminalHold | undefined {
+    return claudeHold(event, this.#places);
   }
 
   /**

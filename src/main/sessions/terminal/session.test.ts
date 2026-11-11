@@ -705,7 +705,7 @@ describe('a Terminal session', () => {
     ]);
   });
 
-  it('raises described terminal approvals, questions and plans through the owner and never answers them', async () => {
+  it('raises described terminal approvals, questions and plans through the owner and never types an answer', async () => {
     const session = await start();
     for (const [n, text, kind] of [
       [1, 'ask to run the tests', 'approval'],
@@ -716,7 +716,12 @@ describe('a Terminal session', () => {
       await until(() => {
         expect(open().size).toBe(1);
       });
-      expect(onlyOpen()[1]).toMatchObject({ kind, answerIn: 'terminal' });
+      // A permission and a question are held through their hook, answerable in its terminal as
+      // well; a plan can't be answered by a hook.
+      expect(onlyOpen()[1]).toMatchObject({
+        kind,
+        answerIn: kind === 'plan' ? 'terminal' : 'both',
+      });
       expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
       expect(claude().answers.every(({ answer }) => answer === '{}')).toBe(true);
       session.terminal?.input(kind === 'plan' ? '\x1b' : '1');
@@ -742,10 +747,14 @@ describe('a Terminal session', () => {
       expect(open().size).toBe(0);
     });
     // A permission it was about to ask long ago (another hook answered it) is not listed.
-    await claude().hook('PermissionRequest', {
-      tool_name: 'Write',
-      tool_input: { file_path: '/work/app/a.txt' },
-    });
+    void claude()
+      .hook('PermissionRequest', {
+        tool_name: 'Write',
+        tool_input: { file_path: '/work/app/a.txt' },
+      })
+      .catch(() => undefined);
+    // It has reached the server (held) by the time the clock moves on.
+    await new Promise((resolve) => setTimeout(resolve, 60));
     // A hook describing a possible request while the CLI works is not a waiting occurrence.
     expect(open().size).toBe(0);
     const now = Date.now();
@@ -1209,7 +1218,8 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     });
     const [key, prompt] = onlyOpen();
     expect(key).toMatch(UUID);
-    expect(prompt).toEqual({
+    // Held through its hook: answerable here and in its terminal (B23), until it moves there.
+    expect(prompt).toMatchObject({
       kind: 'approval',
       title: 'Claude wants to use Bash',
       summary: 'echo hello',
@@ -1218,8 +1228,8 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
         tool: 'Bash',
         input: { command: 'echo hello', description: 'Say hello' },
       },
-      answerIn: 'terminal',
-      choices: [],
+      answerIn: 'both',
+      until: expect.any(Number) as number,
     });
     // Reports and redraws repeat while it waits: nothing more is raised.
     claude().report(`state=blocked:kind=permission:msg=${btoa('approve Bash: echo hello')}`);
@@ -1243,10 +1253,10 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     await until(() => {
       expect(open().size).toBe(1);
     });
-    expect(onlyOpen()[1]).toEqual({
+    expect(onlyOpen()[1]).toMatchObject({
       kind: 'question',
       title: 'Pick a color',
-      answerIn: 'terminal',
+      answerIn: 'both',
       questions: [
         {
           id: 'q1',
@@ -1309,10 +1319,14 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
       expect(open().size).toBe(0);
     });
     // A permission it was about to ask long ago (another hook answered it) is not its words.
-    await claude().hook('PermissionRequest', {
-      tool_name: 'Write',
-      tool_input: { file_path: '/work/app/a.txt' },
-    });
+    void claude()
+      .hook('PermissionRequest', {
+        tool_name: 'Write',
+        tool_input: { file_path: '/work/app/a.txt' },
+      })
+      .catch(() => undefined);
+    // It has reached the server (held) by the time the clock moves on.
+    await new Promise((resolve) => setTimeout(resolve, 60));
     // A hook describing a possible request while the CLI works is not a waiting occurrence.
     expect(open().size).toBe(0);
     const now = Date.now();
@@ -1328,10 +1342,12 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
       choices: [],
     });
     // Its hook tells it, late: the better description replaces the guess.
-    await claude().hook('PermissionRequest', {
-      tool_name: 'Bash',
-      tool_input: { command: 'npm test' },
-    });
+    void claude()
+      .hook('PermissionRequest', {
+        tool_name: 'Bash',
+        tool_input: { command: 'npm test' },
+      })
+      .catch(() => undefined);
     await until(() => {
       expect(onlyOpen()[1]).toMatchObject({
         title: 'Claude wants to use Bash',
@@ -1483,10 +1499,12 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     const again = fresh[0]?.[0] ?? '';
     // Dismissed again, then described by a hook: described, it is raised.
     session.prompts?.dismiss?.(again);
-    await claude().hook('PermissionRequest', {
-      tool_name: 'Bash',
-      tool_input: { command: 'npm test' },
-    });
+    void claude()
+      .hook('PermissionRequest', {
+        tool_name: 'Bash',
+        tool_input: { command: 'npm test' },
+      })
+      .catch(() => undefined);
     await until(() => {
       expect(raised()).toHaveLength(3);
     });
@@ -1497,9 +1515,26 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     expect(prompts.filter((event) => event.type === 'prompt-ended')).toEqual([]);
   });
 
-  it('answers no terminal request through the API', async () => {
+  it('answers a held terminal request only through its own hook, never by typing', async () => {
     const session = await start();
     await session.send({ id: 'm1', text: 'ask to run the tests' });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const [key] = onlyOpen();
+    session.prompts?.answer(key, { kind: 'choice', value: 'allow' });
+    await until(() => {
+      expect(claude().answers.map(({ answer }) => answer)).toContain(
+        '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}',
+      );
+    });
+    expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
+    expect(claude().written.filter((keys) => keys === '1')).toEqual([]);
+  });
+
+  it('answers no wait through the API that no hook holds', async () => {
+    const session = await start();
+    await session.send({ id: 'm1', text: 'plan it' });
     await until(() => {
       expect(open().size).toBe(1);
     });
@@ -1507,7 +1542,6 @@ describe('what Claude Code waits on in its terminal, raised to the core’s prom
     expect(() => session.prompts?.answer(key, { kind: 'choice', value: 'allow' })).toThrow(
       /terminal/,
     );
-    expect(events.filter(({ type }) => ['asking'].includes(type))).toEqual([]);
     expect(claude().written.filter((keys) => keys === '1')).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { testPromptEvent, testPromptId } from '../../shared/test-prompts';
+import { testApproval, testPromptEvent, testPromptId } from '../../shared/test-prompts';
 import { NEW_SESSION } from '../../shared/model/session';
 import { Prompt, PromptId } from '../../shared/model/prompts';
 import { expectOneOp } from '../test-api';
@@ -450,6 +450,19 @@ describe('a Terminal agent', () => {
     expect(rows[0]?.querySelector('button, input, textarea')).toBeNull();
     expect(view.queryByRole('group', { name: /^Current chat/ })).toBeNull();
     expect(sessions.replies.send).not.toHaveBeenCalled();
+  });
+
+  it('says it needs you here, not in the terminal, while a request is held for corrallm alone', async () => {
+    const { view, session } = await open();
+    session({ type: 'status', status: 'working' });
+    session(
+      testPromptEvent({ ...testApproval(), until: Date.now() + 20_000 }, testPromptId('held')),
+      { type: 'status', status: 'waiting' },
+    );
+    await waitFor(() => {
+      expect(view.getByText('Needs you here')).toBeTruthy();
+    });
+    expect(view.queryByText('Needs you, in the terminal')).toBeNull();
   });
 
   it('lists what Claude Code asks in its terminal in the Needs you sidebar, to answer there', async () => {

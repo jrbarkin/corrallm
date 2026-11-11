@@ -1,4 +1,4 @@
-import type { AdapterPrompt } from '../../../shared/model/prompts';
+import type { AdapterPrompt, PromptAnswer } from '../../../shared/model/prompts';
 import type { SessionMode, SessionUsage, TurnReason } from '../../../shared/session';
 import type { UsageWindows } from '../../../shared/usage';
 import type { HookEvent, HookRegistration } from './hooks';
@@ -107,6 +107,20 @@ export interface TerminalWords {
   waiting: { permission: string; question: string; auth: string; none: string };
 }
 
+/**
+ * A hook request a session holds (B23 C2): the prompt it raises while it holds it, and the reply
+ * body each answer the owner validated is written as, to that very request.
+ */
+export interface TerminalHold {
+  /** `answerIn` is `both` (the CLI's terminal answers it too) or `api` (only corrallm does). */
+  prompt: AdapterPrompt;
+  /**
+   * The hook's reply body for `answer`, in its CLI's words. Throws, saying why in a sentence,
+   * for an answer it cannot express: nothing is written then, and the prompt stays open.
+   */
+  reply(answer: PromptAnswer): unknown;
+}
+
 export interface TerminalCli<M extends SessionMode> {
   /** The CLI, as messages name it. */
   readonly name: string;
@@ -165,6 +179,13 @@ export interface TerminalCli<M extends SessionMode> {
   readonly waitsForEcho?: boolean;
   /** What a hook event it posted means. The event is untrusted JSON: read, never acted on beyond. */
   hook(event: HookEvent): TerminalSignal<M>[];
+  /**
+   * Whether this hook event is one to hold until corrallm answers it (B23 C1): its request is then
+   * answered only with a reply from `reply`, or with no decision at the deadline. Asked once per
+   * event, synchronously and from the event alone; undefined to answer it with no decision at
+   * once, as every event is by default. The event is untrusted JSON.
+   */
+  hold?(event: HookEvent): TerminalHold | undefined;
   /**
    * What the user has typed in its prompt and not sent: '' when it is empty, undefined when no
    * prompt is on screen (a dialog, or still starting).

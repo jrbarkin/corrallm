@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { postHookCommand } from '../../terminal/hooks';
+import { HOOK_HEADER, postHookCommand } from '../../terminal/hooks';
 
 /*
  * Codex's hooks, reporting to corrallm. A Codex Terminal session is started with command hooks of
@@ -9,7 +9,10 @@ import { postHookCommand } from '../../terminal/hooks';
  * run): on the events corrallm follows, Codex runs a command that posts the event (the JSON Codex
  * writes to its stdin) to main's hook server (sessions/terminal/hooks.ts), with the bearer token
  * only that session has (in its private header file). The command prints nothing and always succeeds, so
- * Codex goes on as it would without it.
+ * Codex goes on as it would without it. The one exception is the PermissionRequest hook (B23),
+ * which may decide: its command prints the server's reply on its standard output, which is all
+ * Codex reads of it (recorded on 0.162.1), and a reply of `{}`, nothing, or anything unusable
+ * leaves the approval to the user.
  *
  * Codex runs a hook only once the user has trusted it (else its TUI stops at "Hooks need review"):
  * corrallm trusts its own for the session alone (`-c hooks.state={<key>={trusted_hash=…}}`), by
@@ -18,7 +21,13 @@ import { postHookCommand } from '../../terminal/hooks';
  */
 
 /** The events corrallm hears: startup permissions, a prompt, its turn's end and an interrupt. */
-export const CODEX_HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'] as const;
+export const CODEX_HOOK_EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'Stop',
+  'Interrupt',
+  'PermissionRequest',
+] as const;
 export type CodexHookEvent = (typeof CODEX_HOOK_EVENTS)[number];
 
 /** Each event's name in Codex's hook keys and hashes (its hook_event_key_label). */
@@ -27,6 +36,7 @@ const LABELS: Record<CodexHookEvent, string> = {
   UserPromptSubmit: 'user_prompt_submit',
   Stop: 'stop',
   Interrupt: 'interrupt',
+  PermissionRequest: 'permission_request',
 };
 
 /**
@@ -38,6 +48,8 @@ const TIMEOUTS: Record<CodexHookEvent, number> = {
   UserPromptSubmit: 10,
   Stop: 10,
   Interrupt: 2,
+  // The most recorded: corrallm lets a request go 10 s sooner (HELD_MS), and its command 5 s.
+  PermissionRequest: 30,
 };
 
 /** One of a session's hooks: the event, the command Codex runs for it, how long it waits. */
@@ -59,13 +71,38 @@ export function hookCommand(url: string, platform: NodeJS.Platform = process.pla
   return postHookCommand(url, platform === 'win32' ? 'cmd' : 'posix');
 }
 
-/** A session's hooks, each posting to `url`. */
+/**
+ * The command of the PermissionRequest hook (POSIX): it posts the event as the others do and
+ * prints what the server answers, and nothing else: no error text, and always success (a failing
+ * hook shows in Codex's transcript). `curl` gives up at 25 s, under the hook's timeout. Without
+ * curl it reads the event and prints nothing.
+ */
+export function permissionCommand(url: string): string {
+  const post =
+    `curl -s -f --max-time 25 -X POST ` +
+    `-H "@$${HOOK_HEADER}" -H "Content-Type: application/json" ` +
+    `--data-binary @- ${url} 2>/dev/null`;
+  return `/bin/sh -c 'if command -v curl >/dev/null 2>&1; then ${post}; else cat >/dev/null; fi; exit 0'`;
+}
+
+/**
+ * A session's hooks, each posting to `url`. The PermissionRequest hook, which may decide, is
+ * given only on POSIX (its decision there was recorded; Windows' was not) and where `permission`
+ * allows (a Codex before 0.162.1 is not given it).
+ */
 export function sessionHooks(
   url: string,
   platform: NodeJS.Platform = process.platform,
+  { permission = true }: { permission?: boolean } = {},
 ): SessionHook[] {
   const command = hookCommand(url, platform);
-  return CODEX_HOOK_EVENTS.map((event) => ({ event, command, timeout: TIMEOUTS[event] }));
+  return CODEX_HOOK_EVENTS.filter(
+    (event) => event !== 'PermissionRequest' || (permission && platform !== 'win32'),
+  ).map((event) => ({
+    event,
+    command: event === 'PermissionRequest' ? permissionCommand(url) : command,
+    timeout: TIMEOUTS[event],
+  }));
 }
 
 /** A TOML basic string: JSON's escapes are TOML's, for the text corrallm writes. */

@@ -199,6 +199,38 @@ describe('a lead’s copy', () => {
     expect(notices()).toHaveLength(1);
   });
 
+  it('is told in fixed words when the prompt moved to its agent’s terminal (B23)', async () => {
+    const held = raisePrompt(
+      owner,
+      promptOrigin('work', { ...recordingAnswers(), release: () => undefined }),
+      KEY2,
+      {
+        ...approval(
+          [
+            { value: 'yes', label: 'Yes', hint: 'allow_once', effects: {} },
+            { value: 'no', label: 'No', hint: 'reject_once', effects: {} },
+          ],
+          {
+            title: 'Run it?',
+            summary: 'it',
+            subject: { type: 'command', command: 'ls', cwd: '/w' },
+          },
+        ),
+        until: 1_900_000_000_000,
+      },
+    );
+    const [copy] = copies();
+    if (copy === undefined) throw new Error('no copy');
+    messages.update(copy.id, { state: 'delivered' });
+    await owner.answer(CANVAS, held, { choice: 'answer-in-terminal' }, {
+      by: 'you',
+      caller: { kind: 'human', window: 'host' },
+      signal: new AbortController().signal,
+      noReturn: () => undefined,
+    } as never);
+    expect(notices()[0]?.body).toMatch(/it moved to its agent’s terminal/);
+  });
+
   it('sends the lead that answered, or handed back, no notice of it', async () => {
     const need = raise(KEY);
     const [copy] = copies();
