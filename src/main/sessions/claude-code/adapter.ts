@@ -149,7 +149,7 @@ export const claudeCode: Adapter = {
         // mode's classifier: B13 C13). A compound command's `subcommandResults` counts as a safety check.
         signals: true,
         context: true,
-        // corrallm's agent API: its host-registered channel (recorded on SDK 0.3.306).
+        // corrallm's agent API: its host-registered channel (recorded on SDK 0.3.319).
         api: 'channel',
         startModes: START_MODES,
         live: { effort: true, stopTask: true },
