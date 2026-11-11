@@ -19,6 +19,20 @@ describe('a chunked worktrees snapshot (B9a §7)', () => {
       ]),
     ).toEqual({ items, kept });
   });
+
+  it('keeps the branch the project checkout is on, which the core sends in the summary', () => {
+    const into = { ref: 'main', commit: 'a'.repeat(40) };
+    expect(assembledState(`worktrees:${CANVAS}`, { into }, [])).toEqual({
+      items: [],
+      kept: [],
+      into,
+    });
+    expect(assembledState(`worktrees:${CANVAS}`, { into: null }, [])).toEqual({
+      items: [],
+      kept: [],
+      into: null,
+    });
+  });
 });
 
 describe('a chunked leads snapshot (B24 C1)', () => {

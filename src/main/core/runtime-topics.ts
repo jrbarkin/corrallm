@@ -1256,9 +1256,14 @@ export function partsOf(
       };
     if (topic.startsWith('worktrees:')) {
       // B9a's who works where: each agent's item, then each tree kept, in order.
-      const value = state as { items: readonly { agent: string }[]; kept: readonly unknown[] };
+      const value = state as {
+        items: readonly { agent: string }[];
+        kept: readonly unknown[];
+        into: unknown;
+      };
+      // The branch the checkout is on is one small value: the summary carries it.
       return {
-        summary: {},
+        summary: { into: value.into },
         entries: [
           ...value.items.map((item) => ({
             key: `item/${encodeURIComponent(item.agent)}`,

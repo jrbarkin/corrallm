@@ -1494,3 +1494,14 @@ describe('runtime topics: revisions and epochs', () => {
     expect(old.batches.length).toBe(heard);
   });
 });
+
+describe('a chunked worktrees snapshot', () => {
+  it('sends the branch the project checkout is on in its summary, so no chunk drops it', () => {
+    const topic = `worktrees:${CANVAS}` as const;
+    const into = { ref: 'main', commit: 'a'.repeat(40) };
+    for (const value of [into, null]) {
+      const parts = partsOf(topic, { items: [], kept: [], into: value } as never);
+      expect(parts.summary).toEqual({ into: value });
+    }
+  });
+});

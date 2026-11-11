@@ -253,6 +253,7 @@ export function assembledState(
       return {
         items: pairs.filter(([key]) => key.startsWith('item/')).map(([, value]) => value),
         kept: pairs.filter(([key]) => key.startsWith('kept/')).map(([, value]) => value),
+        into: (summary as { into?: unknown } | null)?.into ?? null,
       } as TopicStates[TopicKey];
     if (topic.startsWith('leads:'))
       return {
