@@ -13,7 +13,11 @@ collect_installers() {
   [ "${#rpms[@]}" -eq 1 ] && [ -f "${rpms[0]}" ] || die 'Expected exactly one rpm'
   cp "${debs[0]}" "$artifacts/corrallm.deb"
   cp "${rpms[0]}" "$artifacts/corrallm.rpm"
-  cp "$(dirname "$0")"/linux-{steps,smoke,installed}.sh "$(dirname "$0")/headless-smoke.sh" "$artifacts/"
+  # The same bytes under the names Forge gave them, for a release (linux-keep.sh).
+  mkdir -p "$artifacts/release"
+  cp "${debs[0]}" "${rpms[0]}" "$artifacts/release/"
+  cp "$(dirname "$0")"/linux-{steps,smoke,installed,versions,keep}.sh \
+    "$(dirname "$0")/notices-check.sh" "$(dirname "$0")/headless-smoke.sh" "$artifacts/"
   cp dist-check/seed-profile.cjs "$artifacts/"
   chmod -R a+rX "$artifacts"
 }

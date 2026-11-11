@@ -178,7 +178,7 @@ it('constrains a long name and full queue to the same card, clipping the label w
   expect(card.querySelector('.graph-queue-count')?.getAttribute('data-count')).toBe('100');
 });
 
-it('uses the guide’s 186 by 73 card, with a catalog image, name, status and queue progress', async () => {
+it('uses the guide’s 186 by 73 card, with its adapter’s first-letter mark, name, status and queue progress', async () => {
   expect(CARD_SIZE).toEqual({ width: 186, height: 73 });
   const { container } = await renderReady(
     <GraphEditor
@@ -203,9 +203,9 @@ it('uses the guide’s 186 by 73 card, with a catalog image, name, status and qu
   if (!card) throw new Error('No card');
   const view = within(card);
   const logo = view.getByRole('img', { name: 'Claude Code' });
-  expect(logo.tagName).toBe('IMG');
-  expect(logo.getAttribute('src')).toMatch(/^data:image\/svg\+xml,/);
-  expect(card.querySelector('svg')).toBeNull();
+  expect(logo.tagName).toBe('SPAN');
+  expect(logo.textContent).toBe('C');
+  expect(card.querySelector('img, svg')).toBeNull();
   expect(card.querySelector('.graph-agent')).toBeNull();
   expect(view.getByText('Writer')).toBeTruthy();
   expect(view.getByText('Idle')).toBeTruthy();

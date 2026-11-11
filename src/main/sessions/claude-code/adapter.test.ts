@@ -150,11 +150,9 @@ describe("Claude Code's adapter", () => {
     expect([descriptor.role, descriptor.resume, descriptor.list]).toEqual(['append', true, true]);
   });
 
-  it('ships its logo, and how to register an outside MCP server', () => {
-    expect(descriptor.logo).toMatch(
-      /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[\s\S]*<\/svg>\n?$/,
-    );
-    expect(descriptor.logo).not.toMatch(/<script|on\w+=/i);
+  it('declares no logo, and says how to register an outside MCP server', () => {
+    // A look-alike of a vendor's mark is not ours to ship: the letter fallback draws instead.
+    expect(descriptor.logo).toBeUndefined();
     for (const placeholder of ['{server}', '{url}', '{var}']) {
       expect(descriptor.registerMcp).toContain(placeholder);
     }

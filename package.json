@@ -6,6 +6,8 @@
   "description": "Desktop orchestrator for coding-agent CLIs",
   "author": "jrbarkin <jrbarkin1@gmail.com>",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/jrbarkin/corrallm",
+  "repository": "https://github.com/jrbarkin/corrallm",
   "type": "module",
   "main": ".vite/build/main.cjs",
   "packageManager": "pnpm@12.11.2",

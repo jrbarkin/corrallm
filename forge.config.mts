@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { cp, mkdir, readdir } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,12 +14,18 @@ import { MakerZIP } from '@electron-forge/maker-zip';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeConfig, ForgePackagerOptions } from '@electron-forge/shared-types';
-import { FuseV1Options, FuseVersion } from '@electron/fuses';
+import { FuseVersion } from '@electron/fuses';
 
+import { FUSES } from './build/fuses.js';
+import { rpmVersion } from './build/linux-version.js';
+import { joinNotices, NOTICES_CACHE } from './build/notices.js';
 import { copyNativeModule, NATIVE_MODULES } from './build/native-modules.js';
 import { shipCli, LINUX_CLI_BIN } from './build/shipped-cli.js';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
+const packageVersion = (
+  JSON.parse(readFileSync(path.join(projectDir, 'package.json'), 'utf8')) as { version: string }
+).version;
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 // Invoke Vite through Node: pnpm's Windows .cmd shim cannot be spawned with execFile.
@@ -27,10 +33,14 @@ const viteCli = path.join(path.dirname(require.resolve('vite/package.json')), 'b
 
 // extraResource keeps notices visible outside app.asar. Stage the SDK's installed license under
 // its own name on every build, so upgrades cannot leave a stale checked-in copy behind.
-const agentSdkLicense = path.join(
-  projectDir,
-  'node_modules/.cache/corrallm-licenses/claude-agent-sdk-LICENSE.md',
-);
+const licenseCache = path.join(projectDir, 'node_modules/.cache/corrallm-licenses');
+const agentSdkLicense = path.join(licenseCache, 'claude-agent-sdk-LICENSE.md');
+// The bundled packages' notices, joined from what each Vite bundle recorded (build/notices.ts).
+const thirdPartyNotices = path.join(licenseCache, 'THIRD-PARTY-NOTICES.txt');
+// Electron's own license files, taken from the Electron build being packaged (packageAfterExtract).
+// macOS leaves them beside the .app, outside the zip and the dmg: they ship in the resources.
+const electronLicense = path.join(licenseCache, 'electron-LICENSE');
+const chromiumLicenses = path.join(licenseCache, 'LICENSES.chromium.html');
 
 // ---------------------------------------------------------------------------------------------
 // Code signing: enabled only when credentials are present in the environment (see .env.example).
@@ -116,11 +126,21 @@ const windowsCertificate =
     : undefined;
 
 // ---------------------------------------------------------------------------------------------
+// The deb and rpm install this icon into hicolor, which the desktop entry's Icon=corrallm
+// resolves. A size-keyed object does that; a bare path would go to pixmaps instead. Forge's types
+// name only the bare path, hence the cast.
+const linuxIcon = {
+  '512x512': path.join(projectDir, 'build/icons/corrallm-512.png'),
+} as unknown as string;
+
 // electron-installer-redhat 4.0.0's default spec fails on rpmbuild >= 4.20; build/rpm.spec.ejs
 // carries the fix. Forge's option type omits specTemplate and desktopTemplate, which the
 // installer still honors. The desktop entry opens the app, not the command linked in /usr/bin.
 const rpmOptions: MakerRpmConfigOptions & { specTemplate: string; desktopTemplate: string } = {
   categories: ['Development'],
+  // A prerelease's rpm must sort before its release (build/linux-version.ts).
+  version: rpmVersion(packageVersion),
+  icon: linuxIcon,
   // Electron links libasound. Linux process identity reads /proc, not ps.
   requires: ['alsa-lib'],
   bin: LINUX_CLI_BIN,
@@ -134,6 +154,9 @@ const config = {
       path.join(projectDir, 'NOTICE'),
       path.join(projectDir, 'LICENSE'),
       agentSdkLicense,
+      thirdPartyNotices,
+      electronLicense,
+      chromiumLicenses,
       path.join(projectDir, 'build/presence'),
     ],
     asar: {
@@ -144,7 +167,13 @@ const config = {
     ...(osxSign ? { osxSign } : {}),
     ...(osxNotarize ? { osxNotarize } : {}),
     ...(windowsCertificate ? { windowsSign: true as const } : {}),
-    // TODO: set appBundleId (macOS) and icons before the first signed release.
+    // Reverse DNS under a namespace the project holds, not Electron's default. The profile folder
+    // is named by the product name, so it does not move with this.
+    appBundleId: 'io.github.jrbarkin.corrallm',
+    appCategoryType: 'public.app-category.developer-tools',
+    appCopyright: 'Copyright 2026 corrallm contributors',
+    // Packager appends .icns on macOS (.ico waits for Windows).
+    icon: path.join(projectDir, 'build/icons/corrallm'),
   },
   rebuildConfig: {
     // These ship Node-API prebuilds that work in Electron as-is. Without this,
@@ -153,6 +182,9 @@ const config = {
   },
   hooks: {
     generateAssets: async () => {
+      // The Vite builds that follow record the packages they bundle: start from none, so a record
+      // from an earlier build cannot stand in for one that did not run.
+      await rm(NOTICES_CACHE, { recursive: true, force: true });
       await mkdir(path.dirname(agentSdkLicense), { recursive: true });
       await cp(
         path.join(projectDir, 'node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md'),
@@ -170,7 +202,15 @@ const config = {
       for (const name of SIGNING_ENV) Reflect.deleteProperty(process.env, name);
       return Promise.resolve();
     },
+    packageAfterExtract: async (_config, extractPath) => {
+      await mkdir(licenseCache, { recursive: true });
+      await cp(path.join(extractPath, 'LICENSE'), electronLicense);
+      await cp(path.join(extractPath, 'LICENSES.chromium.html'), chromiumLicenses);
+    },
     packageAfterCopy: async (_config, buildPath, _electronVersion, platform, arch) => {
+      // Refuses the build for a bundled package with no license file or an unlisted license.
+      await mkdir(licenseCache, { recursive: true });
+      await writeFile(thirdPartyNotices, await joinNotices());
       for (const [name, module] of Object.entries(NATIVE_MODULES)) {
         await copyNativeModule(name, module, buildPath, platform, arch);
       }
@@ -216,6 +256,7 @@ const config = {
     new MakerDeb({
       options: {
         categories: ['Development'],
+        icon: linuxIcon,
         // The installer only recommends audio, which Electron links.
         depends: ['libasound2t64 | libasound2'],
         bin: LINUX_CLI_BIN,
@@ -248,17 +289,7 @@ const config = {
     new FusesPlugin({
       version: FuseVersion.V1,
       strictlyRequireAllFuses: true,
-      [FuseV1Options.RunAsNode]: false,
-      [FuseV1Options.EnableCookieEncryption]: true,
-      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
-      [FuseV1Options.EnableNodeCliInspectArguments]: false,
-      // Enforced on macOS and Windows; Electron has no ASAR integrity check on Linux.
-      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-      [FuseV1Options.OnlyLoadAppFromAsar]: true,
-      [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
-      // The renderer is served from app://, so file:// needs no extra privileges.
-      [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
-      [FuseV1Options.WasmTrapHandlers]: true,
+      ...FUSES,
     }),
   ],
 } satisfies ForgeConfig;

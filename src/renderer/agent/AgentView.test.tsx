@@ -125,10 +125,13 @@ describe('the agent view', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('shows the adapter’s logo in its agent chip', async () => {
+  it('shows the adapter’s first-letter mark in its agent chip', async () => {
     const { view } = await open();
     const chip = view.getByRole('button', { name: /^Agent:/ });
-    expect(within(chip).getByRole('img', { name: 'Claude Code' }).tagName).toBe('IMG');
+    const logo = within(chip).getByRole('img', { name: 'Claude Code' });
+    expect(logo.tagName).toBe('SPAN');
+    expect(logo.textContent).toBe('C');
+    expect(chip.querySelector('img, svg')).toBeNull();
   });
 
   it('adds to the queue from its sidebar, or from right above the message box', async () => {
