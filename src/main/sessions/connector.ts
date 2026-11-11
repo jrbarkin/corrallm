@@ -120,8 +120,8 @@ export interface SessionHost {
   /**
    * Tells the renderer what happened (see `SessionEvent` for the order events come in). Emit
    * 'started' once the session runs, and 'closed' if it stops by itself (its process exits).
-   * A prompt is raised (`prompt`) and ended (`prompt-ended`: withdrawn, or answered in the CLI's
-   * own terminal) by its key; an answer or a decline comes back through `LiveSession.prompts`.
+   * A prompt is raised (`prompt`) and ended (`prompt-ended`: withdrawn, answered in the CLI's
+   * own terminal, or moved to it) by its key; an answer or a decline comes back through `LiveSession.prompts`.
    */
   emit(event: HostEvent): void;
   /**
@@ -157,6 +157,13 @@ export interface PromptAnswers {
    * back, a hook's description). Tells its CLI nothing and changes nothing in it; never throws.
    */
   dismiss?(key: string): void;
+  /**
+   * B23 C7, for a Terminal session that holds its CLI's hook: lets go of the prompt it raised
+   * under `key` with no decision, so its CLI asks in its terminal. It ends the prompt (`moved`)
+   * and raises it again as one answered in the terminal. Never throws, nor changes anything in
+   * the CLI but that it shows its own dialog. Absent where a session holds nothing.
+   */
+  release?(key: string): void;
 }
 
 /** A session that runs. The manager calls these with arguments it has validated. */

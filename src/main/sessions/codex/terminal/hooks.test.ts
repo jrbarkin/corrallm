@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -6,11 +6,12 @@ import { spawn } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HOOK_HEADER, HOOK_TOKEN, HookServer } from '../../terminal/hooks';
-import type { HookEvent, HookRegistration } from '../../terminal/hooks';
+import type { HookEvent, HookHold, HookRegistration } from '../../terminal/hooks';
 import {
   computedTrust,
   hookCommand,
   hookHash,
+  permissionCommand,
   folderTrust,
   hookOverrides,
   sessionHooks,
@@ -203,6 +204,7 @@ describe('a session’s hooks, as overrides', () => {
       'UserPromptSubmit',
       'Stop',
       'Interrupt',
+      'PermissionRequest',
     ]);
     const [first] = hookOverrides(hooks);
     expect(first).toBe(
@@ -237,4 +239,101 @@ describe('a session’s hooks, as overrides', () => {
       'hooks.state={"k"={trusted_hash="sha256:1"}}',
     );
   });
+});
+
+describe('the PermissionRequest hook, which decides (B23 C2)', () => {
+  it('is a session hook with a printing command, trusted by its own key and hash, on POSIX', () => {
+    const hooks = sessionHooks('http://127.0.0.1:4000/hook', 'darwin');
+    const permission = hooks.find((hook) => hook.event === 'PermissionRequest');
+    expect(permission).toMatchObject({ event: 'PermissionRequest', timeout: 30 });
+    expect(permission?.command).toBe(permissionCommand('http://127.0.0.1:4000/hook'));
+    // It prints the server's reply (no -o /dev/null), bounded under its timeout, quietly.
+    expect(permission?.command).toContain('--max-time 25');
+    expect(permission?.command).not.toContain('-o /dev/null');
+    expect(permission?.command).toContain('2>/dev/null');
+    expect(permission?.command).toContain('exit 0');
+    expect(permission?.command).not.toContain(HOOK_TOKEN);
+    const trust = computedTrust(hooks);
+    expect(trust.get('/<session-flags>/config.toml:permission_request:0:0')).toBe(
+      hookHash(permission ?? { event: 'Stop', command: '', timeout: 0 }),
+    );
+    // The others are as they were: they print nothing.
+    for (const hook of hooks.filter((one) => one !== permission)) {
+      expect(hook.command).toBe(hookCommand('http://127.0.0.1:4000/hook', 'darwin'));
+    }
+  });
+
+  it('is absent on Windows, which was not recorded, and where it is not asked for', () => {
+    const url = 'http://127.0.0.1:4000/hook';
+    const windows = sessionHooks(url, 'win32');
+    expect(windows.map((hook) => hook.event)).toEqual([
+      'SessionStart',
+      'UserPromptSubmit',
+      'Stop',
+      'Interrupt',
+    ]);
+    expect(windows.every((hook) => hook.command === hookCommand(url, 'win32'))).toBe(true);
+    expect(
+      sessionHooks(url, 'darwin', { permission: false }).map((hook) => hook.event),
+    ).not.toContain('PermissionRequest');
+  });
+
+  it.skipIf(!posix)(
+    'prints exactly the server’s reply, and a hold’s decision reaches it',
+    async () => {
+      const server = new HookServer();
+      const holds: HookHold[] = [];
+      const registration = await server.register(
+        (_event, hold) => {
+          if (hold) holds.push(hold);
+        },
+        undefined,
+        (event) => event.hook_event_name === 'PermissionRequest',
+      );
+      registrations.push(registration);
+      await writeFile(header, `Authorization: Bearer ${registration.token}\n`);
+      const running = runHook(
+        permissionCommand(registration.url),
+        JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' }),
+        { [HOOK_HEADER]: header },
+      );
+      await vi.waitFor(() => {
+        expect(holds).toHaveLength(1);
+      });
+      const body = { hookSpecificOutput: { hookEventName: 'PermissionRequest' } };
+      holds[0]?.answer(body);
+      expect(await running).toEqual({ code: 0, out: JSON.stringify(body) });
+    },
+  );
+
+  it.skipIf(!posix)(
+    'prints nothing at all for a refusal, an absent server or no curl, and succeeds',
+    async () => {
+      const server = new HookServer();
+      const registration = await server.register(vi.fn());
+      registrations.push(registration);
+      await writeFile(header, `Authorization: Bearer ${registration.token}\n`);
+      // A refused media type (a wrong token is a 401): the empty body is all there is.
+      const wrongToken = path.join(dir, 'wrong');
+      await writeFile(wrongToken, 'Authorization: Bearer 00ff\n');
+      expect(
+        await runHook(permissionCommand(registration.url), '{}', { [HOOK_HEADER]: wrongToken }),
+      ).toEqual({ code: 0, out: '' });
+      // Nothing is listening.
+      expect(
+        await runHook(permissionCommand('http://127.0.0.1:9/hook'), '{}', {
+          [HOOK_HEADER]: header,
+        }),
+      ).toEqual({ code: 0, out: '' });
+      // No curl: the event is read and dropped.
+      const empty = path.join(dir, 'bin');
+      await mkdir(empty);
+      expect(
+        await runHook(permissionCommand(registration.url), '{}', {
+          PATH: empty,
+          [HOOK_HEADER]: header,
+        }),
+      ).toEqual({ code: 0, out: '' });
+    },
+  );
 });

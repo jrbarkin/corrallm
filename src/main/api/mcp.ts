@@ -18,7 +18,7 @@ import type { ToolListing } from '../../shared/api/registry';
 import type { Dispatcher } from '../core/call';
 import { isTokenCaller } from '../core/caller';
 import type { AgentCaller, Caller, TokenCaller } from '../core/caller';
-import { foreignRequest } from '../loopback';
+import { foreignRequest, isJson } from '../loopback';
 
 /*
  * corrallm's agents' server: MCP over streamable HTTP on 127.0.0.1, generated from the registry
@@ -262,13 +262,6 @@ export async function startApiServer(options: ApiServerOptions): Promise<ApiServ
     port,
     close: () => (closing ??= close()),
   };
-}
-
-/** Whether a media type is exactly JSON (in UTF-8, if it names a charset). */
-function isJson(contentType: string | undefined): boolean {
-  if (contentType === undefined) return false;
-  const [type, ...parameters] = contentType.split(';').map((part) => part.trim().toLowerCase());
-  return type === 'application/json' && parameters.every((p) => p === 'charset=utf-8');
 }
 
 /**

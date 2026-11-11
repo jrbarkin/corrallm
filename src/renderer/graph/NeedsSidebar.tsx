@@ -238,7 +238,7 @@ export function NeedsSidebar({
                 role={item.kind === 'prompt' && !isAsk(item) ? 'group' : undefined}
                 aria-label={
                   item.kind === 'prompt' && item.agent
-                    ? `${agentName(nodes, item.agent)} asks${item.answerIn === 'terminal' ? ', in its terminal' : ''}`
+                    ? `${agentName(nodes, item.agent)} asks${item.answerIn === 'terminal' ? ', in its terminal' : item.answerIn === 'both' ? ', here or in its terminal' : ''}`
                     : item.title
                 }
               >

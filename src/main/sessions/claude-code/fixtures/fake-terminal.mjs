@@ -9,9 +9,9 @@
 // (its "transcript", which --resume needs). A file .fake-claude-untrusted in the folder makes it
 // ask whether to trust the folder first.
 //
-// Prompts: "ask …" asks for permission first (its permission hook, then its report; 1 or Enter:
-// yes), "question …" asks a question (AskUserQuestion: its tool's hook, then the permission
-// hook; 1 or Enter answers), "slow …" works until Escape, "link …" is answered with a link,
+// Prompts: "ask …" asks for permission first (its permission hook, held, with its dialog drawn
+// beside it and its report; the hook's decision or 1 or Enter: yes), "question …" asks a question
+// (AskUserQuestion: its tool's hook, then the permission hook, held as well; 1 or Enter answers), "slow …" works until Escape, "link …" is answered with a link,
 // "files …" with links (OSC 8) to notes.txt in its folder and outside.txt beside it, anything
 // else is answered at once. A paste (bracketed, as it asks for) goes into the prompt,
 // and is logged. Its terminal's size is logged as it changes, so a test can tell where a cell is
@@ -209,6 +209,49 @@ async function hook(name, fields = {}) {
   }).catch(() => undefined);
 }
 
+/**
+ * Posts a hook the way Claude Code posts a PermissionRequest that may decide: its dialog is drawn
+ * at once, beside the held request (recorded, 2.1.321). Resolves with the decision it was
+ * answered with, if any; the request is cut at the hook's timeout, or by `abort` (Escape), and the
+ * dialog stands. Nothing else closes it: the terminal answering first leaves it open (recorded).
+ */
+function holdHook(name, fields) {
+  const settings = arg('--settings');
+  const url = settings && JSON.parse(readFileSync(settings, 'utf8')).hooks[name]?.[0]?.hooks[0];
+  if (!url?.url) return { decision: Promise.resolve(undefined), abort() {} };
+  const controller = new AbortController();
+  const timeout = AbortSignal.timeout((url.timeout ?? 5) * 1000);
+  const decision = fetch(url.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: url.headers.Authorization },
+    body: JSON.stringify({
+      session_id: sessionId,
+      cwd: process.cwd(),
+      permission_mode: 'default',
+      hook_event_name: name,
+      ...fields,
+    }),
+    signal: AbortSignal.any([controller.signal, timeout]),
+  })
+    .then((response) => response.json())
+    .then((body) => body?.hookSpecificOutput?.decision)
+    .catch(() => undefined);
+  return { decision, abort: () => controller.abort() };
+}
+
+/** The request being held now, and what answering it as a dialog does. */
+let held;
+function holdDialog(request, whenAnswered) {
+  held = request;
+  void request.decision.then((decision) => {
+    // The terminal answered first (or Escape closed it): the reply is ignored, as recorded.
+    if (held !== request || state !== 'blocked' || decision === undefined) return;
+    held = undefined;
+    log({ event: 'hook-decision', decision });
+    whenAnswered(decision);
+  });
+}
+
 let statusText = '';
 let scriptedStatus = Promise.resolve();
 
@@ -336,7 +379,7 @@ async function submit() {
     return;
   }
   if (planned?.ask || prompt.startsWith('ask')) {
-    await hook('PermissionRequest', {
+    const request = holdHook('PermissionRequest', {
       tool_name: 'Bash',
       tool_input: { command: 'echo hello', description: 'Say hello' },
     });
@@ -346,6 +389,18 @@ async function submit() {
     );
     lines.push('Bash(echo hello) · Do you want to proceed? 1. Yes  2. No');
     draw();
+    holdDialog(request, (decision) => {
+      if (decision.behavior === 'allow') {
+        lines.push('Allowed by PermissionRequest hook', '⏺ Bash(echo hello) ⎿ hello');
+        become('working');
+        setTimeout(() => void finish(), 200);
+      } else {
+        lines.push(`Denied by PermissionRequest hook: ${decision.message ?? ''}`);
+        become(decision.interrupt === true ? 'idle' : 'working');
+        if (decision.interrupt !== true) setTimeout(() => void finish(), 200);
+      }
+      draw();
+    });
     return;
   }
   if (prompt.startsWith('question')) {
@@ -367,13 +422,23 @@ async function submit() {
       tool_input: input,
       tool_use_id: 'toolu_question',
     });
-    await hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: input });
+    const request = holdHook('PermissionRequest', {
+      tool_name: 'AskUserQuestion',
+      tool_input: input,
+    });
     become(
       'blocked',
       `:kind=question:msg=${Buffer.from('answer: Which database? (Postgres · SQLite)').toString('base64')}`,
     );
     lines.push('Which database? 1. Postgres  2. SQLite');
     draw();
+    holdDialog(request, (decision) => {
+      const answered = decision.updatedInput?.answers?.['Which database?'];
+      lines.push(`User answered Claude's questions: ${answered ?? ''}`);
+      become('working');
+      setTimeout(() => void finish(), 200);
+      draw();
+    });
     return;
   }
   if (prompt.startsWith('slow')) return;
@@ -463,11 +528,17 @@ function key(received) {
     return;
   }
   if (state === 'blocked') {
+    if (data === '\x1b') held?.abort();
+    // The terminal answers: the held request, if any, stays open and is ignored (recorded).
     if (data === '1' || data === '\r') {
+      held = undefined;
       lines.push('⏺ Bash(echo hello) ⎿ hello');
       become('working');
       setTimeout(() => void finish(), 200);
-    } else if (data === '\x1b' || data === '2') become('idle');
+    } else if (data === '\x1b' || data === '2') {
+      held = undefined;
+      become('idle');
+    }
     draw();
     return;
   }

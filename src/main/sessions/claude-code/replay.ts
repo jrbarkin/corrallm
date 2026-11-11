@@ -169,12 +169,18 @@ export class Replay implements Pty {
           break;
         case 'hook': {
           const { url, authorization } = this.#hook();
-          // Claude Code waits for its hooks before it goes on.
-          await fetch(url, {
+          // Claude Code waits for its hooks before it goes on, except a PermissionRequest hook
+          // (recorded, B23): it draws its dialog at once, beside the request, so a held one
+          // does not stop the recording; the request is let go of when the dialog is answered.
+          const request = fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: authorization },
             body: JSON.stringify(record.data.ev),
-          });
+          }).catch(() => undefined);
+          if (record.data.ev.hook_event_name !== 'PermissionRequest') await request;
+          // A held one has reached the session before the report that followed it (about 30 ms
+          // later, recorded); the unanswered request itself never settles in the meantime.
+          else await Promise.race([request, new Promise((resolve) => setTimeout(resolve, 50))]);
           const {
             hook_event_name: event,
             tool_name: tool,

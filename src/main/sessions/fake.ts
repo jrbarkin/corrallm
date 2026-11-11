@@ -33,7 +33,8 @@ export interface FakeOptions {
   consent?: FakeConsent;
   mode?: SessionMode | null;
   asks?: boolean;
-  step?: () => Promise<void>;
+  /** Waits between a turn's events; given the message whose turn it is, to hold that turn alone. */
+  step?: (message: UserMessage) => Promise<void>;
   script?: FakeScript | undefined;
   /** What its `started` reports instead of its profile's: a narrower session, for tests (B16 C1). */
   features?: EffectiveFeatures;
@@ -104,7 +105,7 @@ export class FakeConnector implements Connector<SessionMode> {
   readonly ids: string[] = [];
   /** Every session it started, each with the messages it was sent. */
   readonly sessions: FakeSession[] = [];
-  readonly #step: () => Promise<void>;
+  readonly #step: (message: UserMessage) => Promise<void>;
   readonly #mode: SessionMode | null;
   readonly #asks: boolean | undefined;
   readonly #profile: FakeProfile;
@@ -187,7 +188,7 @@ class FakeSession implements LiveSession<SessionMode> {
   readonly sent: UserMessage[] = [];
   #mode: SessionMode | null;
   readonly #host: SessionHost;
-  readonly #step: () => Promise<void>;
+  readonly #step: (message: UserMessage) => Promise<void>;
   readonly #script: FakeScript | undefined;
   readonly #profile: FakeProfile;
   #turn: Turn | undefined;
@@ -201,7 +202,7 @@ class FakeSession implements LiveSession<SessionMode> {
   constructor(
     mode: SessionMode | null,
     host: SessionHost,
-    step: () => Promise<void>,
+    step: (message: UserMessage) => Promise<void>,
     profile: FakeProfile,
     script?: FakeScript,
     consent?: FakeConsent,
@@ -280,7 +281,7 @@ class FakeSession implements LiveSession<SessionMode> {
     const emit = this.#host.emit.bind(this.#host);
     const started = Date.now();
     const step = async () => {
-      await this.#step();
+      await this.#step({ id, text });
       return !turn.stopped;
     };
     /** Shows a prompt, and waits for its answer (undefined: the turn was stopped). */

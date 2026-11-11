@@ -59,7 +59,9 @@ export interface ReplyResult {
     /** A routed lead gave a prompt back: it settles nothing and moves up. */
     | 'handed-back'
     /** A terminal's wait you said isn't one (B13 C7's Not waiting): nothing is recorded. */
-    | 'dismissed';
+    | 'dismissed'
+    /** A held Terminal prompt you handed back to its terminal (B23 C7): nothing is recorded. */
+    | 'moved';
   raised?: string;
 }
 

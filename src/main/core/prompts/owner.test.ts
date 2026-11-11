@@ -11,10 +11,14 @@ import type { Message } from '../../../shared/model/messages';
 import type { PromptEntryChange } from '../../../shared/model/prompt-views';
 import type { PromptAnswer } from '../../../shared/model/prompts';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
-import { MADE_UP } from '../../../shared/test-made-up';
+import type { Catalog } from '../../../shared/adapter';
+import { MADE_UP, TWO_MADE_UP } from '../../../shared/test-made-up';
 import { CanvasMemory } from '../../memory';
 import type { PromptAnswers } from '../../sessions/connector';
+import { SessionManager } from '../../sessions/manager';
 import type { PromptOrigin } from '../../sessions/manager';
+import { HELD_KEY, heldConnector } from '../../sessions/test-held';
+import { mintTrustedPath } from '../host';
 import { OpFailure } from '../call';
 import type { OpContext } from '../call';
 import { recoverDecisions } from '../decisions';
@@ -131,9 +135,13 @@ function origin(
   };
 }
 
-function make(limits?: Partial<PromptLimits>, nodes = NODES): PromptOwner {
+function make(
+  limits?: Partial<PromptLimits>,
+  nodes = NODES,
+  catalog: Catalog = MADE_UP,
+): PromptOwner {
   return new PromptOwner({
-    catalog: MADE_UP,
+    catalog,
     canvas: (canvas) =>
       (canvas === CANVAS || canvas === OTHER) && !stopped.has(canvas)
         ? { messages, nodes }
@@ -1680,5 +1688,202 @@ describe('budgets under load (B13 C9)', () => {
     raise(origin(8, one), approval, crypto.randomUUID());
     expect(notices).toHaveLength(3);
     expect(new Set(notices.map(({ text }) => text)).size).toBe(2);
+  });
+});
+
+describe('a held Terminal prompt (B23 C3, C7)', () => {
+  const UNTIL = 1_900_000_000_000;
+  /** What a Terminal session raises while it holds its CLI's hook: answered through it. */
+  const held = { ...approval, until: UNTIL };
+  /** A session that can release a hold. */
+  function releasing(): Handle & { released: string[] } {
+    const made = Object.assign(handle(), { released: [] as string[] });
+    made.release = (key) => {
+      made.released.push(key);
+    };
+    return made;
+  }
+  const outside = () =>
+    context({
+      by: 'outside:orchestrator',
+      caller: {
+        kind: 'outside',
+        token: 'write-token',
+        name: 'orchestrator',
+        access: 'write',
+        merge: true,
+        canvases: [CANVAS],
+      },
+    });
+  const outcomeIn = (need: string) => {
+    const id = need.split('/').at(-1);
+    const last = placed
+      .map(({ change }) => change)
+      .filter((change) => (change.type === 'raised' ? change.entry.id : change.id) === id)
+      .at(-1);
+    return last?.type === 'ended' ? last.outcome : undefined;
+  };
+
+  it('carries its deadline to the Needs item and the prompt, for you and for a token', () => {
+    const one = releasing();
+    const item = raise(origin(7, one), held);
+    expect(item).toMatchObject({ until: UNTIL, answerIn: 'api' });
+    expect(owner.items(CANVAS, 'token')[0]).toMatchObject({ until: UNTIL });
+    expect(owner.prompts(CANVAS)[0]).toMatchObject({ until: UNTIL });
+    // A prompt with none has none; a deadline that isn't a whole number is not admitted.
+    const plain = raise(origin(7, one), approval, KEY2);
+    expect(plain).not.toHaveProperty('until');
+    const refusing = handle();
+    for (const until of [1.5, 0, -3, '5']) {
+      raise(origin(7, refusing), { ...approval, until }, crypto.randomUUID());
+    }
+    expect(owner.items(CANVAS)).toHaveLength(2);
+    expect(refusing.declined).toHaveLength(4);
+  });
+
+  it('offers Answer in terminal, yours alone, only on an api prompt of a session that releases', () => {
+    const releases = releasing();
+    const plain = handle();
+    const mine = raise(origin(7, releases), held);
+    expect(mine?.choices.map(({ value }) => value)).toEqual([
+      'yes',
+      'no',
+      'tell',
+      'answer-in-terminal',
+    ]);
+    expect(mine?.choices.at(-1)).toEqual({
+      value: 'answer-in-terminal',
+      label: 'Answer in terminal',
+      humanOnly: expect.any(String) as string,
+    });
+    // A token reads no choice.
+    expect(owner.items(CANVAS, 'token')[0]?.choices).toEqual([]);
+    // Not on a session that cannot release (an Agent SDK prompt), nor a both or terminal prompt.
+    const sdk = raise(origin(7, plain), approval, crypto.randomUUID());
+    const both = raise(origin(7, releases), { ...held, answerIn: 'both' }, crypto.randomUUID());
+    const terminal = raise(
+      origin(7, releases),
+      { ...held, answerIn: 'terminal', choices: [] },
+      crypto.randomUUID(),
+    );
+    for (const item of [sdk, both, terminal]) {
+      expect(item?.choices.map(({ value }) => value)).not.toContain('answer-in-terminal');
+    }
+  });
+
+  it('moves to its terminal on that reply: released once, nothing recorded, outcome moved', async () => {
+    const one = releasing();
+    raise(origin(7, one), held);
+    const id = only();
+    expect(owner.fits(CANVAS, id, { choice: 'answer-in-terminal' })).toBeUndefined();
+    const noReturn = vi.fn();
+    expect(await answer(id, { choice: 'answer-in-terminal' }, context({ noReturn }))).toEqual({
+      outcome: 'moved',
+    });
+    expect(noReturn).toHaveBeenCalled();
+    expect(one.released).toEqual([KEY]);
+    expect(one.answered).toEqual([]);
+    expect(one.declined).toEqual([]);
+    expect(messages.all()).toEqual([]);
+    expect(owner.items(CANVAS)).toEqual([]);
+    expect(outcomeIn(id)).toEqual({ type: 'moved' });
+    // A second reply is a conflict that says where to answer.
+    expect(await answer(id, { choice: 'answer-in-terminal' })).toMatchObject({
+      code: 'conflict',
+      sentence: expect.stringMatching(/moved to its terminal: answer it there/) as string,
+    });
+    expect(await answer(id, { choice: 'yes' })).toMatchObject({ code: 'conflict' });
+    expect(one.released).toEqual([KEY]);
+  });
+
+  it('refuses Answer in terminal to a token, with words, or where it is not offered', async () => {
+    const one = releasing();
+    raise(origin(7, one), held);
+    const id = only();
+    expect(await answer(id, { choice: 'answer-in-terminal' }, outside())).toMatchObject({
+      code: 'refused',
+    });
+    for (const given of [
+      { choice: 'answer-in-terminal', feedback: 'why' },
+      { choice: 'answer-in-terminal', text: 'why' },
+    ]) {
+      expect(await answer(id, given)).toMatchObject({ code: 'invalid' });
+    }
+    raise(origin(7, one), { ...held, answerIn: 'both' }, KEY2);
+    const both = owner.items(CANVAS).at(-1)?.id ?? '';
+    expect(await answer(both, { choice: 'answer-in-terminal' })).toMatchObject({ code: 'invalid' });
+    expect(one.released).toEqual([]);
+    expect(owner.items(CANVAS)).toHaveLength(2);
+  });
+
+  it('settles a prompt its session moved as moved, and tells a later reply so', async () => {
+    const one = releasing();
+    raise(origin(7, one), held);
+    const id = only();
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY, reason: 'moved' });
+    expect(outcomeIn(id)).toEqual({ type: 'moved' });
+    expect(messages.all()).toEqual([]);
+    expect(await answer(id, { choice: 'yes' })).toMatchObject({
+      code: 'conflict',
+      sentence: expect.stringMatching(/moved to its terminal: answer it there/) as string,
+    });
+    expect(one.answered).toEqual([]);
+    // A token reads the type alone.
+    const second = raise(origin(7, one), held, KEY2)?.id ?? '';
+    owner.ended(origin(7, one), { type: 'prompt-ended', key: KEY2, reason: 'moved' });
+    expect(outcomeIn(second)).toEqual({ type: 'moved' });
+  });
+
+  it('moves an api prompt of a made-up terminal-view connection to its terminal, end to end', async () => {
+    const { connector, sessions } = heldConnector();
+    owner = make(undefined, NODES, TWO_MADE_UP);
+    const manager = new SessionManager({
+      catalog: TWO_MADE_UP,
+      connectors: { 'yak.terminal': connector },
+      environment: () => Promise.resolve({}),
+      adapterOf: () => Promise.resolve('claude-code'),
+      directories: {
+        workingDirectory: () =>
+          Promise.resolve({
+            state: 'ready',
+            cwd: mintTrustedPath('/work/app'),
+            workspace: null,
+            generation: 0,
+            branch: null,
+          }),
+        onAvailability: () => () => undefined,
+        projectRoot: () => mintTrustedPath('/work/app'),
+      },
+      memory: new CanvasMemory(database),
+      closeMs: 20,
+      emit: () => undefined,
+      activity: () => undefined,
+      prompts: owner,
+    });
+    await manager.start(CANVAS, 'b', { connection: 'yak.terminal', model: null, mode: null });
+    generations.set('b', manager.generationOf(CANVAS, 'b') ?? 0);
+    const session = sessions[0];
+    session?.raise('api');
+    const item = owner.items(CANVAS).at(-1);
+    expect(item?.choices.map(({ value }) => value)).toContain('answer-in-terminal');
+    expect(await answer(item?.id ?? '', { choice: 'answer-in-terminal' })).toEqual({
+      outcome: 'moved',
+    });
+    expect(session?.released).toEqual([HELD_KEY]);
+    expect(session?.answered).toEqual([]);
+    expect(session?.declined).toEqual([]);
+    await manager.closeCanvas(CANVAS);
+  });
+
+  it('declines a held prompt it cannot admit by releasing it to its terminal, never as a refusal', () => {
+    const one = releasing();
+    // Over the session's budget: the next held request moves to its terminal.
+    owner = make({ session: 1 });
+    raise(origin(7, one), held);
+    raise(origin(7, one), held, KEY2);
+    expect(one.released).toEqual([KEY2]);
+    expect(one.declined).toEqual([]);
+    expect(notices.at(-1)?.text).toMatch(/terminal/);
+    expect(notices.at(-1)?.text).not.toMatch(/declined/);
   });
 });

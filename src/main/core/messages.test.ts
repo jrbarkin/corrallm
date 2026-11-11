@@ -36,6 +36,8 @@ import { Documents } from './canvas/documents';
 import { commitDocument } from './canvas/test-documents';
 import { asHuman } from './gui';
 import { createCore } from './core';
+import { SYSTEM_DEPS } from './store/store';
+import type { StoreDeps } from './store/store';
 import type { Core, CoreConfig } from './core';
 import { isActive } from './delivery/messages';
 import { STORE_FILE } from './store/open';
@@ -114,6 +116,15 @@ const LINKS = [
   ['builder', 'checker'],
 ];
 
+/**
+ * The database on the real clock but a log flush that returns at once, not the drive's fsync: what
+ * these tests read back is written to the log either way, and every turn takes several commits, so
+ * a slow drive would run one past the one second each wait below gives it.
+ */
+const store: StoreDeps = {
+  ...SYSTEM_DEPS,
+  flush: () => Promise.resolve(),
+};
 let profile: string;
 let project: string;
 let core: Core | undefined;
@@ -244,6 +255,7 @@ async function start(
       distribution: 'local',
       directoryResolver: legacyDirectories,
       locale: 'en-GB',
+      store,
       ...(watchdog === undefined ? {} : { watchdog }),
       ...(watchdogNetwork === undefined ? {} : { watchdogNetwork }),
       ...(leads === undefined ? {} : { leads }),
@@ -2203,10 +2215,43 @@ async function startAtTrust() {
   return { runs, start: () => start({ claude: connector }) };
 }
 
+/**
+ * A fake whose turn for a "/question" message, the one `receive` and the tests below send to have a
+ * turn going, is held until its real interrupt (as a take-back or a kill does), however many agents
+ * each have one. Every other turn ends at once: none races a pause the test must beat, or runs
+ * past the one second its wait gives it.
+ */
+function heldReceipts(): FakeConnector {
+  const gates = new Map<string, PromiseWithResolvers<undefined>>();
+  const gate = (id: string) => {
+    const made = gates.get(id) ?? Promise.withResolvers<undefined>();
+    gates.set(id, made);
+    return made;
+  };
+  const fake = fakeConnector({
+    adapter: 'codex',
+    step: ({ id, text }) =>
+      text.includes('/question') ? gate(id).promise.then(() => undefined) : Promise.resolve(),
+  });
+  const start = fake.start.bind(fake);
+  vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+    const session = await start(spec, host);
+    const interrupt = session.interrupt.bind(session);
+    session.interrupt = () => {
+      const stopped = interrupt();
+      for (const { id } of fake.sessions.find((one) => one === session)?.sent ?? [])
+        gate(id).resolve(undefined);
+      return stopped;
+    };
+    return session;
+  });
+  return fake;
+}
+
 describe('telling an agent of a withdrawal after receipt', () => {
   beforeEach(() => {
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
-    terminal = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = heldReceipts();
+    terminal = heldReceipts();
   });
 
   /** Keep the original and then its separate note running until their real interrupts. */
@@ -2225,6 +2270,40 @@ describe('telling an agent of a withdrawal after receipt', () => {
       const interrupt = session.interrupt.bind(session);
       session.send = (message) => {
         if (++sent === 1 || message.from?.party === 'corrallm') {
+          const gate = Promise.withResolvers<undefined>();
+          waiting = gate.promise;
+          release = () => {
+            gate.resolve(undefined);
+          };
+        } else waiting = undefined;
+        return send(message);
+      };
+      session.interrupt = () => {
+        const stopped = interrupt();
+        release?.();
+        return stopped;
+      };
+      return session;
+    });
+    return fake;
+  }
+
+  /** A fake whose first message's turn runs until its real interrupt; every later turn ends at once. */
+  function heldFirstTurnConnector() {
+    let waiting: Promise<void> | undefined;
+    let release: (() => void) | undefined;
+    let sent = 0;
+    const fake = fakeConnector({
+      adapter: 'codex',
+      step: () => waiting ?? Promise.resolve(),
+    });
+    const start = fake.start.bind(fake);
+    vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+      const session = await start(spec, host);
+      const send = session.send.bind(session);
+      const interrupt = session.interrupt.bind(session);
+      session.send = (message) => {
+        if (++sent === 1) {
           const gate = Promise.withResolvers<undefined>();
           waiting = gate.promise;
           release = () => {
@@ -2422,6 +2501,11 @@ describe('telling an agent of a withdrawal after receipt', () => {
   it.each(['builder', 'shell'])(
     'shows the exact withdrawal-bearing messages sent to %s, in order, live and after resuming',
     async (agent) => {
+      // The received turn is held until its interrupt, not for a 100 ms pause the withdrawal must
+      // beat; the turns after it, a shell's two among them, end at once instead of 400 ms each
+      // against the one second the waits below give them.
+      appServer = heldFirstTurnConnector();
+      terminal = heldFirstTurnConnector();
       await keepCanvas();
       await start();
       const id = await withdrawReceived(agent);
@@ -2479,6 +2563,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
     ['another agent', BUILDER],
     ['the user', YOU],
   ])('rides the next message from %s, without starting a turn of its own', async (_who, caller) => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('helper');
@@ -2501,6 +2589,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('names an agent sender as frames name it', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('helper', BUILDER);
@@ -2512,6 +2604,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('names the user explicitly when the withdrawn message was theirs', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('builder', YOU);
@@ -2570,6 +2666,10 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('keeps the note durably across a restart, and keeps its delivered acknowledgement across the next', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived();
@@ -2626,29 +2726,22 @@ describe('telling an agent of a withdrawal after receipt', () => {
   });
 
   it('sends a separate framed note first when the user’s next message starts with a shell prefix', async () => {
+    // The received turn is held until its interrupt, not for a pause the withdrawal must beat;
+    // the turns after it end at once.
+    appServer = heldFirstTurnConnector();
+    terminal = heldFirstTurnConnector();
     await keepCanvas();
     await start();
     const id = await withdrawReceived('shell');
     expect(sent(terminal)).toHaveLength(1);
     const next = await send('shell', '!echo hello', YOU);
-    await vi.waitFor(() => {
-      expect(sent(terminal)).toHaveLength(2);
+    await vi.waitFor(async () => {
+      expect((await find(next, YOU))?.state).toBe('replied');
     });
     const later = await send('shell', 'After the shell command', YOU);
-    // A Terminal fake's turn takes about 760 ms here (its keys, then its settle): as long a wait
-    // as the next one's, not the default second a slow host can overrun.
-    await vi.waitFor(
-      async () => {
-        expect((await find(next, YOU))?.state).toBe('replied');
-      },
-      { timeout: 3000 },
-    );
-    await vi.waitFor(
-      async () => {
-        expect((await find(later, YOU))?.state).toBe('replied');
-      },
-      { timeout: 3000 },
-    );
+    await vi.waitFor(async () => {
+      expect((await find(later, YOU))?.state).toBe('replied');
+    });
     expect(sent(terminal).slice(1)).toEqual([
       `[corrallm] ${withdrawalNote(id)}`,
       '!echo hello',
@@ -2757,7 +2850,7 @@ function sentTo(connector: FakeConnector, agent: string): string[] {
 
 describe('telling an agent of a kill after receipt', () => {
   beforeEach(() => {
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = heldReceipts();
   });
 
   /** Builder and Helper in the group Team. */
@@ -2980,13 +3073,13 @@ describe('telling an agent of a kill after receipt', () => {
         disk.prepare('SELECT withdrawal FROM message WHERE id = ?').get(id),
       ),
     ).toEqual({ withdrawal: JSON.stringify({ text: note }) });
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     await ok('run.unpause', { target: { agent: 'builder' } }, YOU);
     // A note starts no turn by itself.
     expect(sent(appServer)).toEqual([]);
     expect(await next('builder')).toContain(note);
-    appServer = fakeConnector({ adapter: 'codex', pause: 100 });
+    appServer = fakeConnector({ adapter: 'codex' });
     await restart({ appServer });
     expect(await next('builder')).not.toContain(id);
   });

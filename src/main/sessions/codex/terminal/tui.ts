@@ -2,11 +2,18 @@ import { MAX_DETAIL_LINES } from '../../../../shared/api/limits';
 import { MODEL_PATTERN } from '../../../../shared/session';
 import type { CodexMode, SessionUsage } from '../../../../shared/session';
 import { isUuid } from '../../id';
-import type { Launch, TerminalCli, TerminalSignal, TerminalUsage } from '../../terminal/cli';
+import type {
+  Launch,
+  TerminalCli,
+  TerminalHold,
+  TerminalSignal,
+  TerminalUsage,
+} from '../../terminal/cli';
 import type { HookEvent, HookRegistration } from '../../terminal/hooks';
 import type { Screen } from '../../terminal/screen';
 import type { ProgramStatus } from '../../terminal/status';
 import { composerDraft } from './composer';
+import { codexHold } from './hold';
 import { folderTrust, hookOverrides, sessionHooks, toml, trustOverride } from './hooks';
 import type { SessionHook } from './hooks';
 import type { HookTrust } from './trust';
@@ -69,6 +76,11 @@ export interface CodexTuiOptions {
   /** Native developer instructions with this process's managed role appended. */
   developerInstructions?: string;
   platform?: NodeJS.Platform;
+  /**
+   * Whether it is given the PermissionRequest hook, which corrallm holds to answer approvals
+   * (B23: from Codex 0.162.1; default yes). Without it nothing is held.
+   */
+  permission?: boolean;
   /** Reads its account's usage limits (usage.ts: a private app server). */
   usage?: () => Promise<TerminalUsage | undefined>;
 }
@@ -94,6 +106,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
   readonly #effort: string | null;
   readonly #developerInstructions: string | undefined;
   readonly #platform: NodeJS.Platform;
+  readonly #permission: boolean;
   readonly #usage: (() => Promise<TerminalUsage | undefined>) | undefined;
   /** The overrides that add its hooks and trust them, once prepared. */
   #hooks: string[] = [];
@@ -121,6 +134,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
     effort = null,
     developerInstructions,
     platform = process.platform,
+    permission = true,
     usage,
     contextWindow,
     api,
@@ -130,6 +144,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
     this.#effort = effort;
     this.#developerInstructions = developerInstructions;
     this.#platform = platform;
+    this.#permission = permission && platform !== 'win32';
     this.#usage = usage;
     this.#contextWindow =
       Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 12_000
@@ -149,7 +164,7 @@ export class CodexTui implements TerminalCli<CodexMode> {
   }
 
   async prepare(_dir: string, hooks: HookRegistration): Promise<void> {
-    const session = sessionHooks(hooks.url, this.#platform);
+    const session = sessionHooks(hooks.url, this.#platform, { permission: this.#permission });
     const trust = await this.#trust(session);
     this.#hooks = [...hookOverrides(session), trustOverride(trust)];
   }
@@ -296,6 +311,11 @@ export class CodexTui implements TerminalCli<CodexMode> {
         break;
     }
     return signals;
+  }
+
+  /** A command or MCP tool approval is held until corrallm answers it (hold.ts, B23). */
+  hold(event: HookEvent): TerminalHold | undefined {
+    return this.#permission ? codexHold(event) : undefined;
   }
 
   draft(screen: Screen): string | undefined {

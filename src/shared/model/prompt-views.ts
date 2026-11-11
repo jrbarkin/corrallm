@@ -26,7 +26,7 @@ import { mcpRequestTitle, mcpToolTitle } from './words';
  *   detail is what its screen shows, yours alone (a token never reads a terminal).
  * - Its subject, plan and questions (with which are secret): everyone's; never an answer.
  * - Its choices (value, label, hint, effects, feedback, whether only you may pick it), the core's
- *   own Not waiting among them: yours alone, until B24's grants say which a lead may pick.
+ *   own Not waiting and Answer in terminal among them: yours alone, until B24's grants say which a lead may pick.
  * - A form's schema and link: yours alone.
  * - How it ended (its live outcome): yours whole; a token's, its type and who settled it.
  * - Its adapter's key, its signals, native ids, callbacks and image bytes: never in a prompt here.
@@ -50,6 +50,8 @@ export interface PromptOccurrence {
   readonly name: string;
   /** The core's stand-in for a terminal's wait it couldn't show whole (B13 C6). */
   readonly standIn: boolean;
+  /** Whether its session can release it to its terminal (B23 C7: `PromptAnswers.release`). */
+  readonly releasable?: boolean;
 }
 
 /** B13 C7's Not waiting: the core's own choice on a terminal's wait its report alone describes. */
@@ -59,6 +61,23 @@ export const NOT_WAITING_CHOICE: NeedChoice = {
   label: 'Not waiting',
   humanOnly: 'Only you can tell, from its terminal, that its CLI isn’t waiting for you.',
 };
+
+/** B23 C7: the core's own choice on a held Terminal prompt answered through corrallm alone. */
+export const ANSWER_IN_TERMINAL = 'answer-in-terminal';
+export const ANSWER_IN_TERMINAL_CHOICE: NeedChoice = {
+  value: ANSWER_IN_TERMINAL,
+  label: 'Answer in terminal',
+  humanOnly: 'Only you answer in its terminal.',
+};
+
+/**
+ * Whether a prompt may be handed back to its terminal (B23 C7): one held through its CLI's hook
+ * that is answered in corrallm alone (`api`), by a session that can release it. A `both` prompt's
+ * terminal already answers it.
+ */
+export function movable(prompt: Prompt, releasable: boolean | undefined): boolean {
+  return releasable === true && prompt.answerIn === 'api';
+}
 
 /**
  * Whether a prompt is a terminal's wait raised from its CLI's report alone (B13 C7): no subject,
@@ -95,6 +114,7 @@ export function promptNeed(occurrence: PromptOccurrence, reader: PromptReader): 
     answerIn: prompt.answerIn,
     title: needTitle(occurrence, reader),
     choices: yours ? choicesOf(occurrence) : [],
+    ...(prompt.until === undefined ? {} : { until: prompt.until }),
     prompt: needView(occurrence, reader),
   };
   switch (prompt.kind) {
@@ -131,6 +151,7 @@ export function promptFor(occurrence: SeenOccurrence, reader: PromptReader): Pro
       kind: 'form',
       title: needTitle(occurrence, reader),
       answerIn: prompt.answerIn,
+      ...(prompt.until === undefined ? {} : { until: prompt.until }),
       ...(prompt.cut === true ? { cut: true } : {}),
       ...(prompt.humanOnly === undefined ? {} : { humanOnly: prompt.humanOnly }),
       choices: [],
@@ -233,6 +254,8 @@ export type LiveOutcome =
   | { type: 'form'; action?: 'accept' | 'decline' | 'cancel'; by: PartyId }
   | { type: 'withdrawn' }
   | { type: 'answered-in-terminal'; by: 'terminal' }
+  /** A held Terminal prompt released to its terminal (B23 C3): no answer, nothing recorded. */
+  | { type: 'moved' }
   | { type: 'dismissed'; by: PartyId };
 
 /** A prompt's live outcome as `reader` sees it: yours whole, a token's its type and by whom. */
@@ -245,6 +268,7 @@ export function outcomeFor(outcome: LiveOutcome, reader: PromptReader): LiveOutc
       return { type: outcome.type, by: outcome.by };
     case 'withdrawn':
     case 'answered-in-terminal':
+    case 'moved':
     case 'dismissed':
       return outcome;
   }
@@ -313,7 +337,13 @@ export function promptEntryFor(
       kind: 'prompt',
       need,
       prompt: promptFor(
-        { need, prompt: entry.prompt, name: entry.name, standIn: entry.standIn === true },
+        {
+          need,
+          prompt: entry.prompt,
+          name: entry.name,
+          standIn: entry.standIn === true,
+          releasable: entry.releasable === true,
+        },
         reader,
       ),
     };
@@ -400,8 +430,11 @@ function needView({ prompt }: PromptOccurrence, reader: PromptReader): PromptNee
  * may pick it (every one of a prompt only you may answer, for the router's check too), then the
  * core's own Not waiting where it is offered.
  */
-function choicesOf({ prompt, standIn }: SeenOccurrence): NeedChoice[] {
-  const own = undescribed(prompt, standIn) ? [NOT_WAITING_CHOICE] : [];
+function choicesOf({ prompt, standIn, releasable }: SeenOccurrence): NeedChoice[] {
+  const own = [
+    ...(undescribed(prompt, standIn) ? [NOT_WAITING_CHOICE] : []),
+    ...(movable(prompt, releasable) ? [ANSWER_IN_TERMINAL_CHOICE] : []),
+  ];
   if (prompt.kind !== 'approval' && prompt.kind !== 'plan') return own;
   return [
     ...prompt.choices.map((choice): NeedChoice => {

@@ -38,6 +38,7 @@ const ENDED: Readonly<Record<NonNullable<RouteChange['how']> | 'moved' | 'restar
   answered: 'someone else answered it',
   'answered-natively': 'it was answered in its agent’s terminal',
   withdrawn: 'its agent no longer asks it',
+  'in-terminal': 'it moved to its agent’s terminal',
   moved: 'it was handed on, or your grants changed',
   restart: 'corrallm restarted, so it no longer waits',
 };

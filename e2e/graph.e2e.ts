@@ -77,6 +77,9 @@ test('an unchosen agent holds its work until the person chooses through its chip
     });
   }, file);
   await canvasAction(page, 'Open…');
+  // Open asks the dialog when the core gets to it, not when the button is pressed: the folder
+  // answer below replaces the file answer, so it waits until the file has opened.
+  await expect(node('Waiting')).toBeVisible();
   await app.evaluate(
     ({ dialog }, picked) => {
       Object.assign(dialog, {
@@ -1328,8 +1331,10 @@ test('holds a queue for your OK, pulsing amber with its decision shown, until ap
   // already done: either way it ran, which its one attempt records.
   const grep = view.getByRole('group', { name: 'Agent 1: Grep' }).locator('[data-run]');
   await expect(grep).toHaveAttribute('data-run', /^(running|succeeded)$/);
-  const stop = view.getByRole('button', { name: 'Stop', exact: true });
-  if (await stop.isVisible()) await stop.click();
+  // Let the run end rather than stop it: checking for the Stop button and then clicking it races
+  // the fake agent finishing in between, leaving the click waiting for a button that is gone.
+  await expect(grep).toHaveAttribute('data-run', 'succeeded');
+  await expect(view.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
 });
 
 test('lines repeats up across lanes, round by round, with ribbons between the steps inside them', async () => {

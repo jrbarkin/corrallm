@@ -20,6 +20,8 @@ import type { PartyId } from '../../../shared/model/messages';
 import type { NeedChoice, NeedsItem } from '../../../shared/model/needs';
 import { promptJsonBytes } from '../../../shared/model/prompt-data';
 import {
+  ANSWER_IN_TERMINAL,
+  movable,
   NOT_WAITING,
   promptNeed,
   settledPrompt,
@@ -201,7 +203,7 @@ export interface RouteChange {
   to?: string;
   /** Why it moved: or `ended`, with `how` it ended. */
   why: 'raised' | 'handed-back' | 'deadline' | 'denials' | 'authority' | 'unreachable' | 'ended';
-  how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you';
+  how?: 'answered' | 'answered-natively' | 'withdrawn' | 'by-you' | 'in-terminal';
   /** Who answered it or handed it back (the party it already told), if a party did. */
   by?: PartyId;
   /** When the lead it moved to may answer until (epoch ms). */
@@ -217,7 +219,7 @@ interface Route {
 }
 
 /** How an occurrence ended without an answer given here. */
-type EndReason = 'withdrawn' | 'answered-natively';
+type EndReason = 'withdrawn' | 'answered-natively' | 'moved';
 
 type State =
   | { at: 'open' }
@@ -726,7 +728,9 @@ export class PromptOwner implements PromptSink {
             : 'answered'
           : ended.reason === 'dismissed'
             ? 'by-you'
-            : ended.reason,
+            : ended.reason === 'moved'
+              ? 'in-terminal'
+              : ended.reason,
     });
   }
 
@@ -834,7 +838,7 @@ export class PromptOwner implements PromptSink {
       if (by !== 'you' && picks(answer, HAND_BACK) && this.#may(occurrence, by).allows(answer)) {
         return undefined;
       }
-      if (notWaiting(occurrence, answer)) return undefined;
+      if (notWaiting(occurrence, answer) || toTerminal(occurrence, answer)) return undefined;
       this.#check(occurrence, answer);
       return undefined;
     } catch (error) {
@@ -864,6 +868,8 @@ export class PromptOwner implements PromptSink {
     }
     // Not waiting, before a terminal's answers are refused: settled at once, nothing recorded.
     if (notWaiting(occurrence, given)) return this.#dismiss(occurrence, ctx);
+    // Answer in terminal (B23 C7), likewise: nothing is recorded, nothing is decided.
+    if (toTerminal(occurrence, given)) return this.#move(occurrence, ctx);
     const answer = this.#check(occurrence, given);
     const state = stateOf(occurrence);
     if (state.at !== 'open') {
@@ -992,11 +998,39 @@ export class PromptOwner implements PromptSink {
     return { outcome: 'dismissed' };
   }
 
+  /**
+   * Hands a held Terminal prompt back to its terminal (B23 C7) for `ctx`'s caller (you: checked
+   * before): its session lets go of the hold, so the CLI asks there. Nothing is recorded or
+   * decided; the prompt ends `moved`.
+   */
+  #move(occurrence: Occurrence, ctx: OpContext): ReplyResult {
+    const state = stateOf(occurrence);
+    if (state.at !== 'open') {
+      throw new OpFailure('conflict', `${occurrence.need} is being answered now.`);
+    }
+    ctx.noReturn();
+    // Handed off: the session's own end of it, as it releases, waits for this one.
+    occurrence.state = { at: 'handing', by: ctx.by };
+    try {
+      occurrence.answers.release?.(occurrence.key);
+    } catch (error) {
+      console.error('A session couldn’t release a held request:', error);
+    }
+    this.#end(occurrence, 'moved');
+    return { outcome: 'moved' };
+  }
+
   /** The answer `given` as the prompt takes it, or an `invalid` failure saying what it takes. */
   #check(occurrence: Occurrence, given: unknown): PromptAnswer {
     const { prompt, need } = occurrence;
     if (undescribed(occurrence.prompt, occurrence.standIn) && picks(given, NOT_WAITING)) {
       throw new OpFailure('invalid', `${need}: Not waiting takes no words.`);
+    }
+    if (
+      movable(prompt, occurrence.answers.release !== undefined) &&
+      picks(given, ANSWER_IN_TERMINAL)
+    ) {
+      throw new OpFailure('invalid', `${need}: Answer in terminal takes no words.`);
     }
     if (prompt.answerIn === 'terminal') {
       throw new OpFailure('invalid', `${need} is asked in its agent’s terminal: answer it there.`);
@@ -1079,6 +1113,7 @@ export class PromptOwner implements PromptSink {
         prompt: built,
         name: this.#name(at.canvas, at.agent),
         ...(standIn ? { standIn: true as const } : {}),
+        ...(at.answers.release === undefined ? {} : { releasable: true as const }),
       },
     });
     this.#route(occurrence, 'raised');
@@ -1129,9 +1164,13 @@ export class PromptOwner implements PromptSink {
    */
   #decline(at: PromptOrigin, key: string, why: Declined, terminal: boolean): void {
     const name = this.#name(at.canvas, at.agent);
+    // A Terminal session holding its CLI's hook lets go of the request instead (B23 C7): the CLI
+    // asks in its terminal, so nothing is refused for it.
+    const released = !terminal && at.answers.release !== undefined;
     if (!terminal) {
       try {
-        at.answers.decline(key, `corrallm declined this request: ${DECLINED[why]}.`);
+        if (released) at.answers.release?.(key);
+        else at.answers.decline(key, `corrallm declined this request: ${DECLINED[why]}.`);
       } catch (error) {
         console.error('A session’s decline failed:', error);
       }
@@ -1139,7 +1178,9 @@ export class PromptOwner implements PromptSink {
     if (why === 'ended') return;
     const text = terminal
       ? `corrallm can’t list what ${name}’s CLI asks in its terminal (${DECLINED[why]}): look at its terminal.`
-      : `corrallm declined a request from ${name}’s CLI: ${DECLINED[why]}.`;
+      : released
+        ? `corrallm can’t list a request from ${name}’s CLI (${DECLINED[why]}): it waits in its terminal.`
+        : `corrallm declined a request from ${name}’s CLI: ${DECLINED[why]}.`;
     this.#tell(at, why, text);
   }
 
@@ -1174,7 +1215,9 @@ export class PromptOwner implements PromptSink {
       { agent: occurrence.agent, reason },
       reason === 'answered-natively'
         ? { type: 'answered-in-terminal', by: 'terminal' }
-        : { type: 'withdrawn' },
+        : reason === 'moved'
+          ? { type: 'moved' }
+          : { type: 'withdrawn' },
     );
   }
 
@@ -1357,6 +1400,18 @@ function notWaiting(occurrence: Occurrence, given: unknown): boolean {
   );
 }
 
+/**
+ * Whether `given` is Answer in terminal, as the occurrence takes it (B23 C7): that choice alone,
+ * where offered (an api prompt of a session that releases).
+ */
+function toTerminal(occurrence: Occurrence, given: unknown): boolean {
+  return (
+    movable(occurrence.prompt, occurrence.answers.release !== undefined) &&
+    picks(given, ANSWER_IN_TERMINAL) &&
+    Object.keys(given as object).length === 1
+  );
+}
+
 /** An occurrence as the selector reads it (B13 C11), its agent named as `nodes` name it now. */
 function occurrenceOf(occurrence: Occurrence, nodes: readonly NodeLike[]): PromptOccurrence {
   return {
@@ -1365,6 +1420,7 @@ function occurrenceOf(occurrence: Occurrence, nodes: readonly NodeLike[]): Promp
     prompt: occurrence.prompt,
     name: nameOf(nodes, occurrence.agent),
     standIn: occurrence.standIn,
+    releasable: occurrence.answers.release !== undefined,
   };
 }
 
@@ -1383,6 +1439,7 @@ function expected(need: string, prompt: Prompt): string {
 
 /** How a prompt ended without the answer given, as a reply is told. */
 function endedSentence(need: string, reason: EndReason, name: string): string {
+  if (reason === 'moved') return `${need} moved to its terminal: answer it there.`;
   return reason === 'answered-natively'
     ? `${need} was answered in ${name}’s terminal first.`
     : `${need} was withdrawn: ${name}’s session no longer asks it.`;
@@ -1390,6 +1447,7 @@ function endedSentence(need: string, reason: EndReason, name: string): string {
 
 /** Why a record of an answer not given was withdrawn, as a clause. */
 function endedFirst(name: string, reason: EndReason): string {
+  if (reason === 'moved') return `It moved to ${name}’s terminal first`;
   return reason === 'answered-natively'
     ? `It was answered in ${name}’s terminal first`
     : `${name}’s session withdrew it first`;

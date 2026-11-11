@@ -18,3 +18,10 @@ export function foreignRequest(request: IncomingMessage): string | undefined {
   if (origin !== undefined) return `Requests from a web page are refused (Origin: ${origin})`;
   return undefined;
 }
+
+/** Whether a media type is exactly JSON (in UTF-8, if it names a charset). */
+export function isJson(contentType: string | undefined): boolean {
+  if (contentType === undefined) return false;
+  const [type, ...parameters] = contentType.split(';').map((part) => part.trim().toLowerCase());
+  return type === 'application/json' && parameters.every((p) => p === 'charset=utf-8');
+}

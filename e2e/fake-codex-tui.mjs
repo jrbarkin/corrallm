@@ -215,17 +215,30 @@ function runTui() {
     });
   }
 
-  /** Runs a hook as Codex does: the user's shell, the event on stdin; waits for it. */
+  /** The hook being waited for now (its command's process), so Escape can kill it. */
+  let running;
+  /**
+   * Runs a hook as Codex does: the user's shell, the event on stdin; waits for it. Resolves with
+   * what it printed on its standard output, which is all Codex reads of it (recorded, 0.162.1).
+   */
   function hook(event, fields = {}) {
     const found = hooks.find((one) => one.event === event);
-    if (!found || untrusted.length > 0) return Promise.resolve();
+    if (!found || untrusted.length > 0) return Promise.resolve('');
     return new Promise((resolve) => {
       const child = spawn(process.env.SHELL || '/bin/sh', ['-lc', found.command], {
         cwd,
-        stdio: ['pipe', 'ignore', 'ignore'],
+        stdio: ['pipe', 'pipe', 'ignore'],
       });
-      child.on('close', resolve);
-      child.on('error', resolve);
+      running = child;
+      let printed = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => (printed += chunk));
+      const done = () => {
+        if (running === child) running = undefined;
+        resolve(printed);
+      };
+      child.on('close', done);
+      child.on('error', done);
       child.stdin.end(
         JSON.stringify({
           session_id: sessionId,
@@ -259,6 +272,11 @@ function runTui() {
     }
     out(`\r\n  \x1b[1m>_ OpenAI Codex (fake)\x1b[22m (v${VERSION})\r\n  ${sessionId}\r\n\r\n`);
     for (const line of lines) out(`${line}\r\n`);
+    if (state === 'hook') {
+      // A held PermissionRequest hook hides the approval (recorded, 0.162.1).
+      out('\r\n  • Running PermissionRequest hook\x1b[?25l\x1b[?2026l');
+      return;
+    }
     if (state === 'asking') {
       out(
         '\r\n  Would you like to run the following command?\r\n\r\n  $ echo hello\r\n\r\n' +
@@ -309,8 +327,47 @@ function runTui() {
     draw();
     writeFileSync(path.join(home, sessionId), 'thread\n');
     await hook('UserPromptSubmit', { turn_id: turnId, prompt });
-    if (prompt.startsWith('ask')) {
-      await hook('PermissionRequest', { turn_id: turnId, tool_name: 'Bash' });
+    // "patch …" asks for approval with no PermissionRequest hook (as for an edit, which corrallm
+    // does not hold): its approval is drawn at once.
+    if (prompt.startsWith('ask') || prompt.startsWith('patch')) {
+      // Its PermissionRequest hook runs first; while it does, only "Running hook" is drawn.
+      const held =
+        prompt.startsWith('ask') &&
+        hooks.some((one) => one.event === 'PermissionRequest') &&
+        untrusted.length === 0;
+      if (held) {
+        state = 'hook';
+        title(`${'⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'[0]} Working`);
+        draw();
+      }
+      const printed = await hook(prompt.startsWith('ask') ? 'PermissionRequest' : 'None', {
+        turn_id: turnId,
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hello', description: 'Say hello' },
+      });
+      // Interrupted meanwhile (Escape killed the hook).
+      if (state !== 'hook' && held) return;
+      let decision;
+      try {
+        decision = JSON.parse(printed).hookSpecificOutput?.decision;
+      } catch {
+        decision = undefined;
+      }
+      if (decision !== undefined) {
+        log({ event: 'hook-decision', decision });
+        if (decision.behavior === 'allow') {
+          lines.push('• Ran echo hello');
+          become('working');
+          draw();
+          setTimeout(() => void finish('ask'), 200);
+        } else {
+          lines.push(`• Blocked by hook: ${decision.message ?? ''}`);
+          become('working');
+          draw();
+          setTimeout(() => void finish('ask'), 200);
+        }
+        return;
+      }
       become('asking');
       draw();
       return;
@@ -367,6 +424,16 @@ function runTui() {
         if (screen === 'chat') ready();
         else draw();
       } else if (data === '\x1b') quit(1);
+      return;
+    }
+    if (state === 'hook') {
+      // Keys meanwhile wait in the composer as text; Escape kills the hook and interrupts.
+      if (data === '\x1b') {
+        running?.kill();
+        void interrupt();
+      } else if (!data.startsWith('\x1b')) {
+        draft += data;
+      }
       return;
     }
     if (state === 'asking') {

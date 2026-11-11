@@ -26,6 +26,8 @@ const STATUS: Record<Session['status'], string> = {
 };
 /** What it says while the CLI asks whether to trust the folder, in a turn or not. */
 const TRUST = 'Trust this folder in the terminal';
+/** What it says while a request is held for corrallm alone: the terminal waits on corrallm. */
+const HELD = 'Needs you here';
 
 /**
  * A Terminal agent's session: its CLI's own terminal (it runs in the main
@@ -173,6 +175,11 @@ export function TerminalPane({
       entry.prompt.kind === 'approval' &&
       entry.prompt.subject?.type === 'trust',
   );
+  // Only corrallm answers a request held `api`: its terminal shows nothing to answer.
+  const heldHere = session.entries.some(
+    (entry) =>
+      entry.kind === 'prompt' && entry.outcome === undefined && entry.prompt.answerIn === 'api',
+  );
   return (
     <section className="agent-session agent-terminal-session" aria-label="Session">
       <div
@@ -291,7 +298,11 @@ export function TerminalPane({
             data-status={trusting ? 'waiting' : session.status}
             role="status"
           >
-            {trusting ? TRUST : STATUS[session.status]}
+            {trusting
+              ? TRUST
+              : session.status === 'waiting' && heldHere
+                ? HELD
+                : STATUS[session.status]}
           </span>
           <span className="agent-terminal-note">{note}</span>
           {isMac() && (

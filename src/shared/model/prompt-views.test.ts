@@ -5,6 +5,7 @@ import type { NeedsItem } from './needs';
 
 import { Prompt, PromptNeedView } from './prompts';
 import {
+  ANSWER_IN_TERMINAL,
   entryFor,
   NOT_WAITING,
   needFor,
@@ -397,6 +398,7 @@ describe('a prompt’s live outcome', () => {
     for (const ended of [
       { type: 'withdrawn' },
       { type: 'answered-in-terminal', by: 'terminal' },
+      { type: 'moved' },
       { type: 'dismissed', by: 'you' },
     ] as const) {
       expect(outcomeFor(ended, 'token')).toEqual(ended);
@@ -609,5 +611,52 @@ describe('an approval of an MCP server’s tool: its words yours alone, a token�
     expect(entryFor(settled, 'you')).not.toHaveProperty('tokenTitle');
     expect(entryFor(settled, 'token')).toMatchObject({ prompt: { title: CORE } });
     expect(JSON.stringify(entryFor(settled, 'token'))).not.toMatch(SERVER);
+  });
+});
+
+describe('a held Terminal prompt (B23 C3, C7)', () => {
+  const held = {
+    ...APPROVAL,
+    cut: undefined,
+    humanOnly: undefined,
+    answerIn: 'api',
+    until: 1_900_000_000_000,
+  };
+  const releasing = (raw: object): PromptOccurrence => ({ ...occurrence(raw), releasable: true });
+
+  it('shows its deadline on the Needs item and the prompt, to both readers; a settled prompt drops it', () => {
+    const seen = releasing(held);
+    for (const reader of ['you', 'token'] as const) {
+      expect(promptNeed(seen, reader).until).toBe(1_900_000_000_000);
+      expect(promptFor(seen, reader)).toMatchObject({ until: 1_900_000_000_000 });
+    }
+    expect(settledPrompt(seen, 'you')).not.toHaveProperty('until');
+    expect(promptNeed(releasing({ ...held, until: undefined }), 'you')).not.toHaveProperty('until');
+  });
+
+  it('refuses a deadline that is not a positive whole number', () => {
+    for (const until of [0, -1, 1.5, '1']) {
+      expect(Prompt.safeParse({ id: ID, agent: 'b', raised: 1, ...held, until }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it('offers Answer in terminal to you alone, on an api prompt of a session that releases', () => {
+    const values = (item: { choices: { value: string }[] }) => item.choices.map((c) => c.value);
+    expect(values(promptNeed(releasing(held), 'you')).at(-1)).toBe(ANSWER_IN_TERMINAL);
+    expect(values(promptFor(releasing(held), 'you')).at(-1)).toBe(ANSWER_IN_TERMINAL);
+    expect(promptNeed(releasing(held), 'token').choices).toEqual([]);
+    expect(promptFor(releasing(held), 'token').choices).toEqual([]);
+    // Not where the session cannot release it, nor where the terminal already answers it.
+    expect(values(promptNeed(occurrence(held), 'you'))).not.toContain(ANSWER_IN_TERMINAL);
+    for (const answerIn of ['both', 'terminal']) {
+      const other = releasing({
+        ...held,
+        answerIn,
+        ...(answerIn === 'terminal' ? { choices: [] } : {}),
+      });
+      expect(values(promptNeed(other, 'you'))).not.toContain(ANSWER_IN_TERMINAL);
+    }
   });
 });

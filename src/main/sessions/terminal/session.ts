@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { MAX_DETAIL_LINES, MAX_PROMPT_TEXT_LENGTH } from '../../../shared/api/limits';
 import type { EffectiveFeatures } from '../../../shared/features';
-import type { AdapterPrompt } from '../../../shared/model/prompts';
+import type { AdapterPrompt, PromptAnswer } from '../../../shared/model/prompts';
 import type {
   PermissionMode,
   SessionMode,
@@ -23,11 +23,12 @@ import type {
   TerminalScreen,
 } from '../connector';
 import { isNativeId } from '../id';
-import type { TerminalCli, TerminalSignal } from './cli';
+import type { TerminalCli, TerminalHold, TerminalSignal } from './cli';
+import { askOf } from './ask';
 import type { FirstRunTurn } from './first-run';
 import { launchInstructions } from '../instructions';
 import { HOOK_HEADER, HOOK_TOKEN } from './hooks';
-import type { HookEvent, HookRegistration, HookServer } from './hooks';
+import type { HookEvent, HookHold, HookRegistration, HookServer } from './hooks';
 import type { Pty, SpawnPty } from './pty';
 import { Screen } from './screen';
 import type { ProgramStatus } from './status';
@@ -59,6 +60,16 @@ import { ENTER } from './typing';
  * word, for what: in the report's words, where no hook told), and when it goes on (the user
  * answered, in the terminal). Its folder trust dialog, before it runs in a new folder, is read
  * from its screen, turn or not: nothing else tells it.
+ *
+ * Where its CLI lets a hook decide (B23: TerminalCli.hold), a request the CLI's hook posts is held
+ * by the hook server until the core's owner answers it, and what it asks is raised as a prompt
+ * answered through that very request: `both` where the CLI's own dialog stays up beside the hold
+ * (listed once the CLI reports the wait it covers), `api` where the hold hides it (listed from its
+ * arrival). It is released with no decision, so the CLI asks in its terminal, at its deadline or on
+ * your Answer in terminal (ended `moved`, and raised again answered in the terminal); the terminal
+ * answering first, or another hook, ends it answered there; the CLI closing the request, the turn
+ * ending or the session closing withdraws it. An answer corrallm gave is written to that request
+ * alone; a wait the CLI still reports a grace later is raised as any undescribed wait.
  *
  * Each observation is raised once, under a key minted for it, while it lasts (a redraw or a repeated
  * report is no event); a better description of the same wait ends it (withdrawn) and raises the
@@ -179,6 +190,18 @@ interface Told {
   at: number;
 }
 
+/** A request held until the owner answers it, and what it covers. */
+interface Held {
+  id: string;
+  hold: HookHold;
+  held: TerminalHold;
+  /** The wait (Block.id) a `both` hold covers, once the CLI reports it; none for an `api` one. */
+  block: string | undefined;
+}
+
+/** How a hold ended, as the prompt it raised ends. */
+type HeldEnd = 'moved' | 'native' | 'withdrawn';
+
 /**
  * What keeps it waiting by one status record: its report, since when, the wait's id, and what its
  * screen shows of it (undefined while it is read; null: nothing).
@@ -186,6 +209,8 @@ interface Told {
 interface Block {
   report: ProgramStatus;
   since: number;
+  /** When this wait's own id began (`since` carries over from the wait it replaced). */
+  began: number;
   id: string;
   detail: string | null | undefined;
 }
@@ -273,6 +298,14 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** What its hooks said the CLI asks the user since it last went on, and when. */
   #asks: Told[] = [];
+  /** The requests it holds now, by id. */
+  readonly #holds = new Map<string, Held>();
+  /** What `hold` made of each event it was asked about (asked once). */
+  readonly #holdable = new WeakMap<HookEvent, TerminalHold | undefined>();
+  /** How each hold that raised a prompt ended, by its wait, until the prompt is ended. */
+  readonly #heldEnds = new Map<string, HeldEnd>();
+  /** The waits an answer covered, by Block.id, until when (epoch ms) they are spoken for. */
+  readonly #spoken = new Map<string, number>();
   /** What keeps the CLI waiting on the user, by status record ('' for its own). */
   readonly #blocks = new Map<string, Block>();
   /** What its last notification that it needs the user said (until it goes on). */
@@ -325,12 +358,18 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * until a distinct wait.
    */
   readonly prompts: PromptAnswers = {
-    answer: () => {
-      throw new Error(this.#cli.words.answer);
+    answer: (key, answer) => {
+      this.#answerHeld(key, answer);
     },
-    decline: () => undefined,
+    // Nothing is refused to a CLI that asks in its terminal: a held request is let go of instead.
+    decline: (key) => {
+      this.#release(key);
+    },
     dismiss: (key) => {
       this.#dismiss(key);
+    },
+    release: (key) => {
+      this.#release(key);
     },
   };
 
@@ -352,14 +391,17 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   async launch(): Promise<void> {
     try {
       this.#registration = await this.#deps.hooks.register(
-        (event) => {
-          this.#hook(event);
+        (event, hold) => {
+          this.#hook(event, hold);
         },
         // A CLI with a status line of corrallm's posts its input there too.
         this.#cli.statusLine &&
           ((input) => {
             this.#statusLine(input);
           }),
+        // A CLI whose hooks may decide has the server hold the requests it names.
+        this.#cli.hold &&
+          ((event) => !this.#exited && !this.#closing && this.#planned(event) !== undefined),
       );
       this.#settingsDir = await mkdtemp(path.join(this.#deps.tmp, 'corrallm-terminal-'));
       await writeFile(
@@ -436,6 +478,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   async close(): Promise<void> {
     this.#finishEnd();
     this.#closing = true;
+    // Every request held is let go of first, so no CLI waits on a session that is going.
+    for (const held of [...this.#holds.values()]) this.#endHold(held, 'withdrawn');
     // Nothing waits on the user any more.
     for (const key of this.#raised.keys()) {
       this.#host.emit({ type: 'prompt-ended', key, reason: 'withdrawn' });
@@ -781,6 +825,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       if (state === 'error' && this.#turn) {
         this.#tell(this.#turn, 'error', report?.msg ?? `${this.#cli.name} stopped with an error.`);
       }
+      // What it held for the user is moot once it is no longer working on the turn.
+      this.#endHolds('withdrawn');
       this.#settle();
       // Once it has drawn its prompt again (with what it may put back in it).
       this.#check();
@@ -810,6 +856,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     // What it asked in the turn was answered (or never will be).
     this.#asks = [];
     this.#notified = undefined;
+    this.#endHolds('withdrawn', false);
     this.#list();
     const interrupted = turn.interrupted || (turn.ran && this.#state === 'idle');
     // Its CLI ended it with an error (rather than leaving corrallm's message unsent).
@@ -972,7 +1019,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const turn = this.#turn;
     if (!turn || this.#exited) return;
     let status: 'working' | 'waiting' = 'working';
-    if (this.#state === 'blocked') status = 'waiting';
+    if (this.#state === 'blocked' || this.#waitsOnApi()) status = 'waiting';
     else if (
       !this.#held &&
       this.#pending.length > 0 &&
@@ -1016,13 +1063,36 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   // ---- Hooks.
 
-  #hook(event: HookEvent): void {
-    if (this.#exited || this.#closing) return;
+  #hook(event: HookEvent, hold?: HookHold): void {
+    if (this.#exited || this.#closing) {
+      hold?.release();
+      return;
+    }
     this.#host.activity?.();
     this.#pass();
+    const planned = hold === undefined ? undefined : this.#planned(event);
+    if (hold !== undefined && planned === undefined) hold.release();
     const signals = this.#cli.hook(event);
     this.#takeContext(this.#cli.context?.());
-    for (const signal of signals) this.#signal(signal);
+    // A request held tells what it asks itself: the telling it would give is superseded.
+    for (const signal of signals) {
+      if (planned === undefined || signal.kind !== 'ask') this.#signal(signal);
+    }
+    if (hold !== undefined && planned !== undefined) this.#holdRequest(hold, planned);
+  }
+
+  /** What `hold` makes of the event, asked once (the server asks first, the listener then). */
+  #planned(event: HookEvent): TerminalHold | undefined {
+    if (!this.#holdable.has(event)) {
+      let planned: TerminalHold | undefined;
+      try {
+        planned = this.#cli.hold?.(event);
+      } catch {
+        planned = undefined;
+      }
+      this.#holdable.set(event, planned);
+    }
+    return this.#holdable.get(event);
   }
 
   /** Acts on what a hook told (cli.ts: TerminalSignal). */
@@ -1130,9 +1200,15 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** A hook told what the CLI is about to ask (once, though two hooks may tell it). */
   #told(id: string, prompt: AdapterPrompt): void {
-    if (this.#asks.some((told) => JSON.stringify(told.prompt) === JSON.stringify(prompt))) return;
+    if (this.#addAsk(id, prompt)) this.#list();
+  }
+
+  /** Adds an ask unless the same one is told already; whether it was added. */
+  #addAsk(id: string, prompt: AdapterPrompt): boolean {
+    const same = askOf(prompt);
+    if (this.#asks.some((told) => askOf(told.prompt) === same)) return false;
     this.#asks = [...this.#asks, { id, prompt, at: Date.now() }].slice(-MAX_ASKS);
-    this.#list();
+    return true;
   }
 
   /**
@@ -1157,9 +1233,11 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         this.#blocks.set(record, { ...known, report });
       } else {
         const id = randomUUID();
+        if (known !== undefined) this.#dropBlock(known, 'withdrawn');
         this.#blocks.set(record, {
           report,
           since: known?.since ?? Date.now(),
+          began: Date.now(),
           id,
           detail: this.#cli.waitDetail === undefined ? null : undefined,
         });
@@ -1168,11 +1246,24 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       this.#list();
       return;
     }
+    const removed = this.#blocks.get(record);
     if (this.#blocks.delete(record)) {
       this.#asks = [];
       this.#notified = undefined;
+      if (removed !== undefined) {
+        this.#dropBlock(removed, report.state === 'working' ? 'native' : 'withdrawn');
+      }
     }
     this.#list(report.state === 'working' ? 'answered-natively' : 'withdrawn');
+  }
+
+  /** A wait is over (cleared, or described anew): the holds it covered end `how`. */
+  #dropBlock(block: Block, how: HeldEnd): void {
+    this.#spoken.delete(block.id);
+    // The terminal (or another hook) answered it first, or it is another wait now.
+    for (const held of [...this.#holds.values()]) {
+      if (held.block === block.id) this.#endHold(held, how);
+    }
   }
 
   /**
@@ -1206,6 +1297,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
 
   /** Nothing is asked any more: the CLI is going. */
   #forgetAsks(): void {
+    for (const held of [...this.#holds.values()]) this.#endHold(held, 'withdrawn');
     this.#trust = undefined;
     this.#blocks.clear();
     this.#asks = [];
@@ -1238,6 +1330,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
         },
       ];
     }
+    const held = this.#heldObservations();
     const notified: Observation[] = this.#notified
       ? [
           {
@@ -1250,25 +1343,30 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     const told = (asks: readonly Told[]): Observation[] =>
       asks.map(({ id, prompt }) => ({ wait: `told:${id}`, described: true, prompt }));
     if (!this.#reporting && this.#blocks.size === 0) {
-      return this.#asks.length > 0 ? told(this.#asks) : notified;
+      return [...held, ...(this.#asks.length > 0 ? told(this.#asks) : notified)];
     }
-    const blocks = [...this.#blocks.values()];
-    if (blocks.length === 0) return notified;
+    // A wait a hold covers (or an answer just did) is spoken for: not raised on its own.
+    const covered = this.#coveredBlocks();
+    const blocks = [...this.#blocks.values()].filter((block) => !covered.has(block.id));
+    if (blocks.length === 0) return [...held, ...(this.#blocks.size === 0 ? notified : [])];
     const since = Math.min(...blocks.map((block) => block.since)) - ASK_WINDOW;
     const recent = this.#asks.filter(({ at }) => at >= since);
-    if (recent.length > 0) return told(recent);
-    return blocks.map(({ report, id, detail }) => {
-      const text =
-        report.msg ?? this.#notified?.text ?? this.#cli.words.waiting[report.kind ?? 'none'];
-      return {
-        wait: `block:${id}`,
-        described: false,
-        prompt:
-          detail === undefined
-            ? undefined
-            : waitingFor(report.kind === 'question' ? 'question' : 'approval', text, detail),
-      };
-    });
+    if (recent.length > 0) return [...held, ...told(recent)];
+    return [
+      ...held,
+      ...blocks.map(({ report, id, detail }) => {
+        const text =
+          report.msg ?? this.#notified?.text ?? this.#cli.words.waiting[report.kind ?? 'none'];
+        return {
+          wait: `block:${id}`,
+          described: false,
+          prompt:
+            detail === undefined
+              ? undefined
+              : waitingFor(report.kind === 'question' ? 'question' : 'approval', text, detail),
+        };
+      }),
+    ];
   }
 
   /**
@@ -1276,6 +1374,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * owner: `why` an observation no longer there (its wait gone, not described anew) ended.
    */
   #list(why: 'withdrawn' | 'answered-natively' = 'withdrawn'): void {
+    this.#attach();
     const observed = this.#observed();
     // Closing withdrew what it raised: nothing is raised after.
     if (this.#closing) return;
@@ -1291,18 +1390,179 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
       // Unchanged: no event.
       if (shown.delete(raised.seen)) continue;
       this.#raised.delete(key);
+      const heldEnd = this.#heldEnds.get(raised.wait);
       this.#host.emit({
         type: 'prompt-ended',
         key,
-        // Described anew, it was withdrawn for its better description.
-        reason: why === 'answered-natively' && !waits.has(raised.wait) ? why : 'withdrawn',
+        reason:
+          heldEnd === 'moved'
+            ? 'moved'
+            : heldEnd === 'native'
+              ? 'answered-natively'
+              : heldEnd === 'withdrawn'
+                ? 'withdrawn'
+                : // Described anew, it was withdrawn for its better description.
+                  why === 'answered-natively' && !waits.has(raised.wait)
+                  ? why
+                  : 'withdrawn',
       });
     }
+    this.#heldEnds.clear();
     for (const [seen, { wait, described, prompt }] of shown) {
       const key = randomUUID();
       this.#raised.set(key, { wait, seen, described });
       this.#host.emit({ type: 'prompt', key, prompt });
     }
+  }
+
+  // ---- What it holds (B23).
+
+  /** Holds a request its CLI's hook posted until the owner answers it, or it is let go of. */
+  #holdRequest(hold: HookHold, planned: TerminalHold): void {
+    // A CLI that does not report what it waits on can't tell when a `both` hold's wait is over
+    // or answered in its terminal: it is let go of, and its ask told as it always was.
+    if (planned.prompt.answerIn === 'both' && !this.#reporting) {
+      hold.release();
+      this.#told(randomUUID(), inTerminal(planned.prompt));
+      return;
+    }
+    const held: Held = { id: randomUUID(), hold, held: planned, block: undefined };
+    // It tells what it asks itself: a hook's telling of the same ask is superseded.
+    const same = askOf(planned.prompt);
+    this.#asks = this.#asks.filter(({ prompt }) => askOf(prompt) !== same);
+    this.#holds.set(held.id, held);
+    hold.onEnd((how) => {
+      // Let go of by this session: it has already said how. Otherwise the server's deadline or
+      // the CLI closing the request ended it.
+      if (!this.#holds.has(held.id)) return;
+      this.#endHold(held, how === 'deadline' ? 'moved' : 'withdrawn');
+      this.#list();
+      this.#updateStatus();
+    });
+    this.#list();
+    this.#updateStatus();
+  }
+
+  /**
+   * Ends a hold `how`: the request is let go of with no decision (a no-op if the server did), and
+   * its prompt ends that way at the next listing. Moved, the same ask is raised again answered in
+   * the terminal.
+   */
+  #endHold(held: Held, how: HeldEnd): void {
+    if (!this.#holds.delete(held.id)) return;
+    this.#heldEnds.set(`held:${held.id}`, how);
+    held.hold.release();
+    if (how === 'moved') {
+      this.#addAsk(randomUUID(), inTerminal(held.held.prompt));
+    }
+  }
+
+  #endHolds(how: HeldEnd, list = true): void {
+    if (this.#holds.size === 0) return;
+    for (const held of [...this.#holds.values()]) this.#endHold(held, how);
+    if (list) this.#list();
+  }
+
+  /** The hold the prompt raised under `key` is of, if it still holds. */
+  #heldBy(key: string): { held: Held | undefined; ours: boolean } {
+    const wait = this.#raised.get(key)?.wait;
+    if (wait?.startsWith('held:') !== true) return { held: undefined, ours: false };
+    return { held: this.#holds.get(wait.slice('held:'.length)), ours: true };
+  }
+
+  /** Writes the owner's answer to the very request that raised the prompt. */
+  #answerHeld(key: string, answer: PromptAnswer): void {
+    const { held, ours } = this.#heldBy(key);
+    if (held === undefined) {
+      throw new Error(
+        ours ? `${this.#cli.name} no longer waits on this request.` : this.#cli.words.answer,
+      );
+    }
+    // Throws for an answer its CLI's hook cannot express: nothing is written, the prompt stays.
+    const body = held.held.reply(answer);
+    // Forgotten before the write, which ends the request: that end is ours, not the CLI's.
+    this.#holds.delete(held.id);
+    if (!held.hold.answer(body)) {
+      throw new Error(`${this.#cli.name} no longer waits on this request.`);
+    }
+    // The owner settles it: nothing is ended or raised here. The wait it covered is spoken for
+    // for a while, and raised as any undescribed wait only if the CLI still reports it then.
+    this.#raised.delete(key);
+    if (held.block !== undefined) {
+      this.#spoken.set(held.block, Date.now() + this.#deps.timing.confirm);
+      this.#later(() => {
+        this.#list();
+        this.#updateStatus();
+      }, this.#deps.timing.confirm + 1);
+    }
+    this.#updateStatus();
+  }
+
+  /** Lets go of the hold the prompt under `key` is of (no decision): it moves to its terminal. */
+  #release(key: string): void {
+    const { held } = this.#heldBy(key);
+    if (held === undefined) return;
+    this.#endHold(held, 'moved');
+    this.#list();
+    this.#updateStatus();
+  }
+
+  /** What its holds raise now: an `api` one from its arrival, a `both` one once its wait shows. */
+  #heldObservations(): Observation[] {
+    const observed: Observation[] = [];
+    for (const held of this.#holds.values()) {
+      const { prompt } = held.held;
+      if (prompt.answerIn !== 'api' && held.block === undefined) continue;
+      observed.push({
+        wait: `held:${held.id}`,
+        described: true,
+        prompt: { ...prompt, until: held.hold.deadline },
+      });
+    }
+    return observed;
+  }
+
+  /** The waits (Block.id) a hold covers, or an answer just did (until the grace is over). */
+  #coveredBlocks(): Set<string> {
+    const covered = new Set<string>();
+    for (const held of this.#holds.values()) if (held.block !== undefined) covered.add(held.block);
+    const now = Date.now();
+    for (const [block, until] of this.#spoken) {
+      if (until > now) covered.add(block);
+      else this.#spoken.delete(block);
+    }
+    return covered;
+  }
+
+  /**
+   * Binds each `both` hold to the wait its CLI reports for it: begun within ASK_WINDOW of its
+   * arrival (its dialog follows its request at once; a later one, with another hook having
+   * answered this, is another wait).
+   */
+  #attach(): void {
+    if (this.#holds.size === 0) return;
+    const claimed = new Set<string>();
+    for (const held of this.#holds.values()) if (held.block !== undefined) claimed.add(held.block);
+    for (const held of this.#holds.values()) {
+      if (held.block !== undefined || held.held.prompt.answerIn === 'api') continue;
+      const block = [...this.#blocks.values()]
+        .filter(
+          ({ id, began }) =>
+            !claimed.has(id) &&
+            began >= held.hold.received - ASK_WINDOW &&
+            began <= held.hold.received + ASK_WINDOW,
+        )
+        .sort((a, b) => a.began - b.began)[0];
+      if (block === undefined) continue;
+      held.block = block.id;
+      claimed.add(block.id);
+    }
+  }
+
+  /** Whether an `api` hold keeps the CLI waiting on the user. */
+  #waitsOnApi(): boolean {
+    for (const held of this.#holds.values()) if (held.held.prompt.answerIn === 'api') return true;
+    return false;
   }
 
   // ---- Usage.
@@ -1422,6 +1682,19 @@ function waitingFor(
     ...(cut ? { cut: true as const } : {}),
   };
   return kind === 'question' ? { kind, ...shown, questions: [] } : { kind, ...shown, choices: [] };
+}
+
+/** A held prompt as it is raised once let go of: the same ask, answered in the terminal. */
+function inTerminal(prompt: AdapterPrompt): AdapterPrompt {
+  const moved: Partial<AdapterPrompt> & { answerIn: 'terminal' } = {
+    ...prompt,
+    answerIn: 'terminal',
+  };
+  delete moved.until;
+  delete moved.omitted;
+  delete moved.signals;
+  if ('choices' in moved) moved.choices = [];
+  return moved as AdapterPrompt;
 }
 
 /** Text with each run of whitespace (line breaks, the prompt's wrapping) as one space. */

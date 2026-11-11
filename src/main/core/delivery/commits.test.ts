@@ -249,8 +249,40 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
   },
 );
 
+/** A fake whose first turn runs until its real interrupt (a kill), not for a pause it could beat. */
+function heldFirstTurnConnector() {
+  let waiting: Promise<void> | undefined;
+  let release: (() => void) | undefined;
+  let sent = 0;
+  const fake = fakeConnector({ adapter: 'codex', step: () => waiting ?? Promise.resolve() });
+  const begin = fake.start.bind(fake);
+  vi.spyOn(fake, 'start').mockImplementation(async (spec, host) => {
+    const session = await begin(spec, host);
+    const send = session.send.bind(session);
+    const interrupt = session.interrupt.bind(session);
+    session.send = (message) => {
+      if (++sent === 1) {
+        const gate = Promise.withResolvers<undefined>();
+        waiting = gate.promise;
+        release = () => {
+          gate.resolve(undefined);
+        };
+      } else waiting = undefined;
+      return send(message);
+    };
+    session.interrupt = () => {
+      const stopped = interrupt();
+      release?.();
+      return stopped;
+    };
+    return session;
+  });
+  return fake;
+}
+
 it('returns from a kill only once its hold and every withdrawal it made are on disk', async () => {
-  const { engines } = await start(fakeConnector({ adapter: 'codex', pause: 100 }));
+  // The first turn stays open until the kill's interrupt: a pause could end it, replied, before.
+  const { engines } = await start(heldFirstTurnConnector());
   const open = engines.canvas(CANVAS);
   const active = await ok<{ id: string }>('message', { to: 'builder', body: 'Working' });
   await vi.waitFor(() => {

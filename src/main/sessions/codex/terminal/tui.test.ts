@@ -186,6 +186,7 @@ describe('starting Codex', () => {
       'hooks.UserPromptSubmit',
       'hooks.Stop',
       'hooks.Interrupt',
+      'hooks.PermissionRequest',
     ]);
     for (const hook of hooks) expect(hook).toContain('http://127.0.0.1:4000/hook');
     const state = values.find((value) => value.startsWith('hooks.state='));

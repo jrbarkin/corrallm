@@ -350,6 +350,7 @@ export const b11ConversationOps = {
             'completed',
             'retained',
             'dismissed',
+            'moved',
             'handed-back',
           ])
           .optional(),

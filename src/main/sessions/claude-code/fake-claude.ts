@@ -356,8 +356,9 @@ export class FakeClaude implements Pty {
     await this.hook('UserPromptSubmit', { prompt });
     this.print(`\r\n⏺ ${prompt}\r\n`);
     if (prompt.startsWith('ask')) {
-      // As recorded: its permission hook first, then its report of what it waits for (base64).
-      await this.hook('PermissionRequest', {
+      // As recorded: its permission hook first, held (its dialog is drawn beside it, and what the
+      // hook answers is in `answers`), then its report of what it waits for (base64).
+      void this.hook('PermissionRequest', {
         tool_name: 'Bash',
         tool_input: { command: 'echo hello', description: 'Say hello' },
         permission_suggestions: [
@@ -368,7 +369,9 @@ export class FakeClaude implements Pty {
             destination: 'localSettings',
           },
         ],
-      });
+      }).catch(() => undefined);
+      // Its dialog follows its request by a moment.
+      await new Promise((resolve) => setTimeout(resolve, 15));
       this.#become('blocked', `:kind=permission:msg=${base64('approve Bash: echo hello')}`);
       this.print('Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n');
       return;
@@ -393,7 +396,11 @@ export class FakeClaude implements Pty {
         tool_input: input,
         tool_use_id: 'toolu_question',
       });
-      await this.hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: input });
+      void this.hook('PermissionRequest', {
+        tool_name: 'AskUserQuestion',
+        tool_input: input,
+      }).catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 15));
       this.#become('blocked', `:kind=question:msg=${base64('answer: Pick a color (Red · Blue)')}`);
       this.print('Pick a color\r\n ❯ 1. Red\r\n   2. Blue\r\n');
       return;

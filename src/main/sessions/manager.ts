@@ -1166,6 +1166,22 @@ export class SessionManager {
         if (agent.live !== undefined) dismiss(agent.live);
         else void agent.session.then(dismiss, () => undefined);
       },
+      // A Terminal connection's session holds its CLI's hooks and can let one go (B23 C7).
+      ...(connectionIn(this.#deps.catalog, connection)?.connection.view === 'terminal'
+        ? {
+            release: (key: string) => {
+              const release = (session: LiveSession<SessionMode>) => {
+                try {
+                  session.prompts?.release?.(key);
+                } catch (error) {
+                  console.error(`Could not release ${agentId}'s prompt:`, error);
+                }
+              };
+              if (agent.live !== undefined) release(agent.live);
+              else void agent.session.then(release, () => undefined);
+            },
+          }
+        : {}),
     };
     const origin = (): PromptOrigin => ({
       canvas,

@@ -28,16 +28,16 @@ test('serve switches into a fresh Terminal step and keeps its native permission 
       .poll(
         async () =>
           (await world.call('needs', { canvas: world.canvas })).items.some(
-            (need) => need.agent === WORKER && need.answerIn === 'terminal',
+            (need) => need.agent === WORKER && need.answerIn === 'both',
           ),
         {
-          message: 'The native Terminal permission must remain a live Need with no window',
+          message: 'The held Terminal permission must remain a live Need with no window',
           timeout: 20_000,
         },
       )
       .toBe(true);
     const need = (await world.call('needs', { canvas: world.canvas })).items.find(
-      (need) => need.agent === WORKER && need.answerIn === 'terminal',
+      (need) => need.agent === WORKER && need.answerIn === 'both',
     );
     expect(need?.choices, 'A reached outside token must receive no human answer controls').toEqual(
       [],
