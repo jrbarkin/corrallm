@@ -59,7 +59,7 @@ it('preserves tracked and untracked work after a durably populated creation resu
 it('serializes real Git mutations of two canvases sharing a repository lane', async () => {
   const w = (fixture = await testWorkspaces());
   const other = '22222222-2222-4222-8222-222222222222' as CanvasId;
-  await w.store.write(() => {
+  await w.store.writeBlocking(() => {
     new CanvasMemory(w.store).ensure(other);
   });
   let active = 0;

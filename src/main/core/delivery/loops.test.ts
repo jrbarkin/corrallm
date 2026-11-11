@@ -38,7 +38,7 @@ beforeEach(async () => {
   });
   const memory = new CanvasMemory(database);
   table = new LoopTable(database, memory);
-  await database.write(() => {
+  await database.writeBlocking(() => {
     memory.ensure(CANVAS);
   });
 });
@@ -86,7 +86,7 @@ async function mailbox() {
   };
   const write = async (after: () => void = () => undefined) => {
     let staged: Staged | undefined;
-    await database.write(
+    await database.writeBlocking(
       () => {
         staged = messages.changes();
         after();
@@ -273,7 +273,7 @@ describe('the counts kept', () => {
     store.count('a', 'c');
     // Nothing on disk until a write holds them.
     expect(rows()).toEqual([]);
-    const written = await database.write(() => store.changes());
+    const written = await database.writeBlocking(() => store.changes());
     written();
     expect(rows()).toEqual([
       { a: 'a', b: 'b', turns: 2 },

@@ -52,7 +52,7 @@ beforeEach(async () => {
   memory = new CanvasMemory(store);
   now = 1000;
   workspaces = new WorkspaceStore({ store, now: () => now });
-  await store.write(() => {
+  await store.writeBlocking(() => {
     memory.ensure(CANVAS);
     memory.ensure(OTHER);
   });
@@ -712,7 +712,7 @@ describe('WorkspaceStore', () => {
     } as const;
     let seen: unknown;
     await store
-      .write(() => {
+      .writeBlocking(() => {
         journal.keep(CANVAS, token, checkpoint, messages);
         workspaces.createWorktree(tree(W1));
         workspaces.bind(CANVAS, 'a', W1);
@@ -738,7 +738,7 @@ describe('WorkspaceStore', () => {
     // The job can't be written: neither is anything else of the write.
     const release = refuseWrites(profile, 'worktree_job', 'The disk is full');
     await expect(
-      store.write(() => {
+      store.writeBlocking(() => {
         journal.keep(CANVAS, token, { ...checkpoint, updatedAt: 2 }, messages);
         workspaces.createWorktree(tree(W2));
         workspaces.recordJob({
@@ -906,7 +906,7 @@ describe('WorkspaceStore', () => {
 
   it('reads nothing it can’t read as what it wrote: such a record fails its read, saying which', async () => {
     await withWorktrees(W1);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare(
           `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, payload, intent_hash, created_at,
@@ -1068,7 +1068,7 @@ describe('WorkspaceStore', () => {
       ['project_setup', 'command', 'echo a\necho b', () => workspaces.projectSetup(REPOSITORY)],
     ] as const;
     for (const [table, column, bad, read] of cases) {
-      await store.write(() => {
+      await store.writeBlocking(() => {
         const previous = store.prepare(`SELECT ${column} AS value FROM ${table}`).get()?.value;
         store.prepare(`UPDATE ${table} SET ${column} = ?`).run(bad);
         expect.soft(read, `${table}.${column}`).toThrow(/can’t be read/);

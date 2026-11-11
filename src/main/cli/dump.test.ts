@@ -147,7 +147,7 @@ it('dumps canvases with their document, runs and WAL messages without taking the
 });
 
 it('refuses an unreadable newer database without changing it or printing a partial dump', async () => {
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store.exec(
       `PRAGMA user_version = ${String(SCHEMA + 1)}; UPDATE meta SET min_reader = ${String(SCHEMA + 1)}`,
     );
@@ -380,7 +380,7 @@ it('dumps a record’s settled decision decoded, as other JSON columns are', asy
     prompt: { id: '0f1e2d3c-4b5a-4968-8776-655443322110', kind: 'form' },
     outcome: { type: 'form', action: 'decline' },
   };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store
       .prepare('UPDATE message SET settled = ? WHERE id = ?')
       .run(JSON.stringify(settled), record.id);
@@ -407,7 +407,7 @@ it('dumps an ask’s questions decoded, as other JSON columns are', async () => 
     ],
     deadline: 86_400_000,
   };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store.prepare('UPDATE message SET ask = ? WHERE id = ?').run(JSON.stringify(ask), record.id);
   });
   const lines: string[] = [];
@@ -425,7 +425,7 @@ it('dumps a result’s verdict decoded, as other JSON columns are', async () => 
   const record = messages.all()[0];
   if (record === undefined) throw new Error('No message');
   const verdict = { v: 1, outcome: 'succeeded', summary: 'All 12 tests pass.' };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store
       .prepare('UPDATE message SET verdict = ? WHERE id = ?')
       .run(JSON.stringify(verdict), record.id);
@@ -445,7 +445,7 @@ it('dumps a message’s purpose decoded, as other JSON columns are', async () =>
   const record = messages.all()[0];
   if (record === undefined) throw new Error('No message');
   const purpose = { v: 1, type: 'evidence' };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store
       .prepare('UPDATE message SET purpose = ? WHERE id = ?')
       .run(JSON.stringify(purpose), record.id);
@@ -465,7 +465,7 @@ it('dumps a record’s association decoded, as other JSON columns are (B19 C3)',
   const record = messages.all()[0];
   if (record === undefined) throw new Error('No message');
   const about = { v: 1, agent: 'a', need: 'hold/a/0a1b2c3d/ok', hold: { choice: 'approve' } };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store
       .prepare('UPDATE message SET about = ? WHERE id = ?')
       .run(JSON.stringify(about), record.id);
@@ -484,7 +484,7 @@ it('dumps a record’s association decoded, as other JSON columns are (B19 C3)',
 it('dumps each canvas’s leads and outside grants, their JSON decoded (B24 C1)', async () => {
   const grants = { v: 1, questions: true, plans: false, approvals: true };
   const fingerprint = { v: 1, role: 'none', adapter: 'codex', connection: 'codex.app-server' };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store
       .prepare(
         `INSERT INTO lead (canvas_id, agent_id, grants, fingerprint, held, changed_at)

@@ -11,6 +11,8 @@ import type * as Sqlite from 'node:sqlite';
 export type Connection = Sqlite.DatabaseSync;
 /** A prepared statement of a connection. */
 export type Statement = Sqlite.StatementSync;
+/** A value a statement gave back. */
+export type SqlOutput = Sqlite.SQLOutputValue;
 export type ConnectOptions = Sqlite.DatabaseSyncOptions;
 
 /** SQLite's primary result codes the store tells apart (sqlite.org/rescode.html). */

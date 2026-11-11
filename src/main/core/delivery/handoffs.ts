@@ -80,7 +80,7 @@ export class HandoffTable {
 
   /** Queues `write` for the database's next commit: resolves once that commit has returned. */
   write<T>(write: () => T): Promise<T> {
-    return this.#store.write(write);
+    return this.#store.writeBlocking(write);
   }
 
   /** Within a write: an agent's row, as kept (each column by name). */

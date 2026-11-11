@@ -2147,7 +2147,7 @@ describe('workspace-safety and the worktree list', () => {
 
   async function startWorktrees(realGit = false): Promise<void> {
     made = await (realGit ? testWorkspaces() : fakeTestWorkspaces());
-    await made.store.write(() => {
+    await made.store.writeBlocking(() => {
       new CanvasMemory(made.store).ensure(CANVAS);
     });
     const repository = await made.repository();

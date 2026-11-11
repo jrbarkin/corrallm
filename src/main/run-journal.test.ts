@@ -230,7 +230,7 @@ describe('RunJournal', () => {
     await runs.open(background, false);
     const token = (await runs.get(background)).token;
     const messages = await messagesOf(background);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       runs.keep(background, token, null, messages);
     });
     expect(await runs.last()).toBe(shown);
@@ -419,7 +419,7 @@ describe('RunJournal', () => {
     expect(await runs.reads(canvas)).toEqual({});
     let seen: unknown;
     await store
-      .write(() => {
+      .writeBlocking(() => {
         runs.moveRead(canvas, 'outside:orchestrator', 7);
       })
       .then(() => {
@@ -440,13 +440,13 @@ describe('RunJournal', () => {
     // Moved on by the next write that moves one, and never back, writes at once included.
     await Promise.all([
       runs.save(canvas, token, checkpoint),
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.moveRead(canvas, 'outside:other', 2);
       }),
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.moveRead(canvas, 'outside:orchestrator', 9);
       }),
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.moveRead(canvas, 'outside:orchestrator', 8);
       }),
     ]);
@@ -462,7 +462,7 @@ describe('RunJournal', () => {
     const runs = journal();
     const { token } = await runs.get(canvas);
     const messages = await messagesOf(canvas);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       runs.keep(canvas, token, checkpoint, messages);
       runs.moveRead(canvas, 'outside:orchestrator', 3);
     });
@@ -471,7 +471,7 @@ describe('RunJournal', () => {
 
     // What it was written with failed: neither lands.
     await expect(
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.keep(canvas, token, { ...checkpoint, updatedAt: 456 }, messages);
         runs.moveRead(canvas, 'outside:orchestrator', 4);
         throw new Error('The message can’t be written');
@@ -483,7 +483,7 @@ describe('RunJournal', () => {
     // An earlier canvas's token writes nothing, failing the write it is in.
     await runs.opened(canvas);
     await expect(
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.keep(canvas, token, { ...checkpoint, updatedAt: 789 }, messages);
       }),
     ).rejects.toThrow(/earlier canvas/);

@@ -227,7 +227,7 @@ export class Proposals {
       cleanup = trees.length === 0 ? undefined : { trees };
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
-    const { proposal, made } = await this.#deps.store.write(() => {
+    const { proposal, made } = await this.#deps.store.writeBlocking(() => {
       const rows = this.#deps.store
         .prepare(
           `SELECT id, op, args, by_party, touched, lost, raised_at FROM proposal
@@ -348,7 +348,7 @@ export class Proposals {
     const settlement = await this.settlement(proposal, outcome, by, why);
     let staged: Staged | undefined;
     try {
-      await this.#deps.store.write(() => {
+      await this.#deps.store.writeBlocking(() => {
         staged = settlement.within();
       });
     } catch (error) {

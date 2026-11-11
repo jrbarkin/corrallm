@@ -37,7 +37,7 @@ beforeEach(async () => {
   const memory = new CanvasMemory(database);
   table = new HandoffTable(database, memory);
   // The canvas's row, as its first commit makes it.
-  await database.write(() => {
+  await database.writeBlocking(() => {
     memory.ensure(CANVAS);
   });
 });
@@ -66,7 +66,7 @@ describe('a handoff accepted', () => {
     expect(store.of('worker')).toEqual({ handoff: HANDOFF });
     // Nothing on disk until a write holds it.
     expect(rows()).toEqual([]);
-    const written = await database.write(() => store.changes());
+    const written = await database.writeBlocking(() => store.changes());
     written();
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF });
     expect(rows()).toEqual([
@@ -77,7 +77,7 @@ describe('a handoff accepted', () => {
   it('replaces the agent’s last one, keeping what waits to be carried', async () => {
     const store = loaded();
     await database
-      .write(() => store.stageCarry('worker', 'switch-1'))
+      .writeBlocking(() => store.stageCarry('worker', 'switch-1'))
       .then((staged) => {
         staged.reveal();
       });
@@ -125,7 +125,7 @@ describe('a carry', () => {
     store.accept('worker', HANDOFF);
     await store.durable();
     await expect(
-      database.write(() => {
+      database.writeBlocking(() => {
         const staged = store.stageCarry('worker', 'switch-1');
         // Seen at once, so that nothing written after it writes it out again.
         expect(store.of('worker')?.carry).toBe('switch-1');
@@ -136,30 +136,30 @@ describe('a carry', () => {
     expect(store.of('worker')).toEqual({ handoff: HANDOFF });
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF });
 
-    await database.write(() => store.stageCarry('worker', 'switch-2'));
+    await database.writeBlocking(() => store.stageCarry('worker', 'switch-2'));
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF, carry: 'switch-2' });
   });
 
   it('is staged for an agent that wrote none yet, with why, which stays once carried', async () => {
     const store = loaded();
-    await database.write(() => store.stageCarry('worker', 'switch-1', 'unreported'));
+    await database.writeBlocking(() => store.stageCarry('worker', 'switch-1', 'unreported'));
     expect(loaded().of('worker')).toEqual({ carry: 'switch-1', carryWhy: 'unreported' });
     expect(store.take('worker')).toEqual({ carry: 'switch-1', why: 'unreported' });
     await store.durable();
     expect(loaded().of('worker')).toEqual({ carryWhy: 'unreported' });
     // A later switch says why anew; with a handoff kept, there's no why.
-    await database.write(() => store.stageCarry('worker', 'switch-2', 'off'));
+    await database.writeBlocking(() => store.stageCarry('worker', 'switch-2', 'off'));
     expect(loaded().of('worker')).toEqual({ carry: 'switch-2', carryWhy: 'off' });
     store.accept('worker', HANDOFF);
     await store.durable();
-    await database.write(() => store.stageCarry('worker', 'switch-3'));
+    await database.writeBlocking(() => store.stageCarry('worker', 'switch-3'));
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF, carry: 'switch-3' });
   });
 
   it('is taken by the send that carries it, cleared with that send’s write, and put back if it failed', async () => {
     const store = loaded();
     store.accept('worker', HANDOFF);
-    await database.write(() => store.stageCarry('worker', 'switch-1'));
+    await database.writeBlocking(() => store.stageCarry('worker', 'switch-1'));
     const taken = store.take('worker');
     expect(taken).toEqual({ carry: 'switch-1', handoff: HANDOFF });
     // Taken once.
@@ -171,7 +171,7 @@ describe('a carry', () => {
     await store.durable();
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF });
     // Never put back over a carry set since.
-    await database.write(() => store.stageCarry('worker', 'switch-2'));
+    await database.writeBlocking(() => store.stageCarry('worker', 'switch-2'));
     store.untake('worker', 'switch-1');
     expect(store.of('worker')?.carry).toBe('switch-2');
   });

@@ -135,10 +135,14 @@ async function holdCommits(only?: 'messages'): Promise<() => void> {
       return held.promise.then(() => durable.call(this));
     });
   } else {
-    const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, 'write') as {
-      value: Store['write'];
+    const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, 'writeBlocking') as {
+      value: Store['writeBlocking'];
     };
-    vi.spyOn(Store.prototype, 'write').mockImplementation(function (this: Store, run, failed) {
+    vi.spyOn(Store.prototype, 'writeBlocking').mockImplementation(function (
+      this: Store,
+      run,
+      failed,
+    ) {
       return held.promise.then(() => write.call(this, run, failed));
     });
   }

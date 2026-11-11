@@ -280,7 +280,7 @@ export class WorkspaceStore {
    * keeping nothing of it, if it threw or couldn't be written.
    */
   write<T>(run: (workspaces: this) => T): Promise<T> {
-    return this.#store.write(() => run(this));
+    return this.#store.writeBlocking(() => run(this));
   }
 
   // Repositories.

@@ -46,7 +46,7 @@ beforeEach(async () => {
   journal = new MergeJournal({ store, now: () => now });
   const memory = new CanvasMemory(store);
   const workspaces = new WorkspaceStore({ store });
-  await store.write(() => {
+  await store.writeBlocking(() => {
     memory.ensure(CANVAS);
     for (const [id, at] of [
       [REPOSITORY, '/work/app'],

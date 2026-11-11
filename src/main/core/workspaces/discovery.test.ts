@@ -291,7 +291,7 @@ describe.skipIf(process.platform === 'win32')('a repository kept in the form bef
 
   /** As that corrallm kept it: the repository by `identity`, and its workspaces' jobs expecting it. */
   async function keepAs(repository: RepositoryRecord, identity: string): Promise<void> {
-    await made.store.write(() => {
+    await made.store.writeBlocking(() => {
       made.store
         .prepare('UPDATE repository SET identity = ? WHERE id = ?')
         .run(identity, repository.id);

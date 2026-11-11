@@ -329,8 +329,8 @@ export class CanvasMemory {
       }
     };
     const attempt = this.#atomic
-      ? this.#atomic.then(() => this.#store.write(run))
-      : this.#store.write(run);
+      ? this.#atomic.then(() => this.#store.writeBlocking(run))
+      : this.#store.writeBlocking(run);
     const writing = attempt
       .then(
         () => {

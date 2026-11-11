@@ -90,7 +90,7 @@ async function workspaceFixture(
   writeFileSync(path.join(profile, 'workspaces', 'profile-id'), `${PROFILE_ID}\n`, { mode: 0o600 });
   const store = await openTestStore(profile);
   const memory = new CanvasMemory(store);
-  await store.write(() => {
+  await store.writeBlocking(() => {
     memory.ensure(CANVAS);
   });
   const workspaces = new WorkspaceStore({ store });

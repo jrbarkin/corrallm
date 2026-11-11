@@ -164,7 +164,7 @@ export class MessageTable {
 
   /** Queues `write` for the database's next commit: resolves once that commit has returned. */
   write<T>(write: () => T, failed?: (error: unknown) => void): Promise<T> {
-    return this.#store.write(write, failed);
+    return this.#store.writeBlocking(write, failed);
   }
 
   /** Within a write: gives the canvas its row, if it has none, for its messages to refer to. */

@@ -274,7 +274,7 @@ describe('a lead', () => {
 
   it('goes with its canvas', async () => {
     await makeLead();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
     });
     expect(rows()).toEqual([]);

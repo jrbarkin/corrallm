@@ -203,7 +203,7 @@ export class LeadStore {
   ): Promise<void> {
     const { store, memory } = this.#deps;
     const at = this.#now();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       if (lead === null) {
         store.prepare('DELETE FROM lead WHERE canvas_id = ? AND agent_id = ?').run(canvas, agent);
         return;
@@ -254,7 +254,7 @@ export class LeadStore {
     if (this.isGranted(canvas, name) === approvals) return false;
     const { store, memory } = this.#deps;
     const at = this.#now();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       if (!approvals) {
         store
           .prepare('DELETE FROM outside_grant WHERE canvas_id = ? AND name = ?')
@@ -301,7 +301,7 @@ export class LeadStore {
   async loaded(canvas: CanvasId, document: CanvasDocument): Promise<void> {
     const decided = this.#decide(canvas, document);
     if (decided === undefined) return;
-    await this.#deps.store.write(() => {
+    await this.#deps.store.writeBlocking(() => {
       this.#apply(canvas, decided);
     });
     this.#take(canvas, decided);

@@ -146,7 +146,7 @@ export class MergeJournal {
    * keeping nothing of it, if it threw or couldn't be written.
    */
   write<T>(run: (journal: this) => T): Promise<T> {
-    return this.#store.write(() => run(this));
+    return this.#store.writeBlocking(() => run(this));
   }
 
   job(id: string): MergeJob | undefined {

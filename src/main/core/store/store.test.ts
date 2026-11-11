@@ -12,7 +12,7 @@ import type { Checkpointed } from './checkpointer';
 import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
 import type { Connection } from './sqlite';
-import { SYSTEM_DEPS } from './store';
+import { SYSTEM_DEPS, unopened } from './store';
 import type { Store, StoreDeps } from './store';
 
 /*
@@ -148,7 +148,7 @@ describe('the write lane', () => {
   it('creates only SQLite’s database, log and index on successful writes', async () => {
     const files = ['core.db', 'core.db-shm', 'core.db-wal'];
     expect((await readdir(profile)).sort()).toEqual(files);
-    await store.write(() => add('one'));
+    await store.writeBlocking(() => add('one'));
     store.tx(() => add('two'));
     await store.checkpoint();
     expect((await readdir(profile)).sort()).toEqual(files);
@@ -158,7 +158,7 @@ describe('the write lane', () => {
   it('resolves a write with what it returned only once another connection can read it', async () => {
     let seen: unknown[] | undefined;
     const written = store
-      .write(() => {
+      .writeBlocking(() => {
         add('one');
         return 'written';
       })
@@ -175,7 +175,7 @@ describe('the write lane', () => {
     flushes = [];
     let resolved = false;
     const written = store
-      .write(() => add('one'))
+      .writeBlocking(() => add('one'))
       .then(() => {
         resolved = true;
       });
@@ -204,7 +204,7 @@ describe('the write lane', () => {
         Array.from({ length: rows }, (_, j) => `${String(i)}.${String(j)}`);
       const writes = Array.from({ length: 40 }, (_, i) =>
         store
-          .write(() => {
+          .writeBlocking(() => {
             ran.push(i);
             for (const text of entries(i)) add(text);
           })
@@ -230,10 +230,10 @@ describe('the write lane', () => {
 
   it('keeps a large atomic write intact and leaves the next write for its next commit', async () => {
     flushes = [];
-    const first = store.write(() => {
+    const first = store.writeBlocking(() => {
       for (let i = 0; i < 40; i++) add(String(i));
     });
-    const second = store.write(() => add('next'));
+    const second = store.writeBlocking(() => add('next'));
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(notes()).toEqual(Array.from({ length: 40 }, (_, i) => String(i)));
@@ -251,12 +251,12 @@ describe('the write lane', () => {
       CREATE TABLE child (parent INTEGER NOT NULL
         REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED) STRICT`);
     const settled = await outcomes([
-      store.write(() => {
+      store.writeBlocking(() => {
         for (let i = 0; i < 40; i++) add('rolled back');
         store.prepare('INSERT INTO child (parent) VALUES (1)').run();
       }),
-      store.write(() => add('second')),
-      store.write(() => add('third')),
+      store.writeBlocking(() => add('second')),
+      store.writeBlocking(() => add('third')),
     ]);
     expect(settled.map(({ status }) => status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
     expect(settled[0]).toMatchObject({ reason: { message: 'FOREIGN KEY constraint failed' } });
@@ -266,12 +266,12 @@ describe('the write lane', () => {
   it('keeps later SQL off the loop while the log flush is running, in write order', async () => {
     flushes = [];
     const order: string[] = [];
-    const first = store.write(() => add('first')).then(() => order.push('first durable'));
+    const first = store.writeBlocking(() => add('first')).then(() => order.push('first durable'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
     const later = ['second', 'third'].map((text) =>
-      store.write(() => {
+      store.writeBlocking(() => {
         order.push(text);
         add(text);
       }),
@@ -293,14 +293,14 @@ describe('the write lane', () => {
 
   it('flushes its log one flush at a time, queued writes resolving only with their own flush', async () => {
     flushes = [];
-    const first = store.write(() => add('first'));
+    const first = store.writeBlocking(() => add('first'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
     const settled: string[] = [];
     const later = ['second', 'third'].map((text) =>
       new Promise((resolve) => setImmediate(resolve))
-        .then(() => store.write(() => add(text)))
+        .then(() => store.writeBlocking(() => add(text)))
         .then(() => settled.push(text)),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -321,7 +321,7 @@ describe('the write lane', () => {
 
   it('closes once the flush going on has ended', async () => {
     flushes = [];
-    const written = store.write(() => add('one'));
+    const written = store.writeBlocking(() => add('one'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
@@ -339,8 +339,8 @@ describe('the write lane', () => {
 
   it('commits the writes queued in one turn of the loop together', async () => {
     let between: unknown[] | undefined;
-    const first = store.write(() => add('first'));
-    const second = store.write(() => {
+    const first = store.writeBlocking(() => add('first'));
+    const second = store.writeBlocking(() => {
       between = notes();
       add('second');
     });
@@ -353,12 +353,12 @@ describe('the write lane', () => {
   it('rolls back only a write that failed, rejecting only its caller', async () => {
     const failure = new Error('It went wrong');
     const settled = await outcomes([
-      store.write(() => add('kept')),
-      store.write(() => {
+      store.writeBlocking(() => add('kept')),
+      store.writeBlocking(() => {
         add('lost');
         throw failure;
       }),
-      store.write(() => add('kept too')),
+      store.writeBlocking(() => add('kept too')),
     ]);
     expect(settled.map(({ status }) => status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
     expect(settled[1]).toEqual({ status: 'rejected', reason: failure });
@@ -368,7 +368,7 @@ describe('the write lane', () => {
   it('restores staged state before the next write runs after a failed savepoint', async () => {
     let staged = false;
     const settled = await outcomes([
-      store.write(
+      store.writeBlocking(
         () => {
           staged = true;
           throw new Error('The write failed');
@@ -377,7 +377,7 @@ describe('the write lane', () => {
           staged = false;
         },
       ),
-      store.write(() => {
+      store.writeBlocking(() => {
         expect(staged).toBe(false);
         add('next');
       }),
@@ -390,11 +390,11 @@ describe('the write lane', () => {
     store.exec(`CREATE TRIGGER refuse AFTER INSERT ON note WHEN NEW.text = 'refused'
       BEGIN SELECT RAISE(ABORT, 'Refused by the test'); END`);
     const settled = await outcomes([
-      store.write(() => {
+      store.writeBlocking(() => {
         add('before');
         add('refused');
       }),
-      store.write(() => add('another')),
+      store.writeBlocking(() => add('another')),
     ]);
     expect(settled[0]).toMatchObject({
       status: 'rejected',
@@ -410,8 +410,8 @@ describe('the write lane', () => {
       CREATE TABLE child (parent INTEGER NOT NULL
         REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED) STRICT`);
     const settled = await outcomes([
-      store.write(() => add('in the batch')),
-      store.write(() => store.prepare('INSERT INTO child (parent) VALUES (1)').run()),
+      store.writeBlocking(() => add('in the batch')),
+      store.writeBlocking(() => store.prepare('INSERT INTO child (parent) VALUES (1)').run()),
     ]);
     for (const outcome of settled) {
       expect(outcome).toMatchObject({
@@ -420,7 +420,7 @@ describe('the write lane', () => {
       });
     }
     expect(notes()).toEqual([]);
-    await store.write(() => add('after'));
+    await store.writeBlocking(() => add('after'));
     expect(notes()).toEqual(['after']);
   });
 
@@ -428,11 +428,11 @@ describe('the write lane', () => {
     const pages = store.prepare('PRAGMA page_count').get()?.page_count as number;
     store.exec(`PRAGMA max_page_count = ${String(pages + 2)}`);
     const settled = await outcomes([
-      store.write(() => add('before')),
-      store.write(() => {
+      store.writeBlocking(() => add('before')),
+      store.writeBlocking(() => {
         for (let i = 0; i < 100; i++) add('x'.repeat(2000));
       }),
-      store.write(() => add('after')),
+      store.writeBlocking(() => add('after')),
     ]);
     expect(settled.map(({ status }) => status)).toEqual(['rejected', 'rejected', 'fulfilled']);
     for (const outcome of settled.slice(0, 2)) {
@@ -443,7 +443,7 @@ describe('the write lane', () => {
 
   it('refuses a write that returns a promise, keeping nothing of it', async () => {
     await expect(
-      store.write(() => {
+      store.writeBlocking(() => {
         add('before the await');
         return Promise.resolve();
       }),
@@ -453,9 +453,9 @@ describe('the write lane', () => {
 
   it('commits the writes queued before it closes, and refuses those after', async () => {
     const wanted = Array.from({ length: 40 }, (_, i) => `queued ${String(i)}`);
-    const queued = Promise.all(wanted.map((text) => store.write(() => add(text))));
+    const queued = Promise.all(wanted.map((text) => store.writeBlocking(() => add(text))));
     const closed = store.close();
-    await expect(store.write(() => add('too late'))).rejects.toThrow(
+    await expect(store.writeBlocking(() => add('too late'))).rejects.toThrow(
       'The core’s database is closed.',
     );
     await expect(queued).resolves.toBeDefined();
@@ -466,11 +466,11 @@ describe('the write lane', () => {
   it('refuses a write that a write queues as it closes, and leaves nothing to run after', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let queued: Promise<unknown> | undefined;
-    const outer = store.write(() => {
+    const outer = store.writeBlocking(() => {
       add('outer');
       // A transaction within the lane's goes on as a savepoint of it.
       store.tx(() => add('nested'));
-      queued = store.write(() => add('queued by it'));
+      queued = store.writeBlocking(() => add('queued by it'));
       void queued.catch(() => undefined);
     });
     const closed = store.close();
@@ -509,9 +509,9 @@ describe('a failed flush', () => {
 
   it('says on stderr that an unflushed write may come back after a restart if the cut fails', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     flushes = [];
-    const lost = store.write(() => add('lost'));
+    const lost = store.writeBlocking(() => add('lost'));
     diskFault.truncate = true;
     await failFlush();
     await expect(lost).rejects.toThrow(FAILED);
@@ -521,15 +521,15 @@ describe('a failed flush', () => {
       expect.objectContaining({ message: 'EIO: i/o error, ftruncate' }),
     ]);
     expect(() => store.prepare('SELECT text FROM note')).toThrow(FAILED);
-    await expect(store.write(() => add('after'))).rejects.toThrow(FAILED);
+    await expect(store.writeBlocking(() => add('after'))).rejects.toThrow(FAILED);
     expect((await readdir(profile)).sort()).toEqual(['core.db', 'core.db-shm', 'core.db-wal']);
   });
 
   it('removes a snapshot whose publication failed after rename before discarding an unflushed write', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     flushes = [];
-    const lost = store.write(() => add('lost'));
+    const lost = store.writeBlocking(() => add('lost'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
@@ -545,14 +545,14 @@ describe('a failed flush', () => {
 
   it('keeps none of its writes, nor any committed after them, and fails closed, saying so once', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     flushes = [];
-    const lost = store.write(() => add('lost'));
+    const lost = store.writeBlocking(() => add('lost'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
     // Queued while that flush went on: it must fail too, without ever writing.
-    const meanwhile = store.write(() => add('meanwhile'));
+    const meanwhile = store.writeBlocking(() => add('meanwhile'));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(notes()).toEqual(['kept', 'lost']);
     await failFlush();
@@ -560,27 +560,27 @@ describe('a failed flush', () => {
     await expect(meanwhile).rejects.toThrow(FAILED);
     // Every write after it refused for the same reason, until it is opened again; and nothing
     // read back, as though it had been kept.
-    await expect(store.write(() => add('after'))).rejects.toThrow(FAILED);
+    await expect(store.writeBlocking(() => add('after'))).rejects.toThrow(FAILED);
     expect(() => store.tx(() => add('after'))).toThrow(FAILED);
     expect(() => store.prepare('SELECT text FROM note')).toThrow(FAILED);
     await expect(store.checkpoint()).rejects.toThrow(FAILED);
     expect(errors.mock.calls).toEqual([[expect.stringMatching(FAILED)]]);
 
     expect(await reopened()).toEqual(['kept']);
-    await store.write(() => add('again'));
+    await store.writeBlocking(() => add('again'));
     expect(notes()).toEqual(['kept', 'again']);
   });
 
   it('keeps none of them after it began its log anew', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       for (let i = 0; i < 300; i++) add('x'.repeat(2000));
     });
     // Copied into the database, and begun anew: what it wrote before is still in the log's file.
     await store.checkpoint();
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     flushes = [];
-    const lost = store.write(() => add('lost'));
+    const lost = store.writeBlocking(() => add('lost'));
     await failFlush();
     await expect(lost).rejects.toThrow(FAILED);
     const kept = await reopened();
@@ -591,9 +591,9 @@ describe('a failed flush', () => {
 
   it('checkpoints nothing whose flush hasn’t ended, nor what a failed one was for', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     flushes = [];
-    const lost = store.write(() => add('lost'));
+    const lost = store.writeBlocking(() => add('lost'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
@@ -612,10 +612,10 @@ describe('a failed flush', () => {
   it('closes without a checkpoint or snapshot, and keeps no snapshot that may hold what it lost', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const backups = () => readdir(path.join(profile, 'backups'));
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     await store.snapshot();
     flushes = [];
-    const lost = store.write(() => add('lost'));
+    const lost = store.writeBlocking(() => add('lost'));
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
     });
@@ -675,12 +675,12 @@ describe('checkpoints', () => {
         await release.promise;
         return checkpoint.call(this);
       });
-    await store.write(() => add('before'));
+    await store.writeBlocking(() => add('before'));
     const snapshot = store.snapshot();
     await entered.promise;
     fire();
     let committed = false;
-    const written = store.write(() => {
+    const written = store.writeBlocking(() => {
       add('while busy');
       committed = true;
     });
@@ -695,7 +695,7 @@ describe('checkpoints', () => {
   });
   it('checkpoints the log into the database once writes stop for a second', async () => {
     const size = async () => (await stat(store.file)).size;
-    await store.write(() => {
+    await store.writeBlocking(() => {
       for (let i = 0; i < 200; i++) add(`note ${String(i)}`);
     });
     const before = await size();
@@ -711,7 +711,7 @@ describe('checkpoints', () => {
 
   it('checkpoints on a thread of its own, the lane committing what came meanwhile once it is done', async () => {
     const size = async () => (await stat(store.file)).size;
-    await store.write(() => {
+    await store.writeBlocking(() => {
       for (let i = 0; i < 200; i++) add(`note ${String(i)}`);
     });
     const before = await size();
@@ -719,7 +719,7 @@ describe('checkpoints', () => {
     const checkpointed = store.checkpoint().then(() => order.push('checkpointed'));
     // The store reads meanwhile, as the core goes on.
     expect(store.prepare('SELECT count(*) AS notes FROM note').get()).toEqual({ notes: 200 });
-    const written = store.write(() => {
+    const written = store.writeBlocking(() => {
       order.push('committed');
       add('meanwhile');
     });
@@ -733,19 +733,19 @@ describe('checkpoints', () => {
     // The log's header: its checkpoint's number and its salts, which beginning it anew changes.
     const header = async () =>
       (await readFile(`${store.file}-wal`)).subarray(12, 24).toString('hex');
-    await store.write(() => add('one'));
+    await store.writeBlocking(() => add('one'));
     const before = await header();
     await store.checkpoint();
     const begun = await header();
     expect(begun).not.toBe(before);
-    await store.write(() => add('two'));
+    await store.writeBlocking(() => add('two'));
     expect(await header()).toBe(begun);
     expect(notes()).toEqual(['one', 'two']);
   });
 
   it('cuts its log back to its size limit as it begins it anew', async () => {
     const log = async () => (await stat(`${store.file}-wal`)).size;
-    await store.write(() => {
+    await store.writeBlocking(() => {
       for (let i = 0; i < 3000; i++) add('x'.repeat(2000));
     });
     expect(await log()).toBeGreaterThan(JOURNAL_SIZE_LIMIT);
@@ -755,7 +755,7 @@ describe('checkpoints', () => {
   });
 
   it('waits for a pause after each commit, but never more than 30 seconds in all', async () => {
-    await store.write(() => add('first'));
+    await store.writeBlocking(() => add('first'));
     for (let i = 0; i < 59; i++) {
       now += 500;
       store.tx(() => add('another'));
@@ -767,12 +767,12 @@ describe('checkpoints', () => {
     expect(pending().map(({ ms }) => ms)).toEqual([0]);
     fire();
     // The write lane waits for the worker rather than racing a synchronous transaction with it.
-    await store.write(() => add('after the checkpoint'));
+    await store.writeBlocking(() => add('after the checkpoint'));
     expect(pending().map(({ ms }) => ms)).toEqual([1000]);
   });
 
   it('truncates its log as it closes, keeping everything in the database', async () => {
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     expect((await stat(`${store.file}-wal`)).size).toBeGreaterThan(0);
     reader.close();
     await store.close();
@@ -801,7 +801,7 @@ describe('snapshots', () => {
 
   it('never returns a published snapshot after failing closed during its directory sync', async () => {
     flushes = [];
-    const written = store.write(() => add('unflushed'));
+    const written = store.writeBlocking(() => add('unflushed'));
     const rejected = written.catch((error: unknown) => error);
     await vi.waitFor(() => {
       expect(flushes).toHaveLength(1);
@@ -840,7 +840,7 @@ describe('snapshots', () => {
   }
 
   it('takes one as it closes, into backups/, a file of its own that only the user may read', async () => {
-    await store.write(() => add('kept'));
+    await store.writeBlocking(() => add('kept'));
     reader.close();
     await store.close();
     expect(await names()).toEqual(['core-2026-10-19T12-00-00-000Z.db']);
@@ -859,7 +859,7 @@ describe('snapshots', () => {
 
   it('takes one every four hours, once idle after writes, the first as soon as it is', async () => {
     const idleAfterWriting = async () => {
-      await store.write(() => add('a note'));
+      await store.writeBlocking(() => add('a note'));
       fire();
     };
     await idleAfterWriting();
@@ -892,7 +892,7 @@ describe('snapshots', () => {
 
   it('keeps no snapshot of a database that looks damaged, nor forgets an older one for it', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       for (let i = 0; i < 300; i++) add('x'.repeat(200));
     });
     store.exec('PRAGMA wal_checkpoint(TRUNCATE)');
@@ -931,7 +931,7 @@ describe('snapshots', () => {
   });
 
   it('takes a sound one while it goes on being written', async () => {
-    await store.write(() => {
+    await store.writeBlocking(() => {
       for (let i = 0; i < 2000; i++) add('x'.repeat(1000));
     });
     let written = 0;
@@ -941,7 +941,7 @@ describe('snapshots', () => {
       return file;
     });
     while (writtenBefore === undefined) {
-      await store.write(() => {
+      await store.writeBlocking(() => {
         add('during');
         store.prepare('DELETE FROM note WHERE rowid = (SELECT min(rowid) FROM note)').run();
       });
@@ -952,5 +952,316 @@ describe('snapshots', () => {
     expect(written).toBeGreaterThan(0);
     expect(check).toBe('ok');
     expect(notes).toBe(2000);
+  });
+});
+
+describe('planned writes', () => {
+  const INSERT = 'INSERT INTO note (text) VALUES (?)';
+  /** A planned write that notes `text`. */
+  const plan = (text: string) =>
+    store.write(() => {
+      store.run(INSERT, text);
+    });
+  /** What the tests' writes and hooks did, in order. */
+  let log: string[];
+  beforeEach(() => {
+    log = [];
+    store.exec(`CREATE TRIGGER refuse AFTER INSERT ON note WHEN NEW.text = 'refused'
+      BEGIN SELECT RAISE(ABORT, 'Refused by the test'); END`);
+  });
+  /** A planned write that fails (`how`), after staging, with hooks `name` leaves in `log`. */
+  function staged(name: string, how: 'statement' | 'plan' | 'none' = 'none'): Promise<void> {
+    return store.write(
+      () => {
+        log.push(`plan ${name}`);
+        store.undo(() => log.push(`undo ${name} 1`));
+        store.undo(() => log.push(`undo ${name} 2`));
+        store.run(INSERT, how === 'statement' ? 'refused' : name);
+        if (how === 'plan') throw new Error(`${name} failed`);
+      },
+      () => log.push(`failed ${name}`),
+    );
+  }
+
+  it('runs its statements in order, in a savepoint of its own, after its plan', async () => {
+    let planned = false;
+    const written = store.write(() => {
+      store.run(INSERT, 'one');
+      store.run(INSERT, 'two');
+      planned = true;
+      return 'planned';
+    });
+    expect(planned).toBe(false);
+    await expect(written).resolves.toBe('planned');
+    expect(notes()).toEqual(['one', 'two']);
+  });
+
+  it('rolls back only the write whose statement failed, rejecting only its caller', async () => {
+    const settled = await outcomes([
+      plan('before'),
+      store.write(() => {
+        store.run(INSERT, 'lost');
+        store.run(INSERT, 'refused');
+      }),
+      plan('after'),
+    ]);
+    expect(settled.map(({ status }) => status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+    expect(settled[1]).toMatchObject({ reason: { message: 'Refused by the test' } });
+    expect(notes()).toEqual(['before', 'after']);
+  });
+
+  it('refuses to read, keeping nothing of the write', async () => {
+    const settled = await outcomes([
+      store.write(() => {
+        store.run(INSERT, 'lost');
+        store.prepare('SELECT count(*) FROM note').get();
+      }),
+      plan('kept'),
+    ]);
+    expect(settled[0]).toMatchObject({
+      status: 'rejected',
+      reason: { message: expect.stringMatching(/planned write.*read/i) as string },
+    });
+    expect(settled[1]?.status).toBe('fulfilled');
+    expect(notes()).toEqual(['kept']);
+  });
+
+  it('refuses a statement or a hook outside a write', () => {
+    for (const outside of [
+      () => {
+        store.run(INSERT, 'x');
+      },
+      () => {
+        store.runExpecting(INSERT, ['x'], 1, 'No');
+      },
+      () => {
+        store.runReturning(INSERT, ['x'], () => undefined);
+      },
+      () => {
+        store.undo(() => undefined);
+      },
+      () => {
+        store.followUp(() => undefined);
+      },
+    ]) {
+      expect(outside).toThrow(/within a write/i);
+    }
+    expect(notes()).toEqual([]);
+  });
+
+  describe('restores in-memory staging', () => {
+    it('after a failed statement: its hooks newest first, then failed, before the next plan', async () => {
+      const settled = await outcomes([staged('a', 'statement'), staged('b')]);
+      expect(settled.map(({ status }) => status)).toEqual(['rejected', 'fulfilled']);
+      expect(log).toEqual(['plan a', 'undo a 2', 'undo a 1', 'failed a', 'plan b']);
+      expect(notes()).toEqual(['b']);
+    });
+
+    it('after a plan that threw, which sent no statement', async () => {
+      const settled = await outcomes([staged('a', 'plan'), staged('b')]);
+      expect(settled.map(({ status }) => status)).toEqual(['rejected', 'fulfilled']);
+      expect(log).toEqual(['plan a', 'undo a 2', 'undo a 1', 'failed a', 'plan b']);
+      expect(notes()).toEqual(['b']);
+    });
+
+    it('after a failed commit: the newest write’s first', async () => {
+      store.exec(`CREATE TABLE parent (id INTEGER PRIMARY KEY) STRICT;
+        CREATE TABLE child (parent INTEGER NOT NULL
+          REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED) STRICT`);
+      const settled = await outcomes([
+        staged('a'),
+        staged('b'),
+        store.write(
+          () => {
+            log.push('plan c');
+            store.undo(() => log.push('undo c'));
+            store.run('INSERT INTO child (parent) VALUES (1)');
+          },
+          () => log.push('failed c'),
+        ),
+      ]);
+      expect(settled.map(({ status }) => status)).toEqual(['rejected', 'rejected', 'rejected']);
+      expect(log).toEqual([
+        'plan a',
+        'plan b',
+        'plan c',
+        'undo c',
+        'failed c',
+        'undo b 2',
+        'undo b 1',
+        'failed b',
+        'undo a 2',
+        'undo a 1',
+        'failed a',
+      ]);
+      expect(notes()).toEqual([]);
+    });
+
+    it('after a failed flush: the newest write’s first', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      flushes = [];
+      const settled = outcomes([staged('a'), staged('b')]);
+      await vi.waitFor(() => {
+        expect(flushes).toHaveLength(1);
+      });
+      flushes[0]?.done(new Error('EIO: i/o error, fsync'));
+      expect((await settled).map(({ status }) => status)).toEqual(['rejected', 'rejected']);
+      expect(log).toEqual([
+        'plan a',
+        'plan b',
+        'undo b 2',
+        'undo b 1',
+        'failed b',
+        'undo a 2',
+        'undo a 1',
+        'failed a',
+      ]);
+    });
+
+    it('never for a write that stayed', async () => {
+      await staged('a');
+      expect(log).toEqual(['plan a']);
+    });
+  });
+
+  it('gives runReturning’s rows to its callback before the next write is planned and before it resolves', async () => {
+    const first = store
+      .write(() => {
+        store.runReturning(`${INSERT} RETURNING text`, ['first'], (rows) => {
+          log.push(`rows ${JSON.stringify(rows)}`);
+        });
+        log.push('plan first');
+      })
+      .then(() => log.push('resolved first'));
+    const second = store.write(() => log.push('plan second'));
+    await Promise.all([first, second]);
+    expect(log).toEqual(['plan first', 'rows [{"text":"first"}]', 'plan second', 'resolved first']);
+  });
+
+  it('fails only its write when runExpecting changed other than the rows it expected', async () => {
+    const settled = await outcomes([
+      plan('kept'),
+      store.write(() => {
+        store.run(INSERT, 'lost');
+        store.runExpecting('UPDATE note SET text = ? WHERE text = ?', ['x', 'absent'], 1, 'Gone');
+      }),
+      plan('also kept'),
+    ]);
+    expect(settled.map(({ status }) => status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+    expect(settled[1]).toMatchObject({ reason: { message: 'Gone' } });
+    expect(notes()).toEqual(['kept', 'also kept']);
+  });
+
+  it('keeps the rows runExpecting expected', async () => {
+    await plan('one');
+    await store.write(() => {
+      store.runExpecting('UPDATE note SET text = ? WHERE text = ?', ['two', 'one'], 1, 'Gone');
+    });
+    expect(notes()).toEqual(['two']);
+  });
+
+  describe('a follow-up', () => {
+    it('runs right after its write, in the same commit, as a blocking write', async () => {
+      flushes = [];
+      const first = store.write(() => {
+        store.run(INSERT, 'first');
+        store.followUp(() => {
+          // Blocking: it reads what its write, and it, wrote.
+          store.run(INSERT, 'follow');
+          log.push(JSON.stringify(store.prepare('SELECT text FROM note ORDER BY rowid').all()));
+        });
+      });
+      const second = plan('second');
+      await vi.waitFor(() => {
+        expect(flushes).toHaveLength(1);
+      });
+      expect(notes()).toEqual(['first', 'follow', 'second']);
+      expect(log).toEqual(['[{"text":"first"},{"text":"follow"}]']);
+      flushes[0]?.done();
+      await Promise.all([first, second]);
+      expect(flushes).toHaveLength(1);
+    });
+
+    it('runs even when its write is the last the bound of 16 writes allows', async () => {
+      flushes = [];
+      const writes = Array.from({ length: 16 }, (_, i) =>
+        store.write(() => {
+          store.run(INSERT, `write ${String(i)}`);
+          if (i === 15)
+            store.followUp(() => {
+              store.run(INSERT, 'follow');
+            });
+        }),
+      );
+      const seventeenth = plan('seventeenth');
+      await vi.waitFor(() => {
+        expect(flushes).toHaveLength(1);
+      });
+      expect(notes()).toHaveLength(17);
+      expect(notes().at(-1)).toBe('follow');
+      flushes[0]?.done();
+      await vi.waitFor(() => {
+        expect(flushes).toHaveLength(2);
+      });
+      flushes[1]?.done();
+      await Promise.all([...writes, seventeenth]);
+      expect(notes().at(-1)).toBe('seventeenth');
+    });
+  });
+
+  describe('within a blocking write, or a tx', () => {
+    it('runs a planned write’s statements at once, and gives rows at once', async () => {
+      await store.writeBlocking(() => {
+        store.run(INSERT, 'now');
+        expect(store.prepare('SELECT count(*) AS count FROM note').get()?.count).toBe(1);
+        store.runReturning(`${INSERT} RETURNING text`, ['returned'], (rows) => {
+          log.push(JSON.stringify(rows));
+        });
+        expect(log).toEqual(['[{"text":"returned"}]']);
+        expect(() => {
+          store.runExpecting('UPDATE note SET text = ? WHERE text = ?', ['x', 'absent'], 1, 'Gone');
+        }).toThrow('Gone');
+      });
+      expect(notes()).toEqual(['now', 'returned']);
+    });
+
+    it('does the same in a tx', () => {
+      store.tx(() => {
+        store.run(INSERT, 'now');
+        store.runReturning(`${INSERT} RETURNING text`, ['returned'], (rows) => {
+          log.push(JSON.stringify(rows));
+        });
+      });
+      expect(log).toEqual(['[{"text":"returned"}]']);
+      expect(notes()).toEqual(['now', 'returned']);
+    });
+  });
+});
+
+describe('a store that could not be opened', () => {
+  it('refuses every write, statement and hook, saying why', async () => {
+    const closed = unopened('It could not be opened.');
+    await expect(closed.write(() => 1)).rejects.toThrow('It could not be opened.');
+    await expect(closed.writeBlocking(() => 1)).rejects.toThrow('It could not be opened.');
+    for (const refused of [
+      () => closed.prepare('SELECT 1'),
+      () => {
+        closed.run('SELECT 1');
+      },
+      () => {
+        closed.runExpecting('SELECT 1', [], 0, 'No');
+      },
+      () => {
+        closed.runReturning('SELECT 1', [], () => undefined);
+      },
+      () => {
+        closed.undo(() => undefined);
+      },
+      () => {
+        closed.followUp(() => undefined);
+      },
+    ]) {
+      expect(refused).toThrow('It could not be opened.');
+    }
   });
 });

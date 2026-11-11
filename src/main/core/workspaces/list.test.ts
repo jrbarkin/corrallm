@@ -93,7 +93,7 @@ function deps(): WorktreeListDeps {
 beforeEach(async () => {
   folder = await mkdtemp(path.join(tmpdir(), 'corrallm-worktree-list-'));
   store = await openTestStore(folder);
-  await store.write(() => {
+  await store.writeBlocking(() => {
     new CanvasMemory(store).ensure(canvas);
   });
   workspaces = new WorkspaceStore({ store });

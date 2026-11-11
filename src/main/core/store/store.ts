@@ -3,7 +3,7 @@ import { closeSync, fsync, fsyncSync, ftruncateSync, openSync } from 'node:fs';
 import { Checkpointer } from './checkpointer';
 import { discardSnapshots, takeSnapshot } from './snapshots';
 import { connect } from './sqlite';
-import type { Connection, Statement } from './sqlite';
+import type { Connection, SqlOutput, Statement } from './sqlite';
 import { rollback, savepoint, transaction } from './transaction';
 
 /*
@@ -110,9 +110,63 @@ export interface Opening {
   snapshotAt: number | undefined;
 }
 
+/** What a statement of a write binds: SQLite's input values. */
+export type SqlValue = null | number | bigint | string | NodeJS.ArrayBufferView;
+/** A row a statement gave back. */
+export type Row = Record<string, SqlOutput>;
+
+/** A statement of a planned write, kept until the write's plan has run. */
+interface Step {
+  sql: string;
+  params: readonly SqlValue[];
+  /** Fail the write with `error` unless the statement changed exactly `changes` rows. */
+  expect?: { changes: number; error: string };
+  /** Gets the rows the statement gave back (RETURNING), once the write's statements have run. */
+  then?: (rows: Row[]) => void;
+}
+
+/**
+ * The write whose function is running (`Store.#current`): what `run`, `runExpecting`, `runReturning`,
+ * `undo` and `followUp` act on.
+ *  - `planned`: the function only plans: its statements are kept (`steps`) and run in the write's
+ *    savepoint once it has returned.
+ *  - `blocking`: its statements run at once, as the function runs.
+ *  - `tx`: as blocking, in a `tx`.
+ */
+class WriteContext {
+  readonly steps: Step[] = [];
+  readonly followUps: (() => void)[] = [];
+  readonly #undos: (() => void)[] = [];
+
+  readonly kind: 'planned' | 'blocking' | 'tx';
+
+  constructor(kind: 'planned' | 'blocking' | 'tx') {
+    this.kind = kind;
+  }
+
+  get planned(): boolean {
+    return this.kind === 'planned';
+  }
+
+  undo(restore: () => void): void {
+    this.#undos.push(restore);
+  }
+
+  /** Restores memory as the write failed: its hooks, newest first, each once. */
+  restore(): void {
+    for (const restore of this.#undos.splice(0).reverse()) restore();
+  }
+}
+
 /** A write waiting in the lane. */
 interface Queued {
   run: () => unknown;
+  /** Whether `run` plans (`Store.write`) rather than reads as it runs (`Store.writeBlocking`). */
+  planned: boolean;
+  /** Whether it is another write's follow-up, run right after it whatever the bounds. */
+  followUp?: true;
+  /** Its context, once its function has run. */
+  context?: WriteContext;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
 }
@@ -142,6 +196,8 @@ export class Store {
   /** The writes waiting for the lane's next commit, in order. */
   #queue: Queued[] = [];
   #scheduled = false;
+  /** The write whose function is running, if one is. */
+  #current: WriteContext | undefined;
   /** Cancels the checkpoint due, if one is. */
   #cancelCheckpoint: (() => void) | undefined;
   /** When the first commit the log holds unchecked came, if one did. */
@@ -191,6 +247,11 @@ export class Store {
    */
   prepare(sql: string): Statement {
     if (this.#failed !== undefined) throw this.#failed;
+    if (this.#current?.planned === true) {
+      throw new Error(
+        'A planned write reads no SQL: it reads memory and gives statements (run, runExpecting, runReturning). A function that must read as it runs is a blocking write.',
+      );
+    }
     return this.#prepare(sql);
   }
 
@@ -206,6 +267,8 @@ export class Store {
   /** Runs SQL without parameters (statements separated by semicolons). */
   exec(sql: string): void {
     if (this.#failed !== undefined) throw this.#failed;
+    if (this.#current?.planned === true)
+      throw new Error('A planned write runs no SQL but its own.');
     this.#connection.exec(sql);
   }
 
@@ -218,6 +281,7 @@ export class Store {
   tx<T>(run: () => T): T {
     if (this.#failed !== undefined) throw this.#failed;
     const outermost = !this.#connection.isTransaction;
+    if (this.#current?.planned === true) throw new Error('A planned write starts no transaction.');
     if (!outermost) return transaction(this.#connection, run);
     if (
       this.#inFlush.length > 0 ||
@@ -231,7 +295,14 @@ export class Store {
     if (this.#shut) throw closed();
     const frames = this.#frames();
     const commit = ++this.#commits;
-    const value = transaction(this.#connection, run);
+    const context = new WriteContext('tx');
+    let value: T;
+    try {
+      value = transaction(this.#connection, () => this.#within(context, run));
+    } catch (error) {
+      context.restore();
+      throw error;
+    }
     try {
       fsyncSync(this.#logFile());
     } catch (error) {
@@ -242,26 +313,136 @@ export class Store {
   }
 
   /**
-   * Queues `run` (synchronous, with no await inside) for the FIFO lane's next bounded commit. Resolves with what it returned once that commit has
-   * returned; rejects, keeping nothing of it, if it threw or the commit failed. Refused once the
-   * store is closing. `failed` restores in-memory staging synchronously on rejection, before the
-   * next savepoint runs; it must not throw. A successful write still waits for the log flush.
+   * Queues a planned write for the FIFO lane's next bounded commit. `plan` is synchronous (no await
+   * inside) and runs at the lane's turn, on the loop. It reads memory only (`prepare` throws within
+   * it) and gives its statements with `run`, `runExpecting` and `runReturning`, which run in a
+   * savepoint of the write's own once it has returned. Resolves with what `plan` returned once the
+   * commit that holds it has returned and its log is flushed; rejects, keeping nothing of it, if it
+   * threw, a statement failed, or the commit or flush did. Refused once the store is closing.
+   * What the plan staged in memory is restored on rejection, before the next write is planned:
+   * by the hooks it gave `undo` (newest first), then by `failed`, which must not throw.
    */
-  write<T>(run: () => T, failed?: (error: unknown) => void): Promise<T> {
+  write<T>(plan: () => T, failed?: (error: unknown) => void): Promise<T> {
+    return this.#enqueue(true, plan, failed);
+  }
+
+  /**
+   * Queues a write whose function needs SQL as it runs (compare-and-set, reading its own earlier
+   * statements): `run` is synchronous too, and reads and writes through `prepare`, or `run`,
+   * `runExpecting` and `runReturning`, which act at once. Otherwise as `write`. Pinned, file by
+   * file (blocking.test.ts): a write that reads nothing is planned.
+   */
+  writeBlocking<T>(run: () => T, failed?: (error: unknown) => void): Promise<T> {
+    return this.#enqueue(false, run, failed);
+  }
+
+  #enqueue<T>(planned: boolean, run: () => T, failed?: (error: unknown) => void): Promise<T> {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#shut) return Promise.reject(closed());
     return new Promise<T>((resolve, reject) => {
-      this.#queue.push({
+      const queued: Queued = {
         run,
+        planned,
         resolve: resolve as (value: unknown) => void,
         reject: (error) => {
+          queued.context?.restore();
           failed?.(error);
           // Preserve the containing write's original rejection after restoring its staging.
           // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
           reject(error);
         },
-      });
+      };
+      this.#queue.push(queued);
       this.#schedule();
+    });
+  }
+
+  /**
+   * Within a write: a statement of it. In a planned write, kept and run in the write's savepoint,
+   * after those before it; in a blocking write or a `tx`, run at once.
+   */
+  run(sql: string, ...params: SqlValue[]): void {
+    this.#step({ sql, params });
+  }
+
+  /**
+   * Within a write: as `run`, failing the write with `error` unless the statement changed exactly
+   * `changes` rows.
+   */
+  runExpecting(sql: string, params: readonly SqlValue[], changes: number, error: string): void {
+    this.#step({ sql, params, expect: { changes, error } });
+  }
+
+  /**
+   * Within a write: as `run`, giving `then` the rows the statement returned (RETURNING), on the
+   * loop, once the write's statements have run: in a planned write before the next write is
+   * planned and before this one resolves.
+   */
+  runReturning(sql: string, params: readonly SqlValue[], then: (rows: Row[]) => void): void {
+    this.#step({ sql, params, then });
+  }
+
+  /**
+   * Within a write: restores memory if the write fails (its plan, a statement, the commit, the
+   * flush), newest hook first, before the next write is planned. Must not throw.
+   */
+  undo(restore: () => void): void {
+    this.#context('undo').undo(restore);
+  }
+
+  /**
+   * Within a write: `run` as a blocking write right after this one, in the same commit, whatever
+   * the commit's bounds. It fails alone, said on stderr, its write kept.
+   */
+  followUp(run: () => void): void {
+    const context = this.#context('followUp');
+    if (context.kind === 'tx') throw new Error('followUp is only available within a write.');
+    context.followUps.push(run);
+  }
+
+  #context(what: string): WriteContext {
+    if (this.#current === undefined) throw new Error(`${what} is only available within a write.`);
+    return this.#current;
+  }
+
+  #step(step: Step): void {
+    const context = this.#context('A statement');
+    if (context.planned) {
+      context.steps.push(step);
+    } else {
+      execute(this.#prepare(step.sql), step)?.();
+    }
+  }
+
+  /** Runs `run` with `context` as the write going on. */
+  #within<T>(context: WriteContext, run: () => T): T {
+    const outer = this.#current;
+    this.#current = context;
+    try {
+      return run();
+    } finally {
+      this.#current = outer;
+    }
+  }
+
+  /**
+   * Runs a write's function in a savepoint of its own and, if it planned, its statements right
+   * after (the local executor): on an error, all of it is rolled back. Returns what the function
+   * returned. The rows `runReturning` asked for reach their callbacks before the savepoint ends,
+   * so one that throws fails the write.
+   */
+  #execute(write: Queued): unknown {
+    const context = new WriteContext(write.planned ? 'planned' : 'blocking');
+    write.context = context;
+    return savepoint(this.#connection, () => {
+      const value = this.#within(context, write.run);
+      const delivered: (() => void)[] = [];
+      for (const step of context.steps) {
+        const deliver = execute(this.#prepare(step.sql), step);
+        if (deliver !== undefined) delivered.push(deliver);
+      }
+      for (const deliver of delivered) deliver();
+      return value;
     });
   }
 
@@ -426,35 +607,43 @@ export class Store {
       frames = this.#frames();
       this.#connection.exec('BEGIN IMMEDIATE');
     } catch (error) {
-      for (const write of batch) write.reject(error);
+      for (const write of [...batch].reverse()) write.reject(error);
       return [];
     }
     const done: [write: Queued, value: unknown][] = [];
     const changed = () => Number(this.#prepare('SELECT total_changes() AS count').get()?.count);
     const start = changed();
-    let remaining: Queued[] = [];
-    for (const [i, write] of batch.entries()) {
+    let ran = 0;
+    const pending = [...batch];
+    for (let write = pending.shift(); write !== undefined; write = pending.shift()) {
+      ran++;
       try {
-        done.push([write, savepoint(this.#connection, write.run)]);
+        done.push([write, this.#execute(write)]);
+        // Right after it, in the same commit, whatever the bounds.
+        pending.unshift(...this.#followUps(write));
       } catch (error) {
         write.reject(error);
         if (!this.#connection.isTransaction) {
           // SQLite rolled the whole transaction back (as on a full disk): what the batch wrote
           // before is gone too, and the writes after it are a batch of their own.
-          for (const [lost] of done) lost.reject(error);
-          return batch.slice(i + 1);
+          for (const [lost] of [...done].reverse()) lost.reject(error);
+          return pending.filter(({ followUp }) => followUp === undefined);
         }
       }
-      if (i + 1 >= COMMIT_WRITES || changed() - start >= COMMIT_ROWS) {
-        remaining = batch.slice(i + 1);
+      if (
+        pending[0] !== undefined &&
+        pending[0].followUp === undefined &&
+        (ran >= COMMIT_WRITES || changed() - start >= COMMIT_ROWS)
+      ) {
         break;
       }
     }
+    const remaining = pending;
     try {
       this.#connection.exec('COMMIT');
     } catch (error) {
       rollback(this.#connection);
-      for (const [lost] of done) lost.reject(error);
+      for (const [lost] of [...done].reverse()) lost.reject(error);
       return remaining;
     }
     this.#unflushed.push({
@@ -462,7 +651,7 @@ export class Store {
         for (const [write, value] of done) write.resolve(value);
       },
       reject: (error) => {
-        for (const [write] of done) write.reject(error);
+        for (const [write] of [...done].reverse()) write.reject(error);
       },
       frames,
       commit: ++this.#commits,
@@ -470,6 +659,23 @@ export class Store {
     this.#flushLog();
     this.#committed();
     return remaining;
+  }
+
+  /** The follow-ups a write that ran gave, as blocking writes to run right after it. */
+  #followUps({ context }: Queued): Queued[] {
+    return (context?.followUps ?? []).map((run) => {
+      const followUp: Queued = {
+        run,
+        planned: false,
+        followUp: true,
+        resolve: () => undefined,
+        reject: (error) => {
+          followUp.context?.restore();
+          console.error('A follow-up write failed:', error);
+        },
+      };
+      return followUp;
+    });
   }
 
   /**
@@ -536,8 +742,9 @@ export class Store {
     );
     this.#forgetting = this.#forget(first).finally(() => {
       // Refuse new work at once, and finish the best-effort rollback before rejecting commits.
-      for (const commit of lost) commit.reject(failed);
-      for (const write of queued) write.reject(failed);
+      // Newest first, so each restores memory over what the writes after it staged.
+      for (const commit of [...lost].reverse()) commit.reject(failed);
+      for (const write of queued.reverse()) write.reject(failed);
     });
     void this.#forgetting.catch((error: unknown) => {
       console.error('Could not finish closing the core’s database after its failed flush:', error);
@@ -650,6 +857,22 @@ export class Store {
   }
 }
 
+/**
+ * Runs a write's statement; returns what hands its rows to its callback, if it has one, to run
+ * once the rest of the write's statements have.
+ */
+function execute(statement: Statement, { params, expect, then }: Step): (() => void) | undefined {
+  if (then !== undefined) {
+    const rows = statement.all(...params);
+    return () => {
+      then(rows);
+    };
+  }
+  const { changes } = statement.run(...params);
+  if (expect !== undefined && Number(changes) !== expect.changes) throw new Error(expect.error);
+  return undefined;
+}
+
 function closed(): Error {
   return new Error('The core’s database is closed.');
 }
@@ -662,17 +885,34 @@ function reason(error: unknown): string {
  * What the stores kept in the database (canvas memory, the run journal) read and write it through:
  * the open store, or, when it couldn't be opened, one that refuses (`unopened`).
  */
-export type Database = Pick<Store, 'prepare' | 'write'>;
+export type Database = Pick<
+  Store,
+  | 'prepare'
+  | 'write'
+  | 'writeBlocking'
+  | 'run'
+  | 'runExpecting'
+  | 'runReturning'
+  | 'undo'
+  | 'followUp'
+>;
 
 /**
  * The database of a core whose store couldn't be opened: every read and write fails, saying `why`,
  * so the core journals nothing, and sends nothing whose record must be on disk first.
  */
 export function unopened(why: string): Database {
+  const refuse = (): never => {
+    throw new Error(why);
+  };
   return {
-    prepare: () => {
-      throw new Error(why);
-    },
+    prepare: refuse,
     write: () => Promise.reject(new Error(why)),
+    writeBlocking: () => Promise.reject(new Error(why)),
+    run: refuse,
+    runExpecting: refuse,
+    runReturning: refuse,
+    undo: refuse,
+    followUp: refuse,
   };
 }

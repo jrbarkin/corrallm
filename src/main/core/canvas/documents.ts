@@ -547,7 +547,7 @@ export class Documents {
     return this.#queue(canvas, async () => {
       const live = this.#lives.get(canvas);
       if (live === undefined) throw new Error(NOT_LOADED);
-      await this.#deps.store.write(() => {
+      await this.#deps.store.writeBlocking(() => {
         this.#ensure(live, live.createdBy ?? 'you');
       });
       live.kept = true;
@@ -752,7 +752,7 @@ export class Documents {
           if (open !== undefined) throw new OpFailure('refused', saveRefusal(open));
         }
         const { text, hash } = this.#text(live.document);
-        await store.write(() => {
+        await store.writeBlocking(() => {
           this.#ensure(live, 'you');
           store
             .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
@@ -948,7 +948,7 @@ export class Documents {
     const bytes = read ?? (await this.#file(canvas))?.text;
     const written = bytes !== undefined && sha256(bytes) === live.writingHash;
     const { store } = this.#deps;
-    await store.write(() => {
+    await store.writeBlocking(() => {
       if (written) {
         store
           .prepare(
@@ -1043,7 +1043,7 @@ export class Documents {
   /** Writes what `within` does in a write of its own: what tells of it, once it is on disk. */
   async #writeAlone(within: () => Told | undefined): Promise<Told | undefined> {
     let told: Told | undefined;
-    await this.#deps.store.write(() => {
+    await this.#deps.store.writeBlocking(() => {
       told = within();
     });
     return told;
@@ -1092,7 +1092,7 @@ export class Documents {
     let made: Made | undefined;
     let led: Staged | undefined;
     try {
-      await this.#deps.store.write(() => {
+      await this.#deps.store.writeBlocking(() => {
         this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
         // Its rows hold them now: counted there.
         if (creating !== undefined) this.#creating.delete(creating);

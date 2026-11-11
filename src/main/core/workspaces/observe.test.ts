@@ -422,7 +422,7 @@ describe('when it reads', () => {
     store = await openTestStore(folder);
     canvas = newCanvasId();
     other = newCanvasId();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       const memory = new CanvasMemory(store);
       memory.ensure(canvas);
       memory.ensure(other);

@@ -680,7 +680,7 @@ describe('a canvas’s document', () => {
     const canvas = newCanvasId();
     await made(canvas, canvasOf(canvas));
     const [refused, sent] = await Promise.allSettled([
-      store.write(() =>
+      store.writeBlocking(() =>
         store
           .prepare(
             `INSERT INTO queue_item (canvas_id, agent_id, id, place, kind, body, rev, by_party)
@@ -688,7 +688,7 @@ describe('a canvas’s document', () => {
           )
           .run(canvas),
       ),
-      store.write(() =>
+      store.writeBlocking(() =>
         store
           .prepare(
             `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
@@ -993,7 +993,7 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
   it('keeps a draft discarded whose agents’ work a workspace holds, all of it', async () => {
     const draft = newCanvasId();
     await made(draft, canvasOf(draft));
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare(
           `INSERT INTO repository (id, picked_root, real_root, common_dir, identity, root_kind,

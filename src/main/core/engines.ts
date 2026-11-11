@@ -104,7 +104,7 @@ export interface EnginesDeps {
   /** Every canvas's loop breaker counts, in the profile's database (B21 C6). */
   loops: LoopTable;
   /** The profile's database, whose commits hold what changes together. */
-  store: Pick<Database, 'write'>;
+  store: Pick<Database, 'writeBlocking'>;
   usage: Pick<UsageReadings, 'state' | 'subscribe' | 'exhaust' | 'exhausted'>;
   files: ProjectFiles;
   /** The environment agents run in (environment.ts). */
@@ -596,7 +596,7 @@ export class Engines {
     });
     if (moving.length === 0) return;
     const done: Staged[] = [];
-    await this.#deps.store.write(
+    await this.#deps.store.writeBlocking(
       () => {
         for (const { running, seq } of moving) {
           done.push(this.#journalWithin(running, false));
@@ -1360,7 +1360,7 @@ export class Engines {
     clearTimeout(running.timer);
     running.timer = undefined;
     let done: Staged | undefined;
-    await this.#deps.store.write(
+    await this.#deps.store.writeBlocking(
       () => {
         done = this.#journalWithin(running, true);
       },

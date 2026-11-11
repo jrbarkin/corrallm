@@ -335,7 +335,7 @@ describe.skipIf(process.platform === 'win32')('a crash at each phase, and the re
       ...job.intent,
       destination: { ...job.intent.destination, identity: before },
     });
-    await w.store.write(() => {
+    await w.store.writeBlocking(() => {
       w.store
         .prepare('UPDATE merge_job SET intent = ?, intent_hash = ? WHERE id = ?')
         .run(intent, createHash('sha256').update(intent).digest('hex'), job.id);

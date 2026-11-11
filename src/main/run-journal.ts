@@ -410,7 +410,7 @@ export class RunJournal {
 
   /** Writes to the database: resolves once the commit holding it returned. */
   #write<T>(write: () => T, failed?: (error: unknown) => void): Promise<T> {
-    const written = this.#deps.store.write(write, failed);
+    const written = this.#deps.store.writeBlocking(write, failed);
     this.#writing = Promise.all([this.#writing, written.catch(() => undefined)]);
     return written;
   }

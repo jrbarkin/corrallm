@@ -191,7 +191,7 @@ export async function checkStore(store: Store): Promise<string> {
   const seen = [`SQLite ${version}`, 'WAL', 'synchronous NORMAL'];
   if (process.platform === 'darwin') seen.push('fullfsync');
   seen.push('its other pragmas as set');
-  await store.write(() => {
+  await store.writeBlocking(() => {
     store.exec('CREATE TABLE selftest (value TEXT NOT NULL) STRICT');
     store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
   });

@@ -156,7 +156,7 @@ async function keepReference(): Promise<void> {
     });
     await messages.durable();
     const reviews = new FileReviews({ store, newId: () => 'review' });
-    await store.write(() => {
+    await store.writeBlocking(() => {
       journal.moveRead(CANVAS, 'outside:orchestrator', messages.seqOf(sent.id) ?? 0);
       reviews.raiseWithin(CANVAS, 'f'.repeat(64), SUMMARY);
       store
@@ -437,7 +437,7 @@ describe('a profile at schema 3', () => {
     const store = await openTestStore(profile, QUIET);
     const memory = new CanvasMemory(store);
     const workspaces = new WorkspaceStore({ store, now: () => 1000 });
-    await store.write(() => {
+    await store.writeBlocking(() => {
       memory.ensure(CANVAS);
     });
     await workspaces.write((w) => {
