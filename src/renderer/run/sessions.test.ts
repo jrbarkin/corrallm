@@ -14,7 +14,8 @@ import { PromptId } from '../../shared/model/prompts';
 import { NEW_SESSION } from '../../shared/model/session';
 import { sessionView } from '../../shared/model/views';
 import type { MessageView } from '../../shared/model/views';
-import { AgentId } from '../../shared/api/ids';
+import { AgentId, MessageId } from '../../shared/api/ids';
+import { handoff } from '../../shared/model/test-b19';
 import { catalog } from '../catalog';
 import type { SessionFeatures } from '../../shared/features';
 import { ApiError } from '../api/client';
@@ -500,4 +501,59 @@ it('shows the features its summary projects, and none while no generation is rea
   expect(sessionDisplay(ready.summary, ready).features).toEqual(features);
   const waiting = sessionView(AgentId.parse('a'), connection, NEW_SESSION);
   expect(sessionDisplay(waiting.summary, waiting).features ?? null).toBeNull();
+});
+
+it('retains native history across canvas edits while updating queued handoff sender names', async () => {
+  const core = fakeCore();
+  const canvas = newCanvasId();
+  const view = sessionView(AgentId.parse('a'), 'claude-code.sdk', {
+    ...NEW_SESSION,
+    entries: Array.from({ length: 300 }, (_, i) => ({
+      kind: 'text' as const,
+      id: `text-${String(i)}`,
+      text: 'Native history',
+    })),
+  });
+  core.snapshot(`session:${canvas}:a`, view);
+  const offered = handoff('lead', 'a', { canvas });
+  const messages = {
+    items: { [offered.id]: offered },
+    order: [MessageId.parse(offered.id)],
+    next: '',
+  };
+  const initial = [
+    { id: 'lead', data: { label: 'Lead' } },
+    { id: 'other', data: { label: 'Other' } },
+  ];
+  const hook = renderHook(
+    ({ nodes }) => useDisplayedSession(canvas, 'a', core.topics, undefined, messages, nodes),
+    { initialProps: { nodes: initial } },
+  );
+  try {
+    await waitFor(() => {
+      expect(hook.result.current.entries).toHaveLength(300);
+    });
+    expect(hook.result.current.queued[0]?.from).toBe('Lead');
+    const entries = hook.result.current.entries;
+    act(() => {
+      hook.rerender({
+        nodes: initial.map((node) =>
+          node.id === 'other' ? { ...node, data: { label: 'Changed elsewhere' } } : node,
+        ),
+      });
+    });
+    expect(hook.result.current.entries).toBe(entries);
+    act(() => {
+      hook.rerender({
+        nodes: initial.map((node) =>
+          node.id === 'lead' ? { ...node, data: { label: 'Renamed lead' } } : node,
+        ),
+      });
+    });
+    expect(hook.result.current.queued[0]?.from).toBe('Renamed lead');
+    expect(hook.result.current.entries).toBe(entries);
+  } finally {
+    hook.unmount();
+    core.dispose();
+  }
 });

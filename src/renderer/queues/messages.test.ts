@@ -113,3 +113,50 @@ it('reconciles a native restart record with the observed live session without ch
     submission: { status: 'cancelled', unresolved: true },
   });
 });
+
+it('refreshes a projected submission when its reply arrives or leaves, even if the original row is unchanged', () => {
+  const node: CanvasNode = {
+    id: 'a',
+    type: 'agent',
+    position: { x: 0, y: 0 },
+    data: { label: 'A' },
+  };
+  const original: MessageView = {
+    id: crypto.randomUUID(),
+    canvas: newCanvasId(),
+    from: 'you',
+    to: 'agent:a',
+    kind: 'text',
+    origin: 'manual',
+    body: 'Original',
+    at: 1,
+    state: 'replied',
+  };
+  const reply: MessageView = {
+    ...original,
+    id: crypto.randomUUID(),
+    from: 'agent:a',
+    to: 'you',
+    replyTo: original.id,
+    body: 'Stopped',
+    turn: { status: 'cancelled', reason: 'interrupted' },
+  };
+  const topic = (...messages: MessageView[]) => ({
+    items: Object.fromEntries(messages.map((message) => [message.id, message])),
+    order: messages.map((message) => MessageId.parse(message.id)),
+    next: '',
+  });
+  const before = messageQueues([node], topic(original));
+  const after = messageQueues([node], topic(original, reply));
+  expect(after[0]).not.toBe(before[0]);
+  expect(after[0]?.type === 'agent' && after[0].data.queue?.[0]).toMatchObject({
+    submission: { status: 'cancelled', reply: 'Stopped', result: reply.turn },
+  });
+  const removed = messageQueues([node], topic(original));
+  expect(removed[0]?.type === 'agent' && removed[0].data.queue?.[0]).toMatchObject({
+    submission: { status: 'completed' },
+  });
+  expect(removed[0]?.type === 'agent' && removed[0].data.queue?.[0]).not.toHaveProperty(
+    'submission.reply',
+  );
+});

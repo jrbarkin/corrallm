@@ -5,6 +5,8 @@ import type { ArgsOf } from '../../shared/api/registry';
 import type { Session } from '../../shared/model/session';
 import { PromptCard } from '../agent/PromptCard';
 import type { OwnerPromptEntry } from '../agent/PromptCard';
+import { SettledLines } from '../agent/Settled';
+import type { Names } from '../agent/records';
 import { OpenLinkContext } from '../open-link';
 import type { TerminalBackend } from './backend';
 import { isMac, useOptionIsMeta } from './keyboard';
@@ -54,6 +56,7 @@ export function TerminalPane({
   onStart,
   onUnqueue,
   onPromptReply,
+  names,
   screens = createScreen,
 }: {
   agentId: string;
@@ -75,6 +78,8 @@ export function TerminalPane({
   onUnqueue: (queuedId: string) => void;
   onPromptReply?:
     ((need: string, answer: ArgsOf<'reply'>['answer']) => Promise<unknown>) | undefined;
+  /** How its settled lines name a party (the canvas's names). */
+  names?: Names;
   /** Makes the terminal (xterm.js; a fake in tests). */
   screens?: ScreenFactory;
 }) {
@@ -240,6 +245,7 @@ export function TerminalPane({
             />
           ))}
         {ask}
+        <SettledLines entries={session.entries} {...(names ? { names } : {})} />
         {information?.kind === 'notice' && information.id !== dismissedInfo && (
           <p className="agent-terminal-warning" role="note">
             {information.text}
@@ -268,16 +274,19 @@ export function TerminalPane({
         {session.queued.length > 0 && (
           <ul className="agent-queued" aria-label="Queued messages">
             {session.queued.map((queued) => (
-              <li key={queued.id}>
-                {queued.text}
-                <button
-                  type="button"
-                  aria-label={`Take back queued message: ${queued.text}`}
-                  title="Take it off the queue"
-                  onClick={() => {
-                    onUnqueue(queued.id);
-                  }}
-                />
+              <li key={queued.id} data-from={queued.from}>
+                {queued.from === undefined ? queued.text : `From ${queued.from}: ${queued.text}`}
+                {/* A hand-off from a queue is the run's: Stop its run to take it back. */}
+                {queued.from === undefined && (
+                  <button
+                    type="button"
+                    aria-label={`Take back queued message: ${queued.text}`}
+                    title="Take it off the queue"
+                    onClick={() => {
+                      onUnqueue(queued.id);
+                    }}
+                  />
+                )}
               </li>
             ))}
           </ul>
