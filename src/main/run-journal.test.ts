@@ -770,6 +770,35 @@ describe('RunJournal', () => {
     );
   });
 
+  it('writes a save, an open and a close as planned writes, which read nothing', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const blocking = vi.spyOn(store, 'writeBlocking');
+    await runs.opened(canvas);
+    await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
+    await runs.saved(canvas);
+    await runs.close(canvas);
+    expect(blocking).not.toHaveBeenCalled();
+    expect(ran(canvas)).toMatchObject({ updated_at: 123 });
+    expect(open()).toEqual([]);
+  });
+
+  it('opens a canvas after every other open, whatever the clock says', async () => {
+    const [canvas] = await named('team.corral');
+    const [other] = await named('other.corral');
+    const runs = journal();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(5_000_000_000_000);
+    await runs.opened(canvas);
+    // The clock is set back: the next is still opened after the newest.
+    clock.mockReturnValue(10);
+    await runs.opened(other);
+    expect(open()).toEqual([other, canvas]);
+    await runs.saved(canvas);
+    expect(open()).toEqual([canvas, other]);
+    await runs.open(other, false);
+    expect(open()).toEqual([canvas, other]);
+  });
+
   it('fails every read and write, saying why, when the database couldn’t be opened', async () => {
     const why = 'The core’s database could not be opened (disk I/O error).';
     const runs = journal(unopened(why));

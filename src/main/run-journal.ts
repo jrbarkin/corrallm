@@ -155,7 +155,7 @@ export class RunJournal {
       } catch (error) {
         // Deleted, so that it is neither read nor said again.
         await this.#write(() => {
-          this.#deps.store.prepare('DELETE FROM run WHERE canvas_id = ?').run(canvas);
+          this.#deps.store.run('DELETE FROM run WHERE canvas_id = ?', canvas);
         });
         const why = error instanceof Error ? error.message : String(error);
         entry.warning = [
@@ -395,7 +395,7 @@ export class RunJournal {
    */
   async close(canvas: CanvasId): Promise<void> {
     await this.#write(() => {
-      this.#deps.store.prepare('DELETE FROM open_canvas WHERE canvas_id = ?').run(canvas);
+      this.#deps.store.run('DELETE FROM open_canvas WHERE canvas_id = ?', canvas);
       this.#tell(canvas);
     });
   }
@@ -416,7 +416,7 @@ export class RunJournal {
 
   /** Writes to the database: resolves once the commit holding it returned. */
   #write<T>(write: () => T, failed?: (error: unknown) => void): Promise<T> {
-    const written = this.#deps.store.writeBlocking(write, failed);
+    const written = this.#deps.store.write(write, failed);
     this.#writing = Promise.all([this.#writing, written.catch(() => undefined)]);
     return written;
   }
