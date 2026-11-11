@@ -9,6 +9,7 @@ import { MESSAGE_ORIGINS } from '../../model/messages';
 import type { OpName } from '../surface';
 import { canvasOps } from './canvas';
 import { conversationOps, Message } from './conversation';
+import { leadOps } from './leads';
 import { b9aWorktreeOps } from './project';
 import { settingsOps } from './settings';
 import { usageOps } from './usage';
@@ -33,6 +34,7 @@ const State = z.union([
   canvasOps['canvas.list'].output,
   conversationOps.needs.output,
   b9aWorktreeOps['worktree.list'].output,
+  leadOps['leads.get'].output,
   z.record(z.string(), z.looseObject({ rev: z.int().min(0), by: z.string() })),
   RunViewSchema,
   z.strictObject({ agents: z.record(AgentId, SessionSummarySchema) }),

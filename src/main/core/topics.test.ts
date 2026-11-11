@@ -366,6 +366,8 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     { topic: 'canvas', canvas: CANVAS },
     { topic: 'needs', canvas: CANVAS },
     { topic: 'worktrees', canvas: CANVAS },
+    // B24 C1: who leads, yours alone, which no token party follows.
+    { topic: 'leads', canvas: CANVAS },
     { topic: 'canvases' },
   ];
   /** The read each topic is: its op and its arguments. */
@@ -373,6 +375,7 @@ describe('T3c: the canvas, canvases and needs topics', () => {
     canvas: ['canvas.get', { canvas: CANVAS }],
     needs: ['needs', { canvas: CANVAS }],
     worktrees: ['worktree.list', { canvas: CANVAS }],
+    leads: ['leads.get', { canvas: CANVAS }],
     canvases: ['canvas.list', {}],
   };
 

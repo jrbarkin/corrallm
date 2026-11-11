@@ -156,6 +156,21 @@ export function isContinuation(
   );
 }
 
+/** Whether a message is a lead's copy of a routed prompt (B24 C5), as its purpose says. */
+export function isLeadCopy(message: Pick<Message, 'purpose'>): boolean {
+  return message.purpose?.type === 'lead-copy';
+}
+
+/** Whether a message is a lead's one notice that a routed prompt no longer waits for it (B24 C5). */
+export function isLeadNotice(message: Pick<Message, 'purpose'>): boolean {
+  return message.purpose?.type === 'lead-notice';
+}
+
+/** Whether a message is a host-built card to a lead, or the notice that ends it (B24 C5). */
+export function isLeadTurn(message: Pick<Message, 'purpose'>): boolean {
+  return isLeadCopy(message) || isLeadNotice(message);
+}
+
 /**
  * Whether a message is a queue hand-off (B19 C1): one queue's Message item for another agent, the
  * queue's agent's message to it, as its purpose says (never as its task, parties or origin do).

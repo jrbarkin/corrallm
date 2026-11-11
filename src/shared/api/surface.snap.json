@@ -42,6 +42,9 @@
     "api.agent.setConnection",
     "api.agent.setFallback",
     "api.agent.setHandoff",
+    "api.agent.setLead",
+    "api.outside.setGrant",
+    "api.leads.get",
     "api.agent.setSettings",
     "api.agent.setRole",
     "api.queue.add",
@@ -294,6 +297,9 @@
     "agent.setConnection": "permissions",
     "agent.setFallback": "permissions",
     "agent.setHandoff": "permissions",
+    "agent.setLead": "permissions",
+    "outside.setGrant": "permissions",
+    "leads.get": "permissions",
     "topics.subscribe": "transport",
     "topics.unsubscribe": "transport",
     "usage.setRule": "spending-guard",
@@ -314,11 +320,11 @@
   },
   "schemas": {
     "topics.subscribe": {
-      "input": "8c5be84f0a1a163a",
-      "output": "4d269e043c146951"
+      "input": "80cfdb6b5191e399",
+      "output": "e460d1017e1f11a2"
     },
     "topics.unsubscribe": {
-      "input": "8c5be84f0a1a163a",
+      "input": "80cfdb6b5191e399",
       "output": "647bbd6cc7b4f077"
     },
     "app.info": {
@@ -481,6 +487,18 @@
       "input": "9ec5f7819f183ec2",
       "output": "647bbd6cc7b4f077"
     },
+    "agent.setLead": {
+      "input": "f1fab7178a335132",
+      "output": "647bbd6cc7b4f077"
+    },
+    "outside.setGrant": {
+      "input": "32e7fb28167a51b8",
+      "output": "647bbd6cc7b4f077"
+    },
+    "leads.get": {
+      "input": "41356bc15da6df1b",
+      "output": "ffe492600e4787cf"
+    },
     "queue.add": {
       "input": "6c0526a84b580c24",
       "output": "ebd0120825103788"
@@ -503,15 +521,15 @@
     },
     "status": {
       "input": "41356bc15da6df1b",
-      "output": "6d7e083505dd4133"
+      "output": "1579aa06b8fb35d0"
     },
     "needs": {
       "input": "41356bc15da6df1b",
-      "output": "bd2b51346028e19a"
+      "output": "43fe76931ec00d4d"
     },
     "messages": {
       "input": "aa02e84f7d3e9a8e",
-      "output": "6ff43b8dfeb01fc8"
+      "output": "a78c15fca8fe5a37"
     },
     "message": {
       "input": "1bc3cefb59c8f144",
@@ -519,11 +537,11 @@
     },
     "wait": {
       "input": "d429567b08fb223f",
-      "output": "276ef50894b3f798"
+      "output": "eaf2b3b3a991cffd"
     },
     "reply": {
       "input": "c71a16cffbc733d2",
-      "output": "ca8edf6065e9eb84"
+      "output": "e7db7612fc9ec9d0"
     },
     "withdraw": {
       "input": "c0fce69c0611e40f",

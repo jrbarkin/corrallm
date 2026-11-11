@@ -989,6 +989,10 @@ export async function startWorld(): Promise<{
 }
 
 /** A request id for each fixture that writes, so that a call repeated through another transport dedupes. */
+/** R10's fixtures' request ids (B24 C8): apart from every other fixture's. */
+const teamRequest = (n: number) =>
+  `2c3d4e5f-6071-4829-9bac-1d2e3f4a5c${String(n).padStart(2, '0')}`;
+
 const request = (n: number) => `2c3d4e5f-6071-4829-9bac-1d2e3f4a5b${String(n).padStart(2, '0')}`;
 /** B21's asks' and their answers' request ids. */
 const asked = (n: number) => `5d4e5f60-7182-4930-8bad-2e3f4a5b6c${String(n).padStart(2, '0')}`;
@@ -1020,6 +1024,9 @@ const BRANCH_MERGE = {
 /** A request id for each fixture of the worktrees' setup that writes. */
 const setupRequest = (n: number) =>
   `4e5f6071-8293-4a4b-9cbd-3f4a5b6c7d${String(n).padStart(2, '0')}`;
+/** A request id for each fixture of who leads that writes (B24 C1). */
+const leadRequest = (n: number) =>
+  `7f8091a2-b3c4-4d5e-8f60-7b8c9d0e1f${String(n).padStart(2, '0')}`;
 
 /** A target the lead's team holds (its helper, and its own group), and every outside token reaches. */
 const TARGETS = [
@@ -1324,6 +1331,13 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         adapter: 'codex',
         request: request(27),
       },
+      // R10: at a point outside the lead's frame, so nested in no agent of its team.
+      team: {
+        canvas: CANVAS,
+        at: { x: -4000, y: -4000 },
+        adapter: 'codex',
+        request: teamRequest(2),
+      },
     },
   },
   'canvas.spawnAgent': {
@@ -1339,6 +1353,8 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     meetsRule: {
       'new-agent': { canvas: CANVAS, from: 'helper', relation: 'peer', request: request(28) },
+      // R10: a peer of the lead itself stands outside it.
+      team: { canvas: CANVAS, from: 'lead', relation: 'peer', request: teamRequest(3) },
     },
   },
   'canvas.link': {
@@ -1640,6 +1656,63 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
     },
   },
+  // B24 C1: yours alone (the permissions deviation). You make the stranger a lead, then no lead,
+  // so the world reads as it began; its leads as the world says them (`leads`) are unchanged.
+  'agent.setLead': {
+    valid: [
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: true, plans: false, approvals: true } },
+        request: leadRequest(0),
+      },
+      { canvas: CANVAS, agent: 'stranger', lead: null, request: leadRequest(1) },
+    ],
+    fresh: ['revs'],
+    invalid: [
+      { canvas: CANVAS, agent: 'stranger' },
+      { canvas: CANVAS, agent: '', lead: null },
+      { canvas: CANVAS, agent: 'stranger', lead: true },
+      { canvas: CANVAS, agent: 'stranger', lead: { grants: { questions: true } } },
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: 'yes', plans: false, approvals: false } },
+      },
+      // No grant beyond the three (Q17), and none "always".
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: true, plans: true, approvals: true, roles: true } },
+      },
+      {
+        canvas: CANVAS,
+        agent: 'stranger',
+        lead: { grants: { questions: true, plans: true, approvals: true }, always: true },
+      },
+      { canvas: 'nope', agent: 'stranger', lead: null },
+    ],
+  },
+  // B24 C1 (Q3): yours alone. Taking back what the world never granted changes nothing; granting
+  // needs a live write token of that name, which no caller the world makes up has.
+  'outside.setGrant': {
+    valid: [{ canvas: CANVAS, name: 'orchestrator', approvals: false, request: leadRequest(2) }],
+    fresh: ['revs'],
+    invalid: [
+      { canvas: CANVAS, name: 'orchestrator' },
+      { canvas: CANVAS, name: '', approvals: true },
+      { canvas: CANVAS, name: '-orchestrator', approvals: true },
+      { canvas: CANVAS, name: 'x'.repeat(33), approvals: true },
+      { canvas: CANVAS, name: 'orchestrator', approvals: 'yes' },
+      { canvas: CANVAS, name: 'orchestrator', approvals: true, hours: 12 },
+      { canvas: CANVAS, token: 'orchestrator', approvals: true },
+      { canvas: 'nope', name: 'orchestrator', approvals: false },
+    ],
+  },
+  'leads.get': {
+    valid: [{ canvas: CANVAS }],
+    invalid: [{ canvas: 'nope' }, { canvas: CANVAS, agent: 'lead' }, 'text', null],
+  },
   'agent.setSettings': {
     valid: [
       {
@@ -1885,6 +1958,12 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         canvas: CANVAS,
         ops: [{ op: 'canvas.addAgent', args: { at: { x: 3300, y: 0 }, adapter: 'codex' } }],
         request: request(83),
+      },
+      // R10: a batch reaching outside the lead's team.
+      team: {
+        canvas: CANVAS,
+        ops: [{ op: 'canvas.spawnAgent', args: { from: 'lead', relation: 'peer' } }],
+        request: teamRequest(6),
       },
       role: {
         canvas: CANVAS,

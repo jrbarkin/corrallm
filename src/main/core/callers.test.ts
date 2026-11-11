@@ -277,7 +277,11 @@ describe.each(REGISTRIES)('T3b on %s', (_label, fixtures, world, start) => {
         // The tokens first: yours may change what the rule reads (a pause you set, released).
         // An agent's own node is what R6 (`self`) guards: an outside token has none to meet it.
         const meeting = TOKEN_PARTIES.filter(
-          (p) => inAudience(name, p) && (rule !== 'self' || CALLERS[p].kind === 'agent'),
+          (p) =>
+            inAudience(name, p) &&
+            (rule !== 'self' || CALLERS[p].kind === 'agent') &&
+            // R10 binds a lead alone: a token outside has its canvases, you have all.
+            (rule !== 'team' || p === 'lead'),
         );
         // What the world must be for a call to meet it (R11: a party at its cap), only meanwhile.
         const met = setup.meeting?.(rule as Rule, name);

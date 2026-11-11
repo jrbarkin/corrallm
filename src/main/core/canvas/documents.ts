@@ -35,6 +35,7 @@ import { writeWhole } from '../../whole-file';
 import { OpFailure } from '../call';
 import type { TrustedPath } from '../host';
 import type { Staged } from '../delivery/messages';
+import type { LeadStore } from '../leads';
 import type { Database } from '../store/store';
 import { safeRemovals } from '../workspaces/planner';
 import type { Forks, Losses, Made, Removals, WorkspacePlanner } from '../workspaces/planner';
@@ -130,6 +131,13 @@ export interface DocumentsDeps {
    * document's tests).
    */
   workspaces?: Pick<WorkspacePlanner, 'preflight' | 'within' | 'removed' | 'made'>;
+  /**
+   * Who leads (B24 C1, leads.ts), whatever made a commit: within its write, the row of a lead whose
+   * agent it removes deleted, and one whose adapter, connection or role it changes held; and as a
+   * canvas's document loads, the rows of agents it doesn't have deleted, and those changed since
+   * held. Without it, none (a document's tests).
+   */
+  leads?: Pick<LeadStore, 'within' | 'loaded'>;
   now?: () => number;
   /** A test seam: how many revisions are kept and how often the rest are trimmed. */
   trim?: { kept: number; every: number };
@@ -278,6 +286,26 @@ export class Documents {
   constructor(deps: DocumentsDeps) {
     this.#deps = deps;
     this.#now = deps.now ?? (() => Date.now());
+    // Canvas memory forgets the canvases used least recently with all it keeps of them: the
+    // document loaded of one goes too, once its document is done with what it was doing.
+    deps.memory.subscribe((canvas) => {
+      if (canvas === undefined) this.#letGoOfForgotten();
+    });
+  }
+
+  /** Drops the live document of every canvas kept in rows that canvas memory no longer keeps. */
+  #letGoOfForgotten(): void {
+    for (const [canvas, live] of this.#lives) {
+      if (!live.kept || this.#deps.memory.keeps(canvas)) continue;
+      void this.#queue(canvas, () => {
+        const current = this.#lives.get(canvas);
+        if (current?.kept === true && !this.#deps.memory.keeps(canvas)) {
+          this.#lives.delete(canvas);
+          this.#unsaved.delete(canvas);
+        }
+        return Promise.resolve();
+      });
+    }
   }
 
   /**
@@ -607,36 +635,45 @@ export class Documents {
    * those of changes past their checks on their way to disk included.
    */
   created(
-    party: PartyId,
+    party: PartyId | readonly PartyId[],
     canvas?: CanvasId,
     removing?: Pick<ChangeSet, 'canvas' | 'removed'>,
   ): number {
     const { store } = this.#deps;
+    const parties: readonly PartyId[] = typeof party === 'string' ? [party] : party;
+    if (parties.length === 0) return 0;
+    const marks = parties.map(() => '?').join(', ');
     const kept =
       canvas === undefined
         ? store
-            .prepare(`SELECT count(*) AS n FROM node WHERE created_by = ? AND kind = 'agent'`)
-            .get(party)
+            .prepare(
+              `SELECT count(*) AS n FROM node WHERE created_by IN (${marks}) AND kind = 'agent'`,
+            )
+            .get(...parties)
         : store
             .prepare(
               `SELECT count(*) AS n FROM node
-               WHERE created_by = ? AND kind = 'agent' AND canvas_id = ?`,
+               WHERE created_by IN (${marks}) AND kind = 'agent' AND canvas_id = ?`,
             )
-            .get(party, canvas);
+            .get(...parties, canvas);
     let count = Number(kept?.n ?? 0);
     if (
       removing !== undefined &&
       removing.removed.size > 0 &&
       (canvas === undefined || canvas === removing.canvas)
     ) {
-      // Only this party's rows on the changed canvas count as removals: ids may repeat elsewhere.
+      // Only these parties' rows on the changed canvas count as removals: ids may repeat elsewhere.
       const owned = store
-        .prepare(`SELECT id FROM node WHERE created_by = ? AND kind = 'agent' AND canvas_id = ?`)
-        .all(party, removing.canvas);
+        .prepare(
+          `SELECT id FROM node WHERE created_by IN (${marks}) AND kind = 'agent' AND canvas_id = ?`,
+        )
+        .all(...parties, removing.canvas);
       count -= owned.filter((row) => removing.removed.has(String(row.id))).length;
     }
     for (const one of this.#creating) {
-      if (one.by === party && (canvas === undefined || one.canvas === canvas)) count += one.count;
+      if (parties.includes(one.by) && (canvas === undefined || one.canvas === canvas)) {
+        count += one.count;
+      }
     }
     return count;
   }
@@ -778,6 +815,8 @@ export class Documents {
       this.#lives.set(canvas, kept);
       if (kept.writingHash !== undefined) await this.#settle(canvas, kept, opened?.text);
       await this.#review(kept, opened && { name: opened.name, text: opened.text });
+      // Who leads, of the agents it has (B24 C1): no row outlives its agent.
+      await this.#deps.leads?.loaded(canvas, kept.document);
       return kept;
     }
     let text = opened?.text;
@@ -790,6 +829,7 @@ export class Documents {
     const live = emptyLive(canvas);
     if (text === undefined || document === undefined) {
       this.#lives.set(canvas, live);
+      await this.#deps.leads?.loaded(canvas, live.document);
       return live;
     }
     // Read from its file: kept in rows from now on, under its own id, its hashes with them.
@@ -803,6 +843,7 @@ export class Documents {
       { hashes },
     );
     this.#lives.set(canvas, live);
+    await this.#deps.leads?.loaded(canvas, live.document);
     return live;
   }
 
@@ -1049,6 +1090,7 @@ export class Documents {
     const creators = creatorsAfter(live, rows, changed, creator);
     let staged: Staged | undefined;
     let made: Made | undefined;
+    let led: Staged | undefined;
     try {
       await this.#deps.store.write(() => {
         this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
@@ -1066,10 +1108,14 @@ export class Documents {
           { canvas: next.id, before: live.document, after: next, copies, forks },
           removals,
         );
+        // Who leads, in the same write (B24 C1): a lead's row goes with its agent, and one whose
+        // agent's adapter, connection or role changed is held, whatever made the change.
+        led = this.#deps.leads?.within(next.id, next);
         // Last, so that nothing after it fails the write once it has staged what it holds.
         staged = within?.();
       });
     } catch (error) {
+      led?.undo();
       staged?.undo();
       throw new CommitFailed(error);
     }
@@ -1092,6 +1138,8 @@ export class Documents {
       live.fileHash = hashes.file;
       live.writingHash = undefined;
     }
+    // Who leads as the document now is, before anyone hears of the commit.
+    led?.reveal();
     const commit = { canvas: next.id, rev, by: revision.by, changed, renumbered, live };
     for (const listener of this.#listeners) {
       try {

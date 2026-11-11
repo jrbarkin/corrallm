@@ -4,6 +4,7 @@ import type { JsonSchema } from '../session';
 import type { OpDef } from './define';
 import { agentApiOps } from './agent-api';
 import { agentOps } from './ops/agent';
+import { leadOps } from './ops/leads';
 import { queueOps } from './ops/queue';
 import { appOps } from './ops/app';
 import { batchOps } from './ops/batch';
@@ -42,6 +43,7 @@ export const OPS = {
   ...canvasOps,
   ...batchOps,
   ...agentOps,
+  ...leadOps,
   ...queueOps,
   ...conversationOps,
   ...sessionOps,

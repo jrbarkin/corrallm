@@ -85,6 +85,24 @@ export interface KeptMessage {
 }
 
 /**
+ * Lets the outside orchestrator `name` answer approvals on a kept canvas, while no core has the
+ * profile open: what your `outside.setGrant` writes, for a headless journey that has no window to
+ * give it in (nothing but the app does, and no command line).
+ */
+export async function grantOutside(profile: string, canvas: CanvasId, name: string): Promise<void> {
+  const store = await openTestStore(profile);
+  try {
+    await store.write(() => {
+      store
+        .prepare('INSERT INTO outside_grant (canvas_id, name, changed_at) VALUES (?, ?, ?)')
+        .run(canvas, name, Date.now());
+    });
+  } finally {
+    await store.close();
+  }
+}
+
+/**
  * Keeps messages of a canvas the profile keeps, while no core has it open, as the core would have
  * kept them, in this order.
  */

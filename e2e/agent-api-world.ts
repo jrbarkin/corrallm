@@ -11,10 +11,11 @@ import { expect, test } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 
 import type { ConnectionId } from '../src/shared/adapter';
+import { newCanvasId } from '../src/shared/canvas';
 import { toolName } from '../src/shared/api/registry';
 import type { ResultOf } from '../src/shared/api/registry';
 import type { OpName } from '../src/shared/api/surface';
-import { keepCanvases } from '../src/main/core/store/test-store';
+import { grantOutside, keepCanvases } from '../src/main/core/store/test-store';
 import { canvasAction, dismissStart } from './canvas-actions';
 import { launchApp } from './launch';
 import { closeLastWindow, reopenWindow } from './last-window';
@@ -42,6 +43,8 @@ export interface WorldAgent {
   label: string;
   connection: ConnectionId;
   queue?: unknown[];
+  /** The agent it is nested in (a lead's team). */
+  parent?: string;
 }
 
 /** A turn's scripted calls (see fake-mcp-client.mjs). */
@@ -70,6 +73,7 @@ export async function agentApiWorld({
   links = [],
   rules = [],
   headless = false,
+  grant = false,
   env: extra = {},
   setup,
 }: {
@@ -77,6 +81,8 @@ export async function agentApiWorld({
   links?: [string, string][];
   rules?: Rule[];
   headless?: boolean;
+  /** The orchestrator (the test's token) was let answer approvals before anything starts. */
+  grant?: boolean;
   env?: Record<string, string>;
   /** Writes what the agents' environment should hold before anything starts (the dir given). */
   setup?: (dir: string) => Promise<Record<string, string>>;
@@ -86,7 +92,7 @@ export async function agentApiWorld({
   const project = path.join(dir, 'shop');
   const config = path.join(dir, 'config');
   await Promise.all([mkdir(profile), mkdir(project), mkdir(config)]);
-  const canvas = randomUUID();
+  const canvas = newCanvasId();
   const file = path.join(dir, 'agents.corral');
   await writeFile(
     file,
@@ -94,7 +100,7 @@ export async function agentApiWorld({
       format: 'corrallm',
       version: 3,
       id: canvas,
-      nodes: agents.map(({ id, label, connection, queue }, index) => ({
+      nodes: agents.map(({ id, label, connection, queue, parent }, index) => ({
         id,
         kind: 'agent',
         label,
@@ -102,11 +108,13 @@ export async function agentApiWorld({
         adapter: connection.split('.')[0],
         connection,
         ...(queue === undefined ? {} : { queue }),
+        ...(parent === undefined ? {} : { parent }),
       })),
       links: links.map((pair) => ({ agents: pair })),
     }),
   );
   await keepCanvases(profile, { [canvas]: { file, project } });
+  if (grant) await grantOutside(profile, canvas, 'orchestrator');
   // Only its hash is kept. No app flag mints a token or bypasses the normal endpoint.
   const token = `agent-api-test-${randomUUID()}`;
   await writeFile(
@@ -298,6 +306,8 @@ export async function agentApiWorld({
   return {
     dir,
     canvas,
+    token,
+    url: async () => (await discovery()).url,
     profile,
     project,
     config,

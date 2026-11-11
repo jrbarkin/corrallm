@@ -74,6 +74,8 @@ export interface NeedsItem {
   title: string;
   detail?: string;
   until?: number;
+  /** B24 C3: the lead a prompt is routed to now, and until when it may answer (epoch ms). */
+  routed?: { to: PartyId; until: number };
   choices: NeedChoice[];
   text?: { placeholder: string };
   questions?: NeedQuestion[];

@@ -213,6 +213,20 @@ describe('parseCommand', () => {
     refused(['token', 'new', '--canvas', 'a.corral', 'extra'], /extra/);
   });
 
+  it('makes no lead and grants no outside orchestrator: no command line has such a flag (B24 C1)', () => {
+    for (const flag of ['--lead', '--leads', '--grant', '--grants', '--approvals']) {
+      for (const args of [
+        ['serve', '--canvas', 'm1.corral', flag],
+        ['serve', '--canvas', 'm1.corral', '--new-token', flag],
+        ['token', 'new', '--canvas', 'a.corral', flag],
+        ['token', 'renew', flag],
+      ]) {
+        expect(() => parseCommand(args), args.join(' ')).toThrow(UsageError);
+        expect(() => parseCommand([...args, 'orchestrator']), args.join(' ')).toThrow(UsageError);
+      }
+    }
+  });
+
   it('refuses a command it doesn’t have', () => {
     expect(() => parseCommand([])).toThrow(UsageError);
     expect(() => parseCommand(['run'])).toThrow(/run/);

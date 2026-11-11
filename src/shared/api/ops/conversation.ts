@@ -109,6 +109,11 @@ export const NeedsItem = z.strictObject({
   title: z.string(),
   detail: z.string().optional(),
   until: z.number().optional(),
+  /**
+   * B24 C3: who may answer this prompt besides you, and until when (epoch ms): the lead it is
+   * routed to now. Absent while it is yours alone.
+   */
+  routed: z.strictObject({ to: Party, until: z.number() }).optional(),
   /** A prompt's choices also say what its CLI does with each (B13 C1): yours alone (C11). */
   choices: z.array(NeedChoiceSchema),
   text: z.strictObject({ placeholder: z.string() }).optional(),
@@ -345,6 +350,7 @@ export const b11ConversationOps = {
             'completed',
             'retained',
             'dismissed',
+            'handed-back',
           ])
           .optional(),
         raised: NeedId.optional(),

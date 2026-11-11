@@ -2,6 +2,7 @@ import type { z } from 'zod';
 
 import type { ReplyAnswer } from '../../shared/api/ops/conversation';
 import type { CanvasId } from '../../shared/canvas';
+import type { PartyId } from '../../shared/model/messages';
 import type { NeedsItem } from '../../shared/model/needs';
 import { needFor } from '../../shared/model/prompt-views';
 import type { PromptReader } from '../../shared/model/prompt-views';
@@ -55,6 +56,8 @@ export interface ReplyResult {
     | 'stopped'
     | 'completed'
     | 'retained'
+    /** A routed lead gave a prompt back: it settles nothing and moves up. */
+    | 'handed-back'
     /** A terminal's wait you said isn't one (B13 C7's Not waiting): nothing is recorded. */
     | 'dismissed';
   raised?: string;
@@ -80,7 +83,12 @@ export interface ReplyHandler {
    * Why `answer` isn't one the item takes, if it isn't (invalid). None given: it takes one of its
    * choices, with words only where it takes words.
    */
-  fits?(item: NeedsItem, answer: Answer): string | undefined;
+  fits?(item: NeedsItem, answer: Answer, by: PartyId): string | undefined;
+  /**
+   * B24 C4: why `by`, one the item names, may not give `answer` (the one allowance: a lead's or an
+   * outside grantee's), if it may not. None: the item's choices decide.
+   */
+  permits?(canvas: CanvasId, item: NeedsItem, answer: Answer, by: PartyId): string | undefined;
   /** Acts on an answer the router validated: how the item was settled. */
   act(canvas: CanvasId, item: NeedsItem, answer: Answer, ctx: OpContext): Promise<ReplyResult>;
 }
@@ -167,7 +175,9 @@ export class ReplyRouter {
         `Only ${andList(item.by.map((party) => (party === 'you' ? 'the user' : partyText([], party))))} may answer ${to}: ${title}.`,
       );
     }
-    const unfit = (handler.fits ?? fitsChoices)(item, answer);
+    const banned = handler.permits?.(id, item, answer, by);
+    if (banned !== undefined) throw new OpFailure('refused', banned);
+    const unfit = (handler.fits ?? fitsChoices)(item, answer, by);
     if (unfit !== undefined) throw new OpFailure('invalid', unfit);
     const choice = item.choices.find(({ value }) => value === picked(answer));
     if (choice?.humanOnly !== undefined && by !== 'you') {

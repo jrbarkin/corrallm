@@ -28,7 +28,9 @@ import type { StalledTurns } from '../stalled';
 import type { PromptOwner } from '../prompts/owner';
 import type { TokenStore } from '../tokens';
 import type { CommandLink } from '../command-link';
+import type { LeadStore } from '../leads';
 import { agentOps } from './agent';
+import { leadOps } from './leads';
 import { queueOps } from './queue';
 import { appOps } from './app';
 import { batchOps } from './batch';
@@ -121,8 +123,22 @@ export interface OpServices {
    */
   documents: Pick<
     Documents,
-    'create' | 'keep' | 'drop' | 'forget' | 'applyFile' | 'keepFile' | 'createdBy'
+    | 'create'
+    | 'keep'
+    | 'drop'
+    | 'forget'
+    | 'applyFile'
+    | 'keepFile'
+    | 'createdBy'
+    | 'load'
+    | 'loaded'
+    | 'between'
   >;
+  /**
+   * Who leads on each canvas, and the outside orchestrators you let answer its approvals (B24 C1:
+   * leads.ts), kept on this machine.
+   */
+  leads: Pick<LeadStore, 'set' | 'setGrant' | 'view' | 'granted' | 'fingerprintOf'>;
   /** What the core says of each canvas it keeps: its entities, and the list of them. */
   states: Pick<CanvasStates, 'read' | 'list' | 'keeps'>;
   /** The proposals waiting for you on each canvas. */
@@ -138,7 +154,7 @@ export interface OpServices {
   /** Whatever needs the desktop. */
   host: HostServices;
   /** The outside tokens: whether one was replaced or expires, as a call it made still goes on. */
-  tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf'>;
+  tokens: Pick<TokenStore, 'revoked' | 'onRevoke' | 'expiresOf' | 'live'>;
   /**
    * Whether the agent's session now has listed corrallm's tools, as the session authority heard
    * it (B21 §9 C1): `agents`' `api`. None: no agent's has.
@@ -178,6 +194,7 @@ export function implementations(services: OpServices): Implementations {
     ...canvasToolsOps(services),
     ...batchOps(),
     ...agentOps(services),
+    ...leadOps(services),
     ...queueOps(),
     ...conversationOps(services),
     ...replyOps(services),

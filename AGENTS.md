@@ -4,11 +4,11 @@ corrallm is an Electron desktop app and a headless core for orchestrating agents
 Agents run native CLIs through adapter connections; the core owns documents, messages and durable state.
 The renderer projects the core's topics and sends gestures through the operation registry.
 
-These are the canonical instructions for every agent. Before changing an area, read its architecture doc. A behaviour change updates that area's doc in the same commit. Keep instructions here and implementation detail in the docs; CLAUDE.md only imports this file.
+Canonical instructions for every agent. Before changing an area, read its architecture doc. A behaviour change updates that area's doc in the same commit. Instructions live here, detail in the docs; CLAUDE.md only imports this file.
 
 ## Read before changing
 
-Start with [the overview](docs/architecture/overview.md). Paths include their tests.
+Start with [the overview](docs/architecture/overview.md). Paths include tests.
 
 | Code area                                                                            | Read                                                                                       |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
@@ -35,7 +35,7 @@ Start with [the overview](docs/architecture/overview.md). Paths include their te
 
 ## Commands and done gate
 
-Requires Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
+Needs Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
 | Command                                      | Purpose                                                                          |
 | -------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -59,8 +59,8 @@ See [toolchain](docs/architecture/toolchain.md) for executable overrides, build 
 
 ## Testing rules
 
-- Test-driven by default. For a bug, first write a test that reproduces it and fails, then fix it, then confirm the test passes. For new behaviour, write the tests with (or before) the code.
-- Assert behaviour callers rely on, not incidental details. Prefer unit tests; e2e is for real app interactions, CSP and packaging.
+- Test-driven by default. For a bug, write a test that reproduces it and fails, fix it, then confirm it passes. For new behaviour, write tests with (or before) the code.
+- Assert behaviour callers rely on, not incidentals. Prefer unit tests; e2e is for real app interactions, CSP and packaging.
 - Tests never run the real CLIs. `e2e/launch.ts` defaults `CORRALLM_AGENT_PATHS` to `{}`; override only with a JSON map of fakes. Session/core tests use `src/main/sessions/fake.ts`; engine tests use `src/main/core/engine/test-backend.ts`; renderer tests use fake core/topic fixtures from `src/renderer/test-api.ts`. Connector tests drive fake CLIs against sanitized recorded fixtures. Adapter docs describe their fakes and recordings; keep config/state in throwaway folders, never the user's profile.
 - `src/shared/test-catalog.json` is never edited by hand. After descriptor changes regenerate it with `pnpm exec vitest run --project main src/main/sessions/adapters.test.ts -u`. Test catalog consumers with `src/shared/test-made-up.ts` too; shared tests never import the renderer.
 - Every test file that makes a run uses `liveRun` and `afterEach(expectRestorable)` from `src/main/core/engine/run/test-restore.ts`. A run's checkpoint must restore whatever it holds.
@@ -70,7 +70,7 @@ See [toolchain](docs/architecture/toolchain.md) for executable overrides, build 
 
 ## Security rules (do not regress)
 
-Read [security mechanisms](docs/architecture/security.md) before touching these paths. CLI-specific argv, trust, hooks and R42 ID rules belong in the [Claude Code](docs/architecture/claude-code.md) and [Codex](docs/architecture/codex.md) docs.
+Read [security mechanisms](docs/architecture/security.md) first. CLI-specific argv, trust, hooks and R42 ID rules live in the [Claude Code](docs/architecture/claude-code.md) and [Codex](docs/architecture/codex.md) docs.
 
 - Never enable `nodeIntegration`, and never disable `contextIsolation`, `sandbox` or `webSecurity`. No `<webview>`.
 - Expose only typed, fixed channel/operation functions through `contextBridge`. Never expose `ipcRenderer`, a port, generic invoke/send, a function taking a channel/operation name, or Electron event objects to the page.
@@ -80,6 +80,7 @@ Read [security mechanisms](docs/architecture/security.md) before touching these 
 - All permission requests and checks are denied (`ALLOWED_PERMISSIONS` in `security.ts`). Add entries deliberately.
 - Canvas and token text never act as the user. Refuse a token's shell-prefixed message; hold automated canvas text starting with its recipient's current shell prefix at both dispatch and session start. Only user-typed sends pass holds. Frame other parties' messages with their sender; never let a message bypass sandbox permissions.
 - No token is ever you. Human identity comes only from main's trusted window/native UI. Human-only operations are refused to tokens, not merely hidden. Token deletes and destructive discard/replace/close/save cases require R4 proposals; only you answer them, only while current, and refusal rules win over proposals.
+- Who leads is yours: `agent.setLead` and `outside.setGrant` are human-only and never in a file, template or command line. A lead or outside grantee answers a native prompt only through the one allowance (`prompts/grants.ts`): once, no free text, and only reject or hand back on `signals: false`. A manager row moves only away from lost authority.
 - Every transport calls `core.call`. Audience/reach are enforced on every call, with rechecks inside scopes/builds; token change rules run on the committed change, whatever op built it. No operation may widen a token.
 - Both local servers bind only 127.0.0.1, rejecting foreign Host and any Origin before token checks. MCP accepts only bounded application/json bodies.
 - Native conversation IDs meet R42 at every boundary: the platform's bounded safe shape, never a leading dash, then their adapter's stricter shape. Never let an ID be read as a CLI flag. Agent IDs route events only, never argv or native paths.
@@ -97,15 +98,15 @@ Read [security mechanisms](docs/architecture/security.md) before touching these 
 - The Electron-free core, sessions, API, CLI and services cannot import Electron or `src/main/host/`; use `HostServices`. Only the core composes profile stores. Only approved core sites mint `TrustedPath`; only `core/gui.ts` makes human callers.
 - Only `src/main/sessions/adapters.ts` imports adapter folders in production. Adapters may import their own code and terminal toolkit, never another adapter (tests included). `ADAPTER_IMPORTERS` stays empty.
 - Platform code names no CLI. `src/main/platform-neutral.test.ts` pins existing exceptions exactly; lower counts when they drop, never increase them to accommodate new names. Read the catalog/registry instead.
-- Every new TypeScript file must belong to a tsconfig `include`: node (main/preload/shared), web (renderer/shared), or tooling (configs/e2e). Keep strict base options and solution references.
-- Keep TypeScript `~6.0.3` (typescript-eslint does not support 7), node-pty `1.2.0-beta.14`, and the Node/pnpm pins above. pnpm workspace settings/build approvals live in `pnpm-workspace.yaml`; retain strict `minimumReleaseAge: 1440`, wait for too-new packages, and treat exclusions as a red flag. Keep the intentional electron-winstaller peer dependency.
+- Every new TypeScript file belongs to a tsconfig `include`: node (main/preload/shared), web (renderer/shared), or tooling (configs/e2e). Keep strict base options and references.
+- Keep TypeScript `~6.0.3` (typescript-eslint does not support 7), node-pty `1.2.0-beta.14`, and the Node/pnpm pins above. pnpm workspace settings/build approvals live in `pnpm-workspace.yaml`; retain strict `minimumReleaseAge: 1440`, wait for too-new packages, and treat exclusions as a red flag. Keep the electron-winstaller peer dependency.
 - Only unbundled native modules belong in dependencies; Vite-bundled packages belong in devDependencies. Follow [native modules](docs/architecture/native-modules.md) for externals, packing, rebuilds and install approvals; exercise each in packaged/main/core/CLI self-tests. Keep Windows ConPTY settings and close every pty before quit.
 - Releases are made only by `scripts/release.sh`, from a clean clone of a commit on main that CI passed, signed and checked byte for byte; it makes a draft, and only you publish it.
 - SQLite is reached only through `sqlite.ts`; writes acknowledge only after the log flush. A failed flush fails the store closed. The checkpointer is the only other writing connection.
 
 ## Adding things
 
-These are checklists; read the linked recipe before implementing.
+Checklists; read the linked recipe first.
 
 - **Operation:** [registry recipe](docs/architecture/registry.md). Add audience/kind/scope/rules/self/drains to SURFACE; define strict bounded branded input and object output; implement through core services (`ctx.commit` for documents); add a deviation if needed, RULES/checks, REAL_FIXTURES and reach fixtures for every ID kind. Add the gesture or NO_GESTURE reason. Run `pnpm api:surface`, inspect its diff, and keep surface/transport/reach/gesture tests green.
 - **Window protocol:** [IPC recipe](docs/architecture/ipc.md). Calls are registered operations with fixed generated preload methods. Runtime state uses topics. Keep core:connect, terminal screen events, draft flush and host lifecycle protocols typed; expose no generic channel function. Test the core port and preload contracts.

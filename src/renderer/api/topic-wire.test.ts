@@ -13,11 +13,41 @@ describe('a chunked worktrees snapshot (B9a §7)', () => {
     ];
     const kept = [{ workspace: '22222222-2222-4222-8222-222222222222', state: 'retained' }];
     expect(
-      assembledState(`worktrees:${CANVAS}`, {}, [
+      assembledState(`worktrees:${CANVAS}`, { into: null }, [
         ...items.map((item) => [`item/${encodeURIComponent(item.agent)}`, item] as const),
         ...kept.map((tree, index) => [`kept/${String(index)}`, tree] as const),
       ]),
-    ).toEqual({ items, kept });
+    ).toEqual({ items, kept, into: null });
+  });
+
+  it('keeps the branch the project checkout is on, which the core sends in the summary', () => {
+    const into = { ref: 'main', commit: 'a'.repeat(40) };
+    expect(assembledState(`worktrees:${CANVAS}`, { into }, [])).toEqual({
+      items: [],
+      kept: [],
+      into,
+    });
+    expect(assembledState(`worktrees:${CANVAS}`, { into: null }, [])).toEqual({
+      items: [],
+      kept: [],
+      into: null,
+    });
+  });
+});
+
+describe('a chunked leads snapshot (B24 C1)', () => {
+  it('is assembled as the core divides it: each lead by its agent, then each outside name', () => {
+    const leads = [
+      { agent: 'b', grants: { questions: true, plans: false, approvals: true }, held: null },
+      { agent: 'a/b', grants: { questions: false, plans: false, approvals: true }, held: 'role' },
+    ];
+    const outside = [{ name: 'orchestrator', approvals: true, live: false }];
+    expect(
+      assembledState(`leads:${CANVAS}`, {}, [
+        ...leads.map((lead) => [`lead/${encodeURIComponent(lead.agent)}`, lead] as const),
+        ...outside.map((one) => [`outside/${encodeURIComponent(one.name)}`, one] as const),
+      ]),
+    ).toEqual({ leads, outside });
   });
 });
 

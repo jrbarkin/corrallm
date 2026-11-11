@@ -13,6 +13,8 @@ import type { RecordRow } from '../../../shared/model/records';
 import { Verdict } from '../../../shared/model/results';
 import {
   agentOf,
+  isLeadCopy,
+  isOpenAsk,
   isQueueHandoff,
   isSettled,
   isTurn,
@@ -108,7 +110,12 @@ interface Kept extends Provenance {
   bytes: number;
   told?: string;
   /** What its recipient must still be told of a withdrawal after receipt. */
-  withdrawal?: { text: string; told?: boolean };
+  withdrawal?: {
+    text: string;
+    told?: boolean;
+    /** B24 C4: for whom, when it isn't the row's recipient now (an ask re-addressed away from it). */
+    for?: PartyId;
+  };
 }
 
 /**
@@ -226,6 +233,12 @@ export class MessageStore {
   readonly #now: () => number;
   /** Every message kept, by id, in the store's order. */
   readonly #kept = new Map<string, Kept>();
+  /**
+   * The messages kept by the told key they were kept with, and by its group (the key up to and
+   * including its first colon): a lookup by key, or of one group, never walks the rest (B24 G2).
+   */
+  readonly #toldKeys = new Map<string, Set<string>>();
+  readonly #toldGroups = new Map<string, Set<string>>();
   /** The messages kept that delivery still acts on (isActive), by id, in the store's order. */
   #active = new Map<string, Kept>();
   /** The latest place of a message `#active` has taken: one placed later goes last in it. */
@@ -236,6 +249,8 @@ export class MessageStore {
    * alone, never every message delivery acts on.
    */
   readonly #activeTo = new Map<PartyId, { line: Map<string, Kept>; last: number }>();
+  /** Open copies per lead: offering another never walks the lead's waiting party traffic. */
+  readonly #leadCopies = new Map<PartyId, number>();
   /** Only records eligible for pruning: globally, and by both parties, in original order. */
   readonly #settled = new Sequence();
   readonly #parties = new Map<PartyId, Sequence>();
@@ -328,6 +343,11 @@ export class MessageStore {
   activeTo(to: PartyId): Message[] {
     const kept = this.#activeTo.get(to);
     return kept === undefined ? [] : Array.from(kept.line.values(), ({ message }) => message);
+  }
+
+  /** The open host-built copies to `to`, counted as their rows change (B24's MAX_WAITING). */
+  leadCopiesTo(to: PartyId): number {
+    return this.#leadCopies.get(to) ?? 0;
   }
 
   /**
@@ -498,19 +518,33 @@ export class MessageStore {
 
   /** A durable notice already told this, even if its message's turn has ended since. */
   hasTold(key: string): boolean {
-    return [...this.#kept.values()].some(({ told }) => told === key);
+    return this.#toldKeys.has(key);
   }
 
   /** The message kept with the told key `key`, if one is (what a request admitted once). */
   toldAs(key: string): Message | undefined {
-    for (const { message, told } of this.#kept.values()) if (told === key) return message;
-    return undefined;
+    return this.#inOrder(this.#toldKeys.get(key))[0];
   }
 
-  /** The messages kept with a told key starting `prefix`, in the store's order. */
+  /** The messages kept with exactly the told key `key`, in the store's order. */
+  toldWith(key: string): Message[] {
+    return this.#inOrder(this.#toldKeys.get(key));
+  }
+
+  /**
+   * The messages kept with a told key starting `prefix`, in the store's order. A prefix reaching
+   * its key's first colon reads only that group, never every message kept.
+   */
   toldStarting(prefix: string): Message[] {
-    return [...this.#kept.values()].flatMap(({ message, told }) =>
-      told?.startsWith(prefix) === true ? [message] : [],
+    const colon = prefix.indexOf(':');
+    if (colon < 0) {
+      return [...this.#kept.values()].flatMap(({ message, told }) =>
+        told?.startsWith(prefix) === true ? [message] : [],
+      );
+    }
+    const ids = this.#toldGroups.get(prefix.slice(0, colon + 1));
+    return this.#inOrder(ids).filter((message) =>
+      this.#kept.get(message.id)?.told?.startsWith(prefix),
     );
   }
 
@@ -590,10 +624,59 @@ export class MessageStore {
     return message;
   }
 
+  /**
+   * B24 C4: moves an open row addressed to a party's manager (`via` it: an ask not yet answered,
+   * or a message still pending) to another recipient, changing only whom it is for: back to
+   * `pending` for an agent, `delivered` for you. An ask that had reached the old recipient leaves
+   * it `withdrawal`, told with its next message. As kept, or undefined if the row isn't kept, isn't
+   * open, never went through a manager, or is already there.
+   */
+  readdress(id: string, to: PartyId, withdrawal?: string): Message | undefined {
+    const kept = this.#kept.get(id);
+    if (kept === undefined) return undefined;
+    const { message } = kept;
+    const ask = message.ask?.type === 'question' ? message.ask : undefined;
+    const open =
+      ask === undefined
+        ? kept.display?.via === 'manager' && message.kind === 'text' && message.state === 'pending'
+        : ask.via === 'manager' && isOpenAsk(message);
+    if (!open || message.to === to) return undefined;
+    const was = message.to;
+    const moved = this.update(id, { to, state: to === 'you' ? 'delivered' : 'pending' });
+    const now = this.#kept.get(id);
+    if (withdrawal !== undefined && now !== undefined) {
+      // Keep each former recipient's untold note under its original acknowledgement id: a native
+      // send may already carry it. Later notes use separate non-turn records, not another ask.
+      const previous = now.withdrawal;
+      if (previous !== undefined && previous.told !== true) {
+        const note: Message = {
+          id: randomUUID(),
+          canvas: this.canvas,
+          at: this.#now(),
+          from: 'corrallm',
+          to: was,
+          kind: 'notice',
+          body: withdrawal,
+          state: 'delivered',
+          replyTo: id,
+        };
+        this.#keep({
+          seq: this.#unjournaled === undefined ? this.#table.place() : ++this.#seq,
+          message: note,
+          bytes: 0,
+          origin: 'party',
+          withdrawal: { text: withdrawal },
+        });
+        for (const listener of this.#listeners) listener(note);
+      } else this.#keep({ ...now, withdrawal: { text: withdrawal, for: was } });
+    }
+    return moved;
+  }
+
   /** The withdrawals a recipient has not yet been told of, in the order their messages came. */
   withdrawals(to: PartyId): { id: string; text: string }[] {
     return [...this.#kept.values()].flatMap(({ message, withdrawal }) =>
-      message.to === to && withdrawal !== undefined && !withdrawal.told
+      (withdrawal?.for ?? message.to) === to && withdrawal !== undefined && !withdrawal.told
         ? [{ id: message.id, text: withdrawal.text }]
         : [],
     );
@@ -731,6 +814,8 @@ export class MessageStore {
       before.message.to === kept.message.to;
     if (was && !same) this.#unsettle(before);
     this.#kept.set(id, kept);
+    this.#indexCopies(before?.message, kept.message);
+    this.#indexTold(id, before?.told, kept.told);
     this.#indexRecord(before, kept);
     this.#indexResult(before, false);
     this.#indexResult(kept, true);
@@ -757,6 +842,56 @@ export class MessageStore {
     }
   }
 
+  /** Keeps the told-key indexes as message `id` goes from key `was` to key `now` (none: undefined). */
+  #indexTold(id: string, was: string | undefined, now: string | undefined): void {
+    if (was === now) return;
+    const drop = (index: Map<string, Set<string>>, key: string) => {
+      const ids = index.get(key);
+      ids?.delete(id);
+      if (ids?.size === 0) index.delete(key);
+    };
+    const add = (index: Map<string, Set<string>>, key: string) => {
+      const ids = index.get(key) ?? new Set<string>();
+      ids.add(id);
+      index.set(key, ids);
+    };
+    if (was !== undefined) {
+      drop(this.#toldKeys, was);
+      drop(this.#toldGroups, groupOf(was));
+    }
+    if (now !== undefined) {
+      add(this.#toldKeys, now);
+      add(this.#toldGroups, groupOf(now));
+    }
+  }
+
+  /** The messages with these ids, in the store's order. */
+  #inOrder(ids: Iterable<string> | undefined): Message[] {
+    const rows: Kept[] = [];
+    for (const id of ids ?? []) {
+      const kept = this.#kept.get(id);
+      if (kept !== undefined) rows.push(kept);
+    }
+    return rows.sort((a, b) => a.seq - b.seq).map(({ message }) => message);
+  }
+
+  /** Keeps the open-copy counts with the same membership as the active recipient lines. */
+  #indexCopies(before: Message | undefined, after: Message | undefined): void {
+    const recipient = (message: Message | undefined): PartyId | undefined =>
+      message?.from === 'corrallm' && isLeadCopy(message) && isActive(message)
+        ? message.to
+        : undefined;
+    const was = recipient(before);
+    const now = recipient(after);
+    if (was === now) return;
+    if (was !== undefined) {
+      const count = (this.#leadCopies.get(was) ?? 0) - 1;
+      if (count > 0) this.#leadCopies.set(was, count);
+      else this.#leadCopies.delete(was);
+    }
+    if (now !== undefined) this.#leadCopies.set(now, (this.#leadCopies.get(now) ?? 0) + 1);
+  }
+
   /** Keeps a message no more. */
   #delete(id: string): void {
     const kept = this.#kept.get(id);
@@ -767,6 +902,8 @@ export class MessageStore {
       this.#indexRecord(kept, undefined);
     }
     this.#kept.delete(id);
+    this.#indexCopies(kept?.message, undefined);
+    this.#indexTold(id, kept?.told, undefined);
     this.#active.delete(id);
     if (kept !== undefined) this.#lineOf(kept, undefined);
   }
@@ -950,6 +1087,12 @@ export class MessageStore {
     this.#windowsChanged.delete(id);
     for (const agent of agents) for (const watcher of this.#recordWatchers) watcher(agent);
   }
+}
+
+/** A told key's group: up to and including its first colon, or the whole key without one. */
+function groupOf(key: string): string {
+  const colon = key.indexOf(':');
+  return colon < 0 ? key : key.slice(0, colon + 1);
 }
 
 /** An untold withdrawal is protected even after its turn has settled. */
@@ -1147,6 +1290,9 @@ function keptOf(row: Record<string, unknown>, canvas: CanvasId): Kept | undefine
           withdrawal: {
             text: withdrawal.text,
             ...(withdrawal.told === true ? { told: true } : {}),
+            ...(typeof withdrawal.for === 'string' && PARTY_PATTERN.test(withdrawal.for)
+              ? { for: withdrawal.for as PartyId }
+              : {}),
           },
         }
       : {}),

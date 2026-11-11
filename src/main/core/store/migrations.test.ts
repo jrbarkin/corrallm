@@ -118,6 +118,7 @@ describe('the schema', () => {
       { name: 'document', strict: 1, wr: 1 },
       { name: 'file_review', strict: 1, wr: 0 },
       { name: 'handoff', strict: 1, wr: 1 },
+      { name: 'lead', strict: 1, wr: 1 },
       { name: 'link', strict: 1, wr: 1 },
       { name: 'loop_pair', strict: 1, wr: 1 },
       { name: 'merge_job', strict: 1, wr: 0 },
@@ -125,6 +126,7 @@ describe('the schema', () => {
       { name: 'meta', strict: 1, wr: 0 },
       { name: 'node', strict: 1, wr: 1 },
       { name: 'open_canvas', strict: 1, wr: 0 },
+      { name: 'outside_grant', strict: 1, wr: 1 },
       { name: 'project_setup', strict: 1, wr: 0 },
       { name: 'proposal', strict: 1, wr: 0 },
       { name: 'queue_item', strict: 1, wr: 1 },
@@ -1858,5 +1860,106 @@ describe('migration 13', () => {
     });
     keep.run(null, seq);
     expect(() => keep.run('not JSON', seq)).toThrow(/CHECK constraint failed/);
+  });
+});
+
+/** A lead's grants and fingerprint, as B24 C1 keeps them (the `lead` table). */
+const GRANTS = JSON.stringify({ v: 1, questions: true, plans: false, approvals: true });
+const FINGERPRINT = JSON.stringify({
+  v: 1,
+  role: 'none',
+  adapter: 'codex',
+  connection: 'codex.app-server',
+});
+
+describe('migration 14', () => {
+  /** Keeps a lead row of agent `agent`, held for `held` (none: it leads). */
+  const keepLead = (
+    agent: string,
+    held: string | null = null,
+    canvas = CANVAS,
+    grants = GRANTS,
+    fingerprint = FINGERPRINT,
+  ) =>
+    connection
+      .prepare(
+        `INSERT INTO lead (canvas_id, agent_id, grants, fingerprint, held, changed_at)
+         VALUES (?, ?, ?, ?, ?, 1)`,
+      )
+      .run(canvas, agent, grants, fingerprint, held);
+  /** Keeps an outside grant of the token name `name`. */
+  const keepGrant = (name: string, canvas = CANVAS) =>
+    connection
+      .prepare('INSERT INTO outside_grant (canvas_id, name, changed_at) VALUES (?, ?, 1)')
+      .run(canvas, name);
+
+  it('adds the leads and the outside grants, keeping every row, which no corrallm older than schema 14 may open', () => {
+    migrate(connection, MIGRATIONS.slice(0, 13));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 14));
+
+    expect(schemaOf(connection)).toBe(14);
+    // A corrallm without them would remove a lead's agent, or change its role and back again,
+    // with its lead none the wiser: none older may open the database once this ran.
+    expect(minReaderOf(connection)).toBe(14);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(before);
+    expect(connection.prepare('SELECT * FROM lead').all()).toEqual([]);
+    expect(connection.prepare('SELECT * FROM outside_grant').all()).toEqual([]);
+  });
+
+  it('raises the oldest reader to 15 for a lead’s copies and notices, keeping every message', () => {
+    migrate(connection, MIGRATIONS.slice(0, 14));
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    addMessage('kept');
+    const before = connection.prepare('SELECT * FROM message').all();
+
+    migrate(connection, MIGRATIONS.slice(0, 15));
+
+    expect(schemaOf(connection)).toBe(15);
+    // A corrallm of schema 14 would leave a pending copy of a prompt no core holds any more to be
+    // delivered, and never withdraw it: none older may open the database once this ran.
+    expect(minReaderOf(connection)).toBe(15);
+    expect(connection.prepare('SELECT * FROM message').all()).toEqual(before);
+  });
+
+  it('keeps one lead an agent of a canvas, its grants and fingerprint as JSON, held only for what changed, and forgets it with its canvas', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    keepLead('lead');
+    for (const held of ['adapter', 'connection', 'role']) keepLead(`held-${held}`, held);
+    for (const [agent, held, grants, fingerprint] of [
+      ['lead', null, GRANTS, FINGERPRINT],
+      ['other', 'mode', GRANTS, FINGERPRINT],
+      ['other', '', GRANTS, FINGERPRINT],
+      ['other', null, 'not JSON', FINGERPRINT],
+      ['other', null, GRANTS, 'not JSON'],
+    ] as const)
+      expect(
+        () => keepLead(agent, held, CANVAS, grants, fingerprint),
+        JSON.stringify([agent, held, grants, fingerprint]),
+      ).toThrow(/constraint failed/);
+    // It belongs to a canvas that exists.
+    expect(() => keepLead('lead', null, 'ghost')).toThrow(/FOREIGN KEY constraint failed/);
+    expect(count('lead')).toBe(4);
+    connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
+    expect(count('lead')).toBe(0);
+  });
+
+  it('keeps one outside grant a token’s name on a canvas, and forgets it with its canvas', () => {
+    migrate(connection);
+    connection.exec('PRAGMA foreign_keys = ON');
+    addCanvas();
+    keepGrant('orchestrator');
+    expect(() => keepGrant('orchestrator')).toThrow(/constraint failed/);
+    expect(() => keepGrant('orchestrator', 'ghost')).toThrow(/FOREIGN KEY constraint failed/);
+    expect(count('outside_grant')).toBe(1);
+    connection.prepare('DELETE FROM canvas WHERE id = ?').run(CANVAS);
+    expect(count('outside_grant')).toBe(0);
   });
 });

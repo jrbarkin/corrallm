@@ -25,6 +25,8 @@ import {
   agentOf,
   agentParty,
   isContinuation,
+  isLeadCopy,
+  isLeadTurn,
   isHandoffEvidence,
   isQueueHandoff,
   isTurn,
@@ -128,6 +130,17 @@ export interface DeliveryDeps {
    * B11a C7: the core's handoff service, for corrallm's handoff requests (`ask`) and what the first
    * send after a switch carries. None: a request is withdrawn, and nothing is carried.
    */
+  /**
+   * B24 C5: the lead copies' service. `live`: whether a copy's prompt still waits on its lead's
+   * route, rechecked just before it is sent (false: it is withdrawn unsent); `refused`: a copy or
+   * notice that was withdrawn instead of being sent, so its route hears of it.
+   */
+  leadCopy?: {
+    live(message: Message): boolean;
+    refused(message: Message): void;
+  };
+  /** B24 C4: whether `lead` may take its team's questions now (Asks.manages). */
+  manages?: (lead: string) => boolean;
   handoff?: {
     /**
      * Whether a request waiting goes (`go`), waits while corrallm switches its agent (`hold`), or
@@ -441,6 +454,7 @@ export class Delivery {
       heard: (agents) => {
         this.heard(agents);
       },
+      ...(deps.manages === undefined ? {} : { manages: deps.manages }),
     });
     this.#stop = [
       // A streamed word changes nothing a check reads: a reply's many never make one.
@@ -690,6 +704,28 @@ export class Delivery {
     );
   }
 
+  /**
+   * B24 C5: why a lead's copy or notice to agent `node` is never sent, if it is not to be: its copy's
+   * route moved on (the prompt it names no longer waits for this lead), or its card, checked as a
+   * hand-off is, against the lead's current connection's shell prefix and file mentions.
+   */
+  #leadRefusal(node: AgentNode, message: Message): string | undefined {
+    if (!isLeadTurn(message)) return undefined;
+    if (isLeadCopy(message) && this.#deps.leadCopy?.live(message) === false) {
+      return 'Its request moved on before it was sent.';
+    }
+    return this.#handOffRefusal(node, message);
+  }
+
+  /** B24 C5: a lead's copy or notice that is never sent: withdrawn by corrallm, its route told. */
+  #withdrawLead(message: Message, why: string): void {
+    const turn: TurnResult = { status: 'failed', reason: 'declined', message: why };
+    this.#deps.store.update(message.id, { state: 'withdrawn', by: 'corrallm', turn });
+    this.#freeSlotOf(message.id);
+    this.#deps.leadCopy?.refused(message);
+    this.schedule();
+  }
+
   /** B19 C1: a hand-off its recipient's connection refuses is never sent: its item is told why. */
   #decline(message: Message, refusal: string): void {
     const turn: TurnResult = { status: 'failed', reason: 'declined', message: refusal };
@@ -738,7 +774,12 @@ export class Delivery {
 
   /** B19 C2: whether a message waits as a party's, which delivery points hold: not one of the lanes. */
   #theirs(message: Message): boolean {
-    return !this.#yours(message) && !this.#request(message) && !isContinuation(message);
+    return (
+      !this.#yours(message) &&
+      !this.#request(message) &&
+      !isContinuation(message) &&
+      !isLeadTurn(message)
+    );
   }
 
   /**
@@ -861,7 +902,7 @@ export class Delivery {
     to: string,
     body: string,
     replyTo?: string,
-    { images, told }: { images?: UserMessage['images']; told?: string } = {},
+    { images, told, via }: { images?: UserMessage['images']; told?: string; via?: 'manager' } = {},
   ): Promise<Message> {
     const { store } = this.#deps;
     if (from !== 'you' && this.waitingFrom(to, from) >= MAX_WAITING) {
@@ -879,7 +920,14 @@ export class Delivery {
         // Yours is yours as you sent it; anyone else's a party's.
         origin: from === 'you' ? 'manual' : 'party',
         // Its images are live-only: once a restart lost them, it is never sent without them.
-        ...(pasted > 0 ? { display: { images: pasted, requiresImages: true } } : {}),
+        ...(pasted > 0 || via !== undefined
+          ? {
+              display: {
+                ...(pasted > 0 ? { images: pasted, requiresImages: true as const } : {}),
+                ...(via === undefined ? {} : { via }),
+              },
+            }
+          : {}),
         body,
         state: 'pending',
         ...(replyTo === undefined ? {} : { replyTo }),
@@ -1480,12 +1528,23 @@ export class Delivery {
           : asking.has(agentParty(node.id))
             ? ({ kind: 'busy' } as const)
             : (directory ?? this.#continuationHold(node)),
+        // B24 C5: a lead's copy or notice is held as a party's message is (admission, an exhausted
+        // backend, its usage rule, a pause or a kill, a session that won't start, asking mode, a
+        // turn or prompt going on), but never by the points or holds of its queue: it is no run
+        // work, and a stopped CLI waits on it.
+        lead: asking.has(agentParty(node.id))
+          ? ({ kind: 'busy' } as const)
+          : (directory ??
+            (waits.some((message) => isLeadTurn(message)) ? this.#holdOf(node) : undefined)),
         theirs: asking.has(agentParty(node.id))
           ? ({ kind: 'busy' } as const)
           : (directory ??
             (waits.some(
               (message) =>
-                !this.#yours(message) && !this.#request(message) && !isQueueHandoff(message),
+                !this.#yours(message) &&
+                !this.#request(message) &&
+                !isQueueHandoff(message) &&
+                !isLeadTurn(message),
             )
               ? this.#holdOf(node)
               : undefined)),
@@ -1516,13 +1575,15 @@ export class Delivery {
               ? holds.yours
               : message === request
                 ? holds.request
-                : isContinuation(message)
-                  ? holds.continuation
-                  : isQueueHandoff(message)
-                    ? (holds.handOff ??
-                      this.#runWorkHold(message) ??
-                      (point && this.#atPoint(node, message, point)))
-                    : (holds.theirs ?? (point && this.#atPoint(node, message, point)));
+                : isLeadTurn(message)
+                  ? holds.lead
+                  : isContinuation(message)
+                    ? holds.continuation
+                    : isQueueHandoff(message)
+                      ? (holds.handOff ??
+                        this.#runWorkHold(message) ??
+                        (point && this.#atPoint(node, message, point)))
+                      : (holds.theirs ?? (point && this.#atPoint(node, message, point)));
         if (!hold) {
           next ??= message;
           continue;
@@ -1727,30 +1788,34 @@ export class Delivery {
   #waiting(messages = this.#deps.store.active()): Map<string, Message[]> {
     const waiting = new Map<string, Message[]>();
     /** What goes ahead of the rest in a line: corrallm's handoff requests, then continuations. */
-    let ahead: Map<string, [Message[], Message[]]> | undefined;
+    let ahead: Map<string, [Message[], Message[], Message[]]> | undefined;
     for (const message of messages) {
       const agent = agentOf(message.to);
       if (agent === undefined || message.state !== 'pending') continue;
       let line = waiting.get(agent);
       if (line === undefined) waiting.set(agent, (line = []));
       const rank = this.#rank(message);
-      if (rank === 2) {
+      if (rank === 3) {
         line.push(message);
         continue;
       }
       ahead ??= new Map();
       let first = ahead.get(agent);
-      if (first === undefined) ahead.set(agent, (first = [[], []]));
+      if (first === undefined) ahead.set(agent, (first = [[], [], []]));
       first[rank].push(message);
     }
-    for (const [agent, [requests, continuations]] of ahead ?? [])
-      waiting.set(agent, [...requests, ...continuations, ...(waiting.get(agent) ?? [])]);
+    for (const [agent, [requests, leads, continuations]] of ahead ?? [])
+      waiting.set(agent, [...requests, ...leads, ...continuations, ...(waiting.get(agent) ?? [])]);
     return waiting;
   }
 
-  /** Where a message waits in line: corrallm's handoff request, a task's continuation, the rest. */
-  #rank(message: Message): 0 | 1 | 2 {
-    return this.#request(message) ? 0 : isContinuation(message) ? 1 : 2;
+  /**
+   * Where a message waits in line (B24 C5's frozen order): corrallm's handoff request, a lead's
+   * copy or notice, a task's continuation, the rest. A copy unblocks another agent whose CLI is
+   * stopped on a prompt; a continuation resumes the lead's own task.
+   */
+  #rank(message: Message): 0 | 1 | 2 | 3 {
+    return this.#request(message) ? 0 : isLeadTurn(message) ? 1 : isContinuation(message) ? 2 : 3;
   }
 
   /**
@@ -2068,6 +2133,13 @@ export class Delivery {
       this.#decline(message, refusal);
       return;
     }
+    // B24 C5: a lead's copy whose route moved on, or whose card its lead's connection would run or
+    // expand, is never sent.
+    const leadRefusal = this.#leadRefusal(node, message);
+    if (leadRefusal !== undefined) {
+      this.#withdrawLead(message, leadRefusal);
+      return;
+    }
     const as = randomUUID();
     const attempt = (message.delivery?.attempt ?? 0) + 1;
     const request = this.#request(message);
@@ -2139,6 +2211,13 @@ export class Delivery {
               this.#handOffEnded(message, '', turn);
               this.#freeSlotOf(message.id);
               this.schedule();
+            } else if (
+              current?.type === 'agent' &&
+              this.#leadRefusal(current, message) !== undefined
+            ) {
+              this.#uncarry(message.id);
+              this.#uncount(message.id);
+              this.#withdrawLead(message, this.#leadRefusal(current, message) ?? '');
             } else if (declined !== undefined) {
               this.#uncarry(message.id);
               this.#uncount(message.id);
@@ -2149,16 +2228,18 @@ export class Delivery {
                 this.#deps.engine.sessions.of(node.id).running === undefined ||
                 (request
                   ? this.#requestHold(current, message)
-                  : isContinuation(message)
-                    ? this.#continuationHold(current)
-                    : isQueueHandoff(message)
-                      ? (this.#holdOf(current, false, false) ??
-                        this.#runWorkHold(message) ??
-                        (this.#holdsSlot(message) ? undefined : this.#atPoint(current, message)))
-                      : (this.#holdOf(current) ??
-                        (this.#theirs(message) && !this.#holdsSlot(message)
-                          ? this.#atPoint(current, message)
-                          : undefined))) !== undefined)
+                  : isLeadTurn(message)
+                    ? this.#holdOf(current)
+                    : isContinuation(message)
+                      ? this.#continuationHold(current)
+                      : isQueueHandoff(message)
+                        ? (this.#holdOf(current, false, false) ??
+                          this.#runWorkHold(message) ??
+                          (this.#holdsSlot(message) ? undefined : this.#atPoint(current, message)))
+                        : (this.#holdOf(current) ??
+                          (this.#theirs(message) && !this.#holdsSlot(message)
+                            ? this.#atPoint(current, message)
+                            : undefined))) !== undefined)
             ) {
               this.#uncarry(message.id);
               this.#uncount(message.id);
@@ -2313,7 +2394,13 @@ export class Delivery {
       }
     });
     // A reply never makes a reply; nor does an answer, or an ask's end, its asker was sent.
-    if (message.turn === undefined && message.kind === 'text' && message.ask === undefined) {
+    // A lead's copy or notice makes no reply either (B24 C5): nothing is owed to corrallm.
+    if (
+      message.turn === undefined &&
+      message.kind === 'text' &&
+      message.ask === undefined &&
+      !isLeadTurn(message)
+    ) {
       store.add({
         from: message.to,
         to: message.from,

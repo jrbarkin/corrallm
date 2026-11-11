@@ -28,6 +28,7 @@ import type { SessionManager } from '../sessions/manager';
 import type { UsageReadings } from '../usage';
 import type { Documents } from './canvas/documents';
 import { recoverDecisions } from './decisions';
+import { LeadCopies } from './delivery/lead-copies';
 import { Delivery, HANDOFF_CARRIED } from './delivery/delivery';
 import { mailboxTasks } from './delivery/tasks';
 import { HandoffStore } from './delivery/handoffs';
@@ -83,6 +84,10 @@ const NOT_KEPT = 'corrallm keeps no such canvas.';
 const RUNTIME_CALLER = 'runtime';
 
 export interface EnginesDeps {
+  /** B24 C5: the lead copies' service, for the delivery of a lead's copy and notice. */
+  leadCopy?: { live(message: Message): boolean; refused(message: Message): void };
+  /** B24 C4: whether `lead` may take its team's questions on `canvas` now. */
+  manages?: (canvas: CanvasId, lead: string) => boolean;
   processes: Pick<Children, 'run'>;
   /** What the engines read of the catalog. */
   engineCatalog: EngineCatalog;
@@ -1160,6 +1165,10 @@ export class Engines {
       engine,
       store: messages,
       loops,
+      ...(this.#deps.leadCopy === undefined ? {} : { leadCopy: this.#deps.leadCopy }),
+      ...(this.#deps.manages === undefined
+        ? {}
+        : { manages: (lead: string) => this.#deps.manages?.(canvas, lead) === true }),
       nodes: () => running.document.nodes,
       usage: this.#deps.usage,
       now: () => Date.now(),
@@ -1273,7 +1282,8 @@ export class Engines {
         const loops = new LoopStore(canvas, this.#deps.loops);
         loops.load();
         // A decision a crash cut off as it was being made is unresolved, never made again.
-        if (recoverDecisions(messages)) {
+        const copies = LeadCopies.recover(messages);
+        if (recoverDecisions(messages) || copies) {
           await messages.durable().catch((error: unknown) => {
             console.error('Could not settle the answers corrallm stopped making:', error);
           });
