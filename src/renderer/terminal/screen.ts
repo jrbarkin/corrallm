@@ -26,6 +26,11 @@ export interface Snapshot {
   rows: number;
 }
 
+/** What a connection declares of the keys its terminal view types for (the catalog's `keys`). */
+export interface TerminalKeys {
+  shiftEnter: string | null;
+}
+
 export interface Screen {
   /** Shows a snapshot from scratch, at its size; `done` once it is on screen. */
   reset(snapshot: Snapshot, done: () => void): void;
@@ -40,10 +45,16 @@ export interface Screen {
    */
   redraw(): void;
   /**
-   * Whether Option works as Meta (macOS): for Claude Code's Option shortcuts, or not, to type the
+   * Whether Option works as Meta (macOS): for the CLI's Option shortcuts, or not, to type the
    * characters it types on the user's layout (keyboard.ts).
    */
   setOptionIsMeta(on: boolean): void;
+  /**
+   * The displayed connection's keys, replacing any before them (none declared until it is called:
+   * the terminal's own keys). Shift+Enter types `shiftEnter` once, on keydown; null leaves the key
+   * to the terminal, which types Enter.
+   */
+  setKeys(keys: TerminalKeys): void;
   focus(): void;
   /** What the user types (and what the terminal answers the CLI's queries with). */
   onInput(listener: (data: string) => void): void;
@@ -59,8 +70,8 @@ export interface Screen {
 export type ScreenFactory = (element: HTMLElement) => Screen;
 
 /**
- * A dark terminal, whatever the app's theme: Claude Code's own colours are made for one (its
- * default theme is dark). The scrollbar's colours are set too, so the style xterm.js writes for
+ * A dark terminal, whatever the app's theme: the CLIs' own colours are made for one (their
+ * default themes are dark). The scrollbar's colours are set too, so the style xterm.js writes for
  * them is always the same (its hash is allowed by the CSP: src/main/csp.ts).
  */
 export const THEME = {
@@ -73,9 +84,6 @@ export const THEME = {
   scrollbarSliderHoverBackground: '#ffffff59',
   scrollbarSliderActiveBackground: '#ffffff80',
 };
-
-/** Shift+Enter: a new line in Claude Code's prompt, as its /terminal-setup binds it. */
-const NEW_LINE = '\x1b\r';
 
 /** Whether a click opens a link, as in a terminal: with Cmd (Ctrl on Windows and Linux). */
 const opensLink = (event: MouseEvent) =>
@@ -125,8 +133,8 @@ export const createScreen: ScreenFactory = (element) => {
     // Option types characters until the view says otherwise (setOptionIsMeta).
     macOptionIsMeta: false,
     theme: THEME,
-    // Links (OSC 8) open as the app's other links do (main asks first); a file:// link (as Claude
-    // Code prints the files it names) shows its file in the file manager, if in the project folder.
+    // Links (OSC 8) open as the app's other links do (main asks first); a file:// link (as a CLI
+    // prints the files it names) shows its file in the file manager, if in the project folder.
     linkHandler: { activate: open, allowNonHttpProtocols: true },
   });
   const inputs = new Set<(data: string) => void>();
@@ -163,11 +171,19 @@ export const createScreen: ScreenFactory = (element) => {
     return addon;
   };
   terminal.loadAddon(webgl());
+  /** What the displayed connection declares: nothing until the view says (the terminal's own keys). */
+  let keys: TerminalKeys = { shiftEnter: null };
   terminal.attachCustomKeyEventHandler((event) => {
-    if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey) {
+    if (
+      keys.shiftEnter !== null &&
+      event.key === 'Enter' &&
+      event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
       if (event.type === 'keydown') {
         event.preventDefault();
-        type(NEW_LINE);
+        type(keys.shiftEnter);
       }
       return false;
     }
@@ -204,6 +220,9 @@ export const createScreen: ScreenFactory = (element) => {
     },
     setOptionIsMeta: (on) => {
       if (drawn) terminal.options.macOptionIsMeta = on;
+    },
+    setKeys: (declared) => {
+      keys = declared;
     },
     focus: () => {
       if (drawn) terminal.focus();

@@ -42,7 +42,7 @@ jobs:
 
       # Reads the pnpm version from package.json "packageManager". Pinned to the v6.1.0 commit:
       # the floating v6 tag still points at a release without pnpm 12 support.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - uses: actions/setup-node@v7
         with:
@@ -152,7 +152,7 @@ jobs:
       # macOS runs the specs on the host. Linux runs them in the local gate's Docker image
       # (Debian bookworm, its Mesa and Xvfb): the runner's own Ubuntu 24.04 stack hangs a
       # renderer on quit after a forced crash (core-continuity), which the image does not.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         if: runner.os == 'macOS'
       - uses: actions/setup-node@v7
         if: runner.os == 'macOS'

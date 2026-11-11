@@ -65,6 +65,54 @@ describe('signals, from the facts the CLI gives (never its words)', () => {
     });
   });
 
+  it('reads the signals Claude Code 2.1.321 gave in the recordings against a stub model (B13 C13)', () => {
+    // A hook that asks is an ask rule's kind: a person's.
+    expect(request('signals-hook', 0).opts).toMatchObject({ decisionReasonType: 'hook' });
+    expect(signalsOf('Bash', request('signals-hook', 0).opts as unknown as ToolOptions)).toEqual({
+      askRule: true,
+    });
+    // An ask rule over a safety check: the CLI says both, and so do the signals.
+    const both = request('signals-ask-rule-safety', 0).opts;
+    expect(both).toMatchObject({
+      decisionReasonType: 'safetyCheck',
+      matchedAskRule: { source: 'projectSettings', toolName: 'Write' },
+    });
+    expect(signalsOf('Write', both as unknown as ToolOptions)).toEqual({
+      askRule: true,
+      safetyCheck: true,
+    });
+  });
+
+  it('counts a compound command’s subcommandResults as a safety check: the options never say whether one is nested', () => {
+    const [plain, nested, unreasoned] = requests('signals-compound');
+    // The two are alike in everything the options carry, so neither can be told from a safety check.
+    expect(plain?.opts).toMatchObject({ decisionReasonType: 'subcommandResults' });
+    expect(nested?.opts).toMatchObject({ decisionReasonType: 'subcommandResults' });
+    expect(plain?.opts).not.toHaveProperty('decisionReason');
+    expect(nested?.opts).not.toHaveProperty('decisionReason');
+    expect(signalsOf('Bash', plain?.opts as unknown as ToolOptions)).toEqual({
+      safetyCheck: true,
+    });
+    expect(signalsOf('Bash', nested?.opts as unknown as ToolOptions)).toEqual({
+      safetyCheck: true,
+    });
+    // A compound command that writes inside the folder was asked with no reason type at all.
+    expect(signalsOf('Bash', unreasoned?.opts as unknown as ToolOptions)).toBeUndefined();
+  });
+
+  it('never asks for what auto mode’s classifier denies, so its reason is never seen in a request', () => {
+    expect(requests('signals-auto-classifier')).toEqual([]);
+    const denied = recorded('signals-auto-classifier').flatMap((item) =>
+      item.kind === 'message' &&
+      item.data.type === 'system' &&
+      item.data.subtype === 'permission_denied'
+        ? [item.data]
+        : [],
+    );
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({ decision_reason_type: 'classifier' });
+  });
+
   it('takes an MCP tool the server’s policy only asks about as a person’s', () => {
     expect(
       signalsOf(
@@ -99,7 +147,6 @@ describe('signals, from the facts the CLI gives (never its words)', () => {
     expect(of({ decisionReasonType: 'rule' })).toEqual({ askRule: true });
     expect(of({ decisionReasonType: 'hook' })).toEqual({ askRule: true });
     expect(of({ decisionReasonType: 'safetyCheck' })).toEqual({ safetyCheck: true });
-    // A command's parts can hide a safety check only a person may approve (its flag isn't passed).
     expect(of({ decisionReasonType: 'subcommandResults' })).toEqual({ safetyCheck: true });
     expect(of({ decisionReasonType: 'classifier' })).toEqual({ requiresUser: true });
     expect(of({ decisionReasonType: 'other' })).toEqual({ requiresUser: true });

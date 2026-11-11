@@ -109,6 +109,31 @@ function world(queue: QueueItem[] = QUEUE, box = handOffs()) {
 }
 
 describe('a queue hand-off (B19 C1)', () => {
+  it('updates waiting hand-off owners with a fixed amount of work per agent', () => {
+    const box = handOffs();
+    const nodes = [
+      ...Array.from({ length: 64 }, (_, index) =>
+        agent(`lead-${String(index)}`, [{ id: 'hand', message: 'Review this', target: 'worker' }]),
+      ),
+      agent('worker'),
+    ];
+    const run = setup(nodes, manual, new Set(), { handOffs: box.seam, tasks: box.tasks });
+    run.store.start();
+    expect(box.recorded).toHaveLength(64);
+    let reads = 0;
+    for (const node of nodes) {
+      const id = node.id;
+      Object.defineProperty(node, 'id', {
+        get: () => {
+          reads++;
+          return id;
+        },
+      });
+    }
+    run.store.update(nodes);
+    expect(reads).toBeLessThanOrEqual(nodes.length * 16);
+  });
+
   it('is recorded pending from its queue’s agent, linked to its attempt, and the run sends nothing', () => {
     const { run, box, last } = world();
     run.store.start();

@@ -37,6 +37,9 @@ export const NATIVE_EXTERNALS = ['node-pty'];
 export default defineConfig(({ command }) => ({
   define: mainDefine,
   build: {
+    // Forge 8.0.1 sets its own externals (Node builtins, electron) under `rollupOptions`, and Vite 8
+    // lets a `rolldownOptions` override that wholesale: ours stays beside Forge's until Forge moves.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- Merged with Forge's rollupOptions.
     rollupOptions: {
       external: NATIVE_EXTERNALS,
     },

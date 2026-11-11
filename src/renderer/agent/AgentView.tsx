@@ -714,6 +714,7 @@ export function AgentView({
                   backend={terminal}
                   session={session}
                   note={sessionNote(node.data, project)}
+                  keys={found?.connection.keys ?? { shiftEnter: null }}
                   onStart={controls.open}
                   onUnqueue={controls.unqueue}
                   onPromptReply={controls.replyPrompt}
