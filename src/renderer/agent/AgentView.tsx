@@ -65,6 +65,7 @@ import type { ComposerControls } from './Composer';
 import { chatStart, rewindPointsOf, threadTitle } from '../../shared/model/session';
 import type { MessageImage, Session } from '../../shared/model/session';
 import { Transcript } from './Transcript';
+import { partyName } from '../../shared/model/queries';
 import './AgentView.css';
 
 /** What the view does to its agent's session (src/main/core/engine/delivery/mailbox.ts). */
@@ -717,6 +718,7 @@ export function AgentView({
                   onStart={controls.open}
                   onUnqueue={controls.unqueue}
                   onPromptReply={controls.replyPrompt}
+                  names={(party) => partyName(nodes, party)}
                   ask={
                     ask && (
                       <AskBar
@@ -749,6 +751,7 @@ export function AgentView({
                     agentName={name}
                     note={sessionNote(node.data, project)}
                     answers={{
+                      names: (party) => partyName(nodes, party),
                       onPromptReply: controls.replyPrompt,
                       onSwitch: (to) => {
                         onAgent(agent, to);

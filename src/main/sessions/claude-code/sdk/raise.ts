@@ -113,6 +113,11 @@ const PLAN_TOOL = 'ExitPlanMode';
 
 /** The reasons the runtime gives that make a request no one's but a person's, or ordinary. */
 const ASK_RULE = new Set(['rule', 'hook']);
+/**
+ * `subcommandResults` counts: it is said of a compound command whether or not a safety check is
+ * nested in it (B13 C13's recordings: the same options for `cd elsewhere && touch x` and for a
+ * write to .git/config), and the options don't tell, so it may hide one only a person may approve.
+ */
 const SAFETY_CHECK = new Set(['safetyCheck', 'subcommandResults']);
 const ORDINARY = new Set([
   'mode',

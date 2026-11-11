@@ -273,6 +273,24 @@ describe('toRows and fromRows', () => {
     });
   });
 
+  it('never keep a hand-off a view shows from another queue (B19 X2), nor its sender', () => {
+    const shown = queued([
+      {
+        id: 'handed',
+        message: 'Review this',
+        submission: {
+          id: 'handed',
+          text: 'Review this',
+          status: 'queued',
+          handoff: { from: 'Lead', item: 'hand' },
+        },
+      },
+    ]);
+    const body = (toRows(shown)[itemKey('a', 'handed')] as ItemRow).body;
+    expect(body).toEqual({ message: 'Review this' });
+    expect(JSON.stringify(toRows(shown))).not.toContain('Lead');
+  });
+
   it('read back every shipped template as it was read from its file, and writes it so', () => {
     for (const example of EXAMPLES) {
       const document = compileExample(example, TEST_CATALOG, 'claude-code');

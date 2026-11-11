@@ -6,6 +6,9 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { ConnectionId } from '../../shared/adapter';
 import { connectionInfo } from '../graph/agents';
 import { Markdown } from './Markdown';
+import { RecordLine } from './Settled';
+import { PLAIN_NAMES, recordOf, shownRecords } from './records';
+import type { Names } from './records';
 import { ToolDetailView } from './ToolDetail';
 import type { BackgroundTask, Entry, Session, ToolProgress } from '../../shared/model/session';
 
@@ -21,6 +24,8 @@ export interface TranscriptAnswers {
   rewindPoints?: readonly string[];
   /** Stops a task a connected session runs in the background, from its tool call's line. */
   onStopTask?: (taskId: string) => void;
+  /** How the settled records name a party (the canvas's names); a party as written without it. */
+  names?: Names;
 }
 
 /**
@@ -51,6 +56,8 @@ export function Transcript({
   }, [session.entries, session.status]);
   /** The user's messages offered "Rewind to here": the agent view's points, no others. */
   const rewindable = new Set(answers.onRewind ? (answers.rewindPoints ?? []) : []);
+  /** The settled records that show: an owner entry's decision is its entry's alone. */
+  const records = new Map(shownRecords(session.entries).map((record) => [record.id, record]));
 
   return (
     <div
@@ -63,14 +70,19 @@ export function Transcript({
         atEnd.current = scrollHeight - scrollTop - clientHeight < 40;
       }}
     >
-      {/* B19 C3: settled records lead the entries, but are no turn: X3 draws them. */}
-      {!session.entries.some((entry) => (entry.kind as string) !== 'record') && (
+      {/* B19 C3: settled records lead the entries but are no turn (X3: one line each). */}
+      {!session.entries.some((entry) => recordOf(entry) === undefined) && (
         <div className="agent-empty">
           <p>What should {agentName} do?</p>
           <p className="agent-empty-note">{note}</p>
         </div>
       )}
       {session.entries.map((entry) => {
+        const record = recordOf(entry);
+        if (record !== undefined)
+          return records.has(entry.id) ? (
+            <RecordLine key={entry.id} entry={record} names={answers.names ?? PLAIN_NAMES} />
+          ) : null;
         const view = (
           <EntryView
             key={entry.id}

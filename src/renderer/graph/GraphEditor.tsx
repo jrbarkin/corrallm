@@ -391,7 +391,14 @@ function Editor({
   /** The agent shown in the agent view, if any. */
   const front = openedIds[0];
   /** How it runs: its session starts when its view opens, and again when that changes. */
-  const frontSession = useDisplayedSession(canvasId, front, mirror, summaries, messages);
+  const frontSession = useDisplayedSession(
+    canvasId,
+    front,
+    mirror,
+    summaries,
+    messages,
+    model.nodes,
+  );
   /** Pure display reconciliation with the foreground's authoritative native receipts. */
   const displayNodes = useMemo(
     () =>
@@ -404,8 +411,9 @@ function Editor({
               agent: front,
               submissions: frontSession.submissions ?? [],
             },
+        run,
       ),
-    [model.nodes, messages, front, frontSession.submissions],
+    [model.nodes, messages, front, frontSession.submissions, run],
   );
   const layout = useMemo(() => lanesOf(displayNodes), [displayNodes]);
   const reports = useMemo(

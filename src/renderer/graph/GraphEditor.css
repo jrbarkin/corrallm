@@ -508,7 +508,8 @@ input.graph-label {
   opacity: 0.7;
 }
 
-.graph-queue-submission-images {
+.graph-queue-submission-images,
+.graph-queue-submission-from {
   font-size: 0.85em;
   opacity: 0.7;
 }
