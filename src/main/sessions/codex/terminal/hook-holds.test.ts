@@ -11,7 +11,7 @@ import {
   screens,
 } from '../../terminal/hook-recorded';
 import type { HoldRecord } from '../../terminal/hook-recorded';
-import { computedTrust, sessionHookKey } from './hooks';
+import { computedTrust, permissionCommand, sessionHookKey, toml } from './hooks';
 import { CodexTui } from './tui';
 import type { PromptAnswer } from '../../../../shared/model/prompts';
 
@@ -343,5 +343,79 @@ describe('what Codex · Terminal holds (B23 C2)', () => {
       'Would you like to run the following command?',
     );
     expect(resultsOf('reply-nodecision-long')).not.toContain('Hook failed');
+  });
+});
+
+/*
+ * B23 E1: Codex's window title while its PermissionRequest hook is held, with corrallm's
+ * `tui.terminal_title`, the hook's timeout at 30 s and the printing command the session gives the
+ * hook, released with {} at 20 s. Held, the title is the spinner and "Working" (no Action
+ * Required: the approval is hidden); released, the approval appears and the title says so.
+ */
+describe('what Codex titles while its PermissionRequest hook is held (B23 E1)', () => {
+  const name = 'e1-held-release-20s';
+  const titles = () => holdRecords(recorded(name), 'title');
+  const held = () => first(hookRequests(recorded(name), 'PermissionRequest', 'Bash'));
+  const release = () =>
+    first(
+      holdRecords(recorded(name), 'hook-res').filter(({ data }) => data.id === held().data.id),
+      'release',
+    );
+
+  it('ran with the session’s own title setting, hook command and timeout', () => {
+    const args = first(holdRecords(recorded(name), 'argv')).data.args;
+    expect(args).toContain('tui.terminal_title=["context-used","activity","run-state"]');
+    const command = permissionCommand('http://127.0.0.1:PORT/hook');
+    expect(args).toContain(
+      `hooks.PermissionRequest=[{hooks=[{type="command",command=${toml(command)},timeout=30}]}]`,
+    );
+  });
+
+  it('titles the hold as working, the spinner and "Working", all the way to the release', () => {
+    const request = held().t;
+    // The spinner's frames are recorded once: no other title came while it was held.
+    const during = titles().filter(({ t }) => t > request && t < release().t);
+    expect(during).toEqual([]);
+    const before = titles().filter(({ t }) => t <= request);
+    expect(before.at(-1)?.data).toMatch(/ Working$/);
+    expect(before.every(({ data }) => !data.includes('Action Required'))).toBe(true);
+    // The screen at 18 s: hooks are running, and the approval is not drawn.
+    const screen = screens(recorded(name)).find(({ label }) => label.startsWith('held +18s'));
+    expect(screen?.text).toContain('Running hook');
+    expect(screen?.text).not.toContain('Would you like to run');
+  });
+
+  it('is read by the session as working while held, and blocked once released', () => {
+    const tui = new CodexTui({
+      trust: (hooks) => Promise.resolve(computedTrust(hooks)),
+      platform: 'darwin',
+    });
+    const states = titles().map(({ t, data }) => ({ t, state: tui.title(data)?.state }));
+    const before = states.filter(({ t }) => t <= release().t).map(({ state }) => state);
+    expect(before.at(-1)).toBe('working');
+    expect(before).not.toContain('blocked');
+    const after = states.filter(({ t }) => t > release().t).map(({ state }) => state);
+    expect(after[0]).toBe('blocked');
+  });
+
+  it('is let go by {} at 20 s, which shows the approval and no "Hook failed"', () => {
+    const request = held();
+    expect(release().data.body).toBe('{}');
+    expect(release().t - request.t).toBeGreaterThan(19_500);
+    expect(release().t - request.t).toBeLessThan(21_500);
+    expect(closedAt(name, request.data.id).data.answered).toBe(true);
+    const title = first(
+      titles().filter(({ t }) => t > release().t),
+      'a title after the release',
+    );
+    expect(title.data).toContain('Action Required');
+    expect(title.t - release().t).toBeLessThan(500);
+    const shown = screenText(name);
+    expect(
+      shown.some((text) => text.includes('Would you like to run the following command?')),
+    ).toBe(true);
+    for (const text of shown) expect(text).not.toContain('Hook failed');
+    // The user's y in the terminal then went through.
+    expect(shown.at(-1)).toContain('You approved codex to run');
   });
 });
