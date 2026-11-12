@@ -6,6 +6,8 @@ The store-writer matrix is part of `pnpm test`: `main` uses the local production
 
 Fault triggers for a live store use `refuseWrites(store, ...)` from `src/main/core/store/test-store.ts`; await both installation and removal, which queue through its own lane. A custom trigger uses the same planned lane. Core-composition tests get their actual store through `src/main/core/store/test-core.ts`, which observes opening without a production configuration seam and keeps concurrent cores separate. The profile-only overload writes through another connection and is for quiescent disk setup. Acknowledgement means the write's transaction and flush finished, but does not exclude later queued work or maintenance holding the write lock. A rejected write's own changes are undone before it rejects, but its batch may still be draining. A synchronous `tx` or bare `exec` cannot wait on a drain without blocking the loop it needs: use a queued write for work on a live store.
 
+The draft-discard retention cases in `src/main/core/workspaces/deletion.test.ts` gate real setup reconciliation over fake Git before or during close: both keep the canvas and its rows, while the receipt includes the settled Needs/worktree revisions only when they moved during the call.
+
 ## `e2e/`
 
 Playwright Electron tests (*.e2e.ts) and their global setup.

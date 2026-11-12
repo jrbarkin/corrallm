@@ -14,10 +14,11 @@ import type { Core } from '../core';
 import { keepCanvases, onDisk } from '../store/test-store';
 import { CALLERS, NO_DESKTOP } from '../test-registry';
 import { WorkspaceCleanup } from './cleanup';
+import { WorkspaceDirectories } from './directories';
 import { GitRunner } from './git';
 import type { WorktreeRecord } from './store';
 import { commit, git, makeRepository, ran, sentinelProgram } from './test-git';
-import { CANVAS, testWorkspaces } from './test-workspace';
+import { CANVAS, fakeTestWorkspaces, testWorkspaces } from './test-workspace';
 import type { TestWorkspaces } from './test-workspace';
 
 /*
@@ -44,8 +45,7 @@ let cleanup: WorkspaceCleanup | undefined;
 /** Who else may be writing in a tree, as the composed resolver binds its sessions there. */
 let writing: ((tree: WorktreeRecord) => readonly string[]) | undefined;
 
-beforeEach(async () => {
-  made = await testWorkspaces();
+beforeEach(() => {
   core = undefined;
   cleanup = undefined;
   writing = undefined;
@@ -188,6 +188,10 @@ const agents = (on: Core) =>
     .map(({ id }) => id);
 
 describe('deleting the last agent of a worktree', { timeout: 60_000 }, () => {
+  beforeEach(async () => {
+    made = await testWorkspaces();
+  });
+
   it('that holds work asks you first: Cancel changes nothing, Delete keeps its work', async () => {
     const { core: on, trees } = await start();
     writeFileSync(path.join(trees.a.path, 'notes.md'), 'draft\n');
@@ -334,6 +338,10 @@ describe('deleting the last agent of a worktree', { timeout: 60_000 }, () => {
 });
 
 describe('a kept worktree', { timeout: 60_000 }, () => {
+  beforeEach(async () => {
+    made = await testWorkspaces();
+  });
+
   it('is removed once safe, or once you confirm discarding what it holds; yours alone', async () => {
     const { core: on, trees } = await start();
     for (const [agent, tree] of [
@@ -381,6 +389,10 @@ describe('a kept worktree', { timeout: 60_000 }, () => {
 });
 
 describe('a workspace change', { timeout: 60_000 }, () => {
+  beforeEach(async () => {
+    made = await testWorkspaces();
+  });
+
   it('waits for your Switch, at the plan it shows, keeping the worktree left', async () => {
     // Answered through the live reply: a workspace change is the router's, registered or not.
     const { core: on, trees } = await start();
@@ -452,19 +464,72 @@ describe('a workspace change', { timeout: 60_000 }, () => {
 });
 
 describe('a canvas that owns a workspace', { timeout: 60_000 }, () => {
-  it('is never forgotten, though discarded as a draft: its document and records stay', async () => {
-    const { core: on, trees } = await start({ file: false });
-    expect(await ok(on, 'canvas.close', { discard: true })).toEqual({ revs: {} });
-    const disk = onDisk(made.profile);
-    try {
-      expect(disk.prepare('SELECT id FROM canvas WHERE id = ?').get(CANVAS)).toBeDefined();
-      expect(
-        disk.prepare('SELECT count(*) AS n FROM node WHERE canvas_id = ?').get(CANVAS)?.n,
-      ).toBe(2);
-    } finally {
-      disk.close();
-    }
-    expect(stateOf(trees.a.id)).toBe('setup');
-    expect(stateOf(trees.b.id)).toBe('setup');
+  beforeEach(async () => {
+    made = await fakeTestWorkspaces();
   });
+
+  it.each(['before close', 'during close'] as const)(
+    'is never forgotten, though discarded as a draft, with setup reconciled %s',
+    async (when) => {
+      // Only Git is fake: setup reconciliation, publications and the store lane are real.
+      const release = Promise.withResolvers<undefined>();
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Called with the observed instance below.
+      const reconcile = WorkspaceDirectories.prototype.reconcile;
+      const reconciling = vi
+        .spyOn(WorkspaceDirectories.prototype, 'reconcile')
+        .mockImplementation(async function (this: WorkspaceDirectories) {
+          await release.promise;
+          await reconcile.call(this);
+        });
+      const { core: on, trees } = await start({ file: false });
+      expect(reconciling).toHaveBeenCalledOnce();
+      const result = reconciling.mock.results[0];
+      if (result?.type !== 'return') throw new Error('Startup must begin reconciliation.');
+      const ready = result.value;
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Called with the observed instance below.
+      const forget = CanvasMemory.prototype.forget;
+      const forgetting = vi
+        .spyOn(CanvasMemory.prototype, 'forget')
+        .mockImplementation(async function (this: CanvasMemory, canvas) {
+          if (when === 'during close') {
+            release.resolve(undefined);
+            await ready;
+          }
+          return forget.call(this, canvas);
+        });
+      const topics = [`needs:${CANVAS}`, `worktrees:${CANVAS}`] as const;
+      if (when === 'before close') {
+        release.resolve(undefined);
+        await ready;
+        // Establish the canonical revisions before the close's publication mark.
+        for (const topic of topics) {
+          const { stop } = await on.topics.follow(YOU, topic, () => undefined);
+          stop();
+        }
+      }
+      const closed = await ok(on, 'canvas.close', { discard: true });
+      expect(forgetting).toHaveBeenCalledExactlyOnceWith(CANVAS);
+      const disk = onDisk(made.profile);
+      try {
+        expect(disk.prepare('SELECT id FROM canvas WHERE id = ?').get(CANVAS)).toBeDefined();
+        expect(
+          disk.prepare('SELECT count(*) AS n FROM node WHERE canvas_id = ?').get(CANVAS)?.n,
+        ).toBe(2);
+      } finally {
+        disk.close();
+      }
+      expect(stateOf(trees.a.id)).toBe('setup');
+      expect(stateOf(trees.b.id)).toBe('setup');
+      const settled: Record<string, number> = {};
+      for (const topic of topics) {
+        const { snapshot, stop } = await on.topics.follow(YOU, topic, () => undefined);
+        stop();
+        if ('kind' in snapshot) throw new Error('This fixture fits one frame.');
+        expect(snapshot.rev).toBeGreaterThan(0);
+        settled[topic] = snapshot.rev;
+      }
+      // A receipt carries settled revisions that moved during the op, including startup's.
+      expect(closed).toEqual({ revs: when === 'during close' ? settled : {} });
+    },
+  );
 });
