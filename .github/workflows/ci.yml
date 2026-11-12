@@ -1,223 +1,31 @@
-name: CI
+name: G2 writer diagnosis
 
-# The full gate, on every pushed branch, so a branch is checked without a local run (AGENTS.md:
-# Commands and done gate). Pull requests from forks run it too; a pull request from a branch of
-# this repository is already covered by its push.
+# Throwaway branch only. Never merge this diagnostic gate.
 on:
   push:
-  pull_request:
+    branches: [diag/g2-writer]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
-  # A newer push to the same branch replaces an older run, except on main, where every merge is
-  # checked.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: g2-writer-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  # No git hooks in CI.
   HUSKY: '0'
 
 jobs:
-  # Every commit of a pull request from a fork carries its author's Signed-off-by (CONTRIBUTING.md).
-  # Branches of this repository are the copyright holder's own and run as pushes, which skip this.
-  # Nothing privileged runs: read-only contents and no secrets. A fork can edit this job in its own
-  # pull request; the diff of this file shows that before anything is merged.
-  dco:
-    name: DCO
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+  g2-writer:
+    name: G2 writer diagnosis (Linux x64, 5 runs)
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-      - name: Check sign-offs
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-dco.mjs "$BASE" "$HEAD"
-
-  build:
-    name: ${{ matrix.os }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    strategy:
-      fail-fast: false
-      matrix:
-        # Pinned images rather than *-latest for Linux, so runner image upgrades happen deliberately.
-        os: ${{ fromJSON(github.ref == 'refs/heads/main' && '["macos-latest","ubuntu-24.04","ubuntu-24.04-arm","windows-latest"]' || '["macos-latest","ubuntu-24.04","ubuntu-24.04-arm"]') }}
-    runs-on: ${{ matrix.os }}
-    # Windows is held for the MVP (the prelaunch checklist): it runs on main only and never fails
-    # the run. Every other job blocks.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # Reads the pnpm version from package.json "packageManager". Pinned to the v6.1.0 commit:
-      # the floating v6 tag still points at a release without pnpm 12 support.
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      - name: Cache Electron binary
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/electron
-            ~/Library/Caches/electron
-            ~/AppData/Local/electron/Cache
-          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
-
-      - run: pnpm install --frozen-lockfile
-
-      # Electron >= 42 downloads its binary on first use rather than at install time.
-      - run: pnpm exec install-electron
-
-      # GitHub's Ubuntu (and possibly macOS) images install git-lfs system-wide (`filter.lfs` in /etc/gitconfig).
-      # corrallm's workspace Git reads the system configuration as a user's machine has it (its
-      # GIT_* environment is scrubbed, so a test can't opt out), and the workspace tests assume a
-      # machine without a system filter driver, as on a developer's laptop.
-      - name: Remove the image's system Git filter
-        if: runner.os != 'Windows'
-        run: sudo git lfs uninstall --system || sudo git config --system --remove-section filter.lfs || true
-
-      - run: pnpm run typecheck
-      - name: Lint
-        run: pnpm run lint
-        env:
-          # Type-aware ESLint over the whole solution needs more than Node's default heap on a
-          # 7 GB runner (it aborted at ~2 GB).
-          NODE_OPTIONS: --max-old-space-size=6144
-      - run: pnpm run format:check
-      # macOS: the image's Homebrew Git 2.56.0 crashes (SIGSEGV) in files.test.ts's sparse partial
-      # clone, so Apple's Git 2.50.1 (the laptop's) comes first. The snapshot loop budget is wider
-      # for the 3-core runner (see testing.md).
-      - name: Unit tests
-        # bash on every OS: Windows' default shell would try to parse the `if` below as PowerShell.
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then export PATH="/usr/bin:$PATH"; export CORRALLM_SNAPSHOT_LOOP_BUDGET_MS=250; fi
-          pnpm run test
-      - run: pnpm run package
-
-      # Checks the packaged, fused app on every OS, in the main process and then in its core
-      # process (a utility process): node-pty loads and spawns, a terminal screen (@xterm/headless)
-      # works, the bundled Agent SDK runs a query against the self-test's own fake claude (with the
-      # node set up above), loopback HTTP and spawning work, and child_process.fork is refused.
-      # Then that launch switches that could hijack the app are refused.
-      - name: Allow Chromium sandbox (Linux)
-        if: runner.os == 'Linux'
+      - name: Allow Chromium sandbox
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Packaged app checks
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          set -euo pipefail
-          arch=$(node -p process.arch)
-          case "$RUNNER_OS" in
-            macOS)
-              app="out/corrallm-darwin-$arch/corrallm.app"
-              codesign --verify --deep --strict "$app"
-              test -x "$app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-$arch/spawn-helper"
-              run() { "$app/Contents/MacOS/corrallm" "$@"; }
-              ;;
-            Windows) run() { "out/corrallm-win32-$arch/corrallm.exe" "$@"; } ;;
-            Linux) run() { xvfb-run --auto-servernum "out/corrallm-linux-$arch/corrallm" "$@"; } ;;
-          esac
-
-          CORRALLM_NATIVE_SELFTEST=1 run
-
-          for switch in --remote-debugging-port=0 --gpu-launcher=refused --renderer-cmd-prefix=refused; do
-            code=0
-            CORRALLM_NATIVE_SELFTEST=1 run "$switch" || code=$?
-            if [ "$code" -ne 1 ]; then
-              echo "::error::packaged app accepted $switch (exit $code, expected 1)"
-              exit 1
-            fi
-          done
-
-      # The same checks under plain Node, in the `corrallm` CLI bundle.
-      - name: CLI bundle check
-        timeout-minutes: 5
-        run: |
-          pnpm run build:cli
-          pnpm run corrallm
-        env:
-          CORRALLM_NATIVE_SELFTEST: '1'
-
-  e2e:
-    name: e2e ${{ matrix.os }} (${{ matrix.shard }}/2)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-24.04]
-        shard: [1, 2]
-    runs-on: ${{ matrix.os }}
-    # Every shard blocks: both OSes passed every shard on two consecutive runs (#186, then main after #189).
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      # macOS runs the specs on the host. Linux runs them in the local gate's Docker image
-      # (Debian bookworm, its Mesa and Xvfb): the runner's own Ubuntu 24.04 stack hangs a
-      # renderer on quit after a forced crash (core-continuity), which the image does not.
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        if: runner.os == 'macOS'
-      - uses: actions/setup-node@v7
-        if: runner.os == 'macOS'
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - name: Cache Electron binary
-        if: runner.os == 'macOS'
-        uses: actions/cache@v6
-        with:
-          path: ~/Library/Caches/electron
-          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
-      - run: pnpm install --frozen-lockfile
-        if: runner.os == 'macOS'
-      - run: pnpm exec install-electron
-        if: runner.os == 'macOS'
-
-      - name: e2e (macOS)
-        if: runner.os == 'macOS'
-        env:
-          # The 3-core runner's loop delay is about twice the budget (see e2e/load.e2e.ts).
-          CORRALLM_LOAD_BUDGET_SCALE: '3'
-        run: |
-          sudo git lfs uninstall --system || true
-          pnpm test:e2e --reporter=list --shard=${{ matrix.shard }}/2
-      # Playwright's output folder holds the retry traces (e2e/branches.e2e.ts), the only record of a flake.
-      - name: Upload e2e results (macOS)
-        if: failure() && runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-results-${{ matrix.os }}-${{ matrix.shard }}
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 7
-      - name: Allow Chromium sandbox (Linux)
-        if: runner.os == 'Linux'
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: e2e (Linux, Docker)
-        if: runner.os == 'Linux'
-        run: scripts/e2e-linux.sh x64 --shard=${{ matrix.shard }}/2
+      - name: Five profiled G2 runs (Docker)
+        run: scripts/e2e-linux.sh x64 e2e/load.e2e.ts --grep 'keeps the core.*event loop within budget' --repeat-each=5 --workers=1

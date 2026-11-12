@@ -29,6 +29,7 @@ e2e_tests() {
   # Xvfb's GLX; launch.ts opts only unpackaged Linux tests into Chromium's OpenGL backend.
   step 'End-to-end tests (including production build)' \
     env LIBGL_ALWAYS_SOFTWARE=true GALLIUM_DRIVER=llvmpipe CORRALLM_E2E_GL=mesa \
+    CORRALLM_G2_DIAG=1 CORRALLM_LOAD_CPU_PROFILE="$PWD/test-results/g2-writer/core" \
     xvfb-run -a -s '-screen 0 1920x1080x24 +extension GLX' pnpm test:e2e --retries=0 --trace retain-on-failure --reporter=list,html "$@"
 }
 

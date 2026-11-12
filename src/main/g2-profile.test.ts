@@ -1,0 +1,46 @@
+import { readFile } from 'node:fs/promises';
+
+import { expect, it } from 'vitest';
+
+import { busyStretches, formatEvidence } from '../../e2e/g2-profile.ts';
+import type { Activity, CpuProfile } from '../../e2e/g2-profile.ts';
+
+// A sanitized interval from the task-207 Linux capture, with its real sample deltas and stacks.
+const saved = JSON.parse(
+  await readFile(new URL('./fixtures/g2-busy.cpuprofile.json', import.meta.url), 'utf8'),
+) as CpuProfile;
+
+it('reports a saved busy stretch with the self time and its calling frames', () => {
+  const runs = busyStretches(saved, saved.startTime, saved.endTime);
+  expect(runs).toHaveLength(1);
+  const [run] = runs;
+  if (!run) throw new Error('Saved profile has no busy stretch');
+  expect((run.end - run.start) / 1000).toBeCloseTo(374.464, 3);
+  expect(run.self[0]?.frame).toContain('forget');
+  expect(run.inclusive.some(({ frame }) => frame.includes('#pump'))).toBe(true);
+  expect(run.self.reduce((sum, frame) => sum + frame.us, 0)).toBe(374464);
+});
+
+it('clips to the measured window and reports overlapping worker work and large sample gaps', () => {
+  const activity: Activity = {
+    marks: [
+      saved.startTime + 10000,
+      saved.startTime + 100000,
+      saved.startTime + 300000,
+      saved.endTime - 10000,
+    ],
+    dropped: 0,
+    events: [
+      { lane: 'writer', op: 'savepoint INSERT message', start: 1050000, end: 1140000 },
+      { lane: 'fsync', op: 'flush', start: 1060000, end: 1200000 },
+      { lane: 'checkpointer', op: 'checkpoint', start: 1, end: 100 },
+    ],
+  };
+  const text = formatEvidence('repeat-2', saved, activity);
+  expect(text).toContain('G2-DIAG repeat-2');
+  expect(text).toContain('writer savepoint INSERT message');
+  expect(text).toContain('fsync flush');
+  expect(text).not.toContain('checkpointer checkpoint');
+  expect(text).toContain('sample gap');
+  expect(busyStretches(saved, saved.endTime, saved.endTime + 100000)).toEqual([]);
+});

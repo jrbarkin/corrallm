@@ -7,13 +7,19 @@ import { rename, writeFile } from 'node:fs/promises';
 import { Session } from 'node:inspector/promises';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 
+import { installDiagnostics } from './g2-diagnostics.mjs';
+
+const diagnostics = installDiagnostics();
+
 // Opt-in diagnostics start before the CLI, outside the measured spans, and survive a failed gate.
 const cpuFile = process.env.CORRALLM_LOAD_CPU_PROFILE;
 const cpu = cpuFile ? new Session() : undefined;
 if (cpu) {
   cpu.connect();
   await cpu.post('Profiler.enable');
+  const before = diagnostics?.now();
   await cpu.post('Profiler.start');
+  if (diagnostics) diagnostics.anchor(before, diagnostics.now());
 }
 
 const whole = monitorEventLoopDelay({ resolution: 1 });
@@ -33,6 +39,7 @@ const of = (histogram) => ({
 });
 
 process.on('SIGUSR2', () => {
+  diagnostics?.mark();
   const file = process.env.LOOP_DELAY_FILE;
   if (measuring && file) {
     spans.push(of(span));
@@ -46,7 +53,15 @@ process.on('SIGUSR2', () => {
       cpu && spans.length === 3
         ? cpu
             .post('Profiler.stop')
-            .then(({ profile }) => writeFile(cpuFile, JSON.stringify(profile), { mode: 0o600 }))
+            .then(async ({ profile }) => {
+              await writeFile(cpuFile, JSON.stringify(profile), { mode: 0o600 });
+              if (diagnostics)
+                await writeFile(
+                  `${cpuFile}.activity.json`,
+                  JSON.stringify(diagnostics.snapshot(profile.startTime)),
+                  { mode: 0o600 },
+                );
+            })
             .catch(() => {
               process.stderr.write('G2 CPU profile could not be written.\n');
             })
