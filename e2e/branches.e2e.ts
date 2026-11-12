@@ -24,9 +24,15 @@ async function watched<T>(name: string, run: () => Promise<T>): Promise<T> {
     console.log(`[merge-close ${new Date().toISOString()}] ${what}: ${name}`);
   };
   log('start');
-  const result = await test.step(name, run);
-  log('done');
-  return result;
+  try {
+    const result = await test.step(name, run);
+    log('done');
+    return result;
+  } catch (error) {
+    log('failed');
+    console.error(error);
+    throw error;
+  }
 }
 
 /** The trace the running test is recording, stopped and attached after it, however it ended. */
@@ -224,6 +230,9 @@ exec '${real}' "$@"
         return dialog;
       },
       async close() {
+        // Quit correctly waits for an install past its point of no return. A failed assertion
+        // must release this test's Git gate before asking the app to quit.
+        await rm(gate, { force: true });
         await running.close().catch(() => undefined);
         await rm(root, { recursive: true, force: true });
       },
@@ -238,6 +247,7 @@ exec '${real}' "$@"
       },
     };
   } catch (error) {
+    await rm(gate, { force: true });
     await running.close();
     await rm(root, { recursive: true, force: true });
     throw error;

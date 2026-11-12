@@ -25,7 +25,11 @@ export async function closeLastWindow(
       else window?.close();
     }, destroy);
     await closed;
-    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0);
+    // Playwright's page-close event can precede Electron removing its native window. Reopening
+    // must wait for that state too, otherwise it can reuse a window that is still leaving.
+    await expect
+      .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(0);
     return undefined;
   }
   const successor = destroy ? app.waitForEvent('window', { timeout: 15_000 }) : undefined;
