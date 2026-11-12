@@ -1,0 +1,3380 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "callFrame": {
+        "functionName": "(root)",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": [44, 551, 608, 658, 681, 976, 998, 1061, 1089, 1123, 1412, 1479, 1543, 1673, 1844]
+    },
+    {
+      "id": 44,
+      "callFrame": {
+        "functionName": "(garbage collector)",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": []
+    },
+    {
+      "id": 551,
+      "callFrame": {
+        "functionName": "(idle)",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": []
+    },
+    {
+      "id": 608,
+      "callFrame": {
+        "functionName": "processImmediate",
+        "url": "timers",
+        "lineNumber": 524,
+        "columnNumber": 27
+      },
+      "children": [609]
+    },
+    {
+      "id": 609,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 81196,
+        "columnNumber": 17
+      },
+      "children": [610]
+    },
+    {
+      "id": 610,
+      "callFrame": {
+        "functionName": "#flush",
+        "url": "corrallm.cjs",
+        "lineNumber": 81302,
+        "columnNumber": 8
+      },
+      "children": [611]
+    },
+    {
+      "id": 611,
+      "callFrame": {
+        "functionName": "#commit",
+        "url": "corrallm.cjs",
+        "lineNumber": 81315,
+        "columnNumber": 9
+      },
+      "children": [612, 1534]
+    },
+    {
+      "id": 612,
+      "callFrame": {
+        "functionName": "savepoint",
+        "url": "corrallm.cjs",
+        "lineNumber": 80256,
+        "columnNumber": 18
+      },
+      "children": [613]
+    },
+    {
+      "id": 613,
+      "callFrame": {
+        "functionName": "synchronously",
+        "url": "corrallm.cjs",
+        "lineNumber": 80267,
+        "columnNumber": 22
+      },
+      "children": [954]
+    },
+    {
+      "id": 658,
+      "callFrame": {
+        "functionName": "processTicksAndRejections",
+        "url": "task_queues",
+        "lineNumber": 71,
+        "columnNumber": 34
+      },
+      "children": [663, 1502]
+    },
+    {
+      "id": 663,
+      "callFrame": {
+        "functionName": "runMicrotasks",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": [690, 754, 767, 848, 908, 925, 927, 961, 1169, 1319]
+    },
+    {
+      "id": 681,
+      "callFrame": {
+        "functionName": "parserOnHeadersComplete",
+        "url": "node:_http_common",
+        "lineNumber": 76,
+        "columnNumber": 32
+      },
+      "children": [682]
+    },
+    {
+      "id": 682,
+      "callFrame": {
+        "functionName": "parserOnIncoming",
+        "url": "node:_http_server",
+        "lineNumber": 1166,
+        "columnNumber": 25
+      },
+      "children": [685]
+    },
+    {
+      "id": 685,
+      "callFrame": {
+        "functionName": "emit",
+        "url": "node:events",
+        "lineNumber": 488,
+        "columnNumber": 43
+      },
+      "children": [686]
+    },
+    {
+      "id": 686,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 105281,
+        "columnNumber": 42
+      },
+      "children": [3973]
+    },
+    {
+      "id": 690,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 105323,
+        "columnNumber": 25
+      },
+      "children": [691]
+    },
+    {
+      "id": 691,
+      "callFrame": {
+        "functionName": "serve",
+        "url": "corrallm.cjs",
+        "lineNumber": 105351,
+        "columnNumber": 15
+      },
+      "children": [692]
+    },
+    {
+      "id": 692,
+      "callFrame": {
+        "functionName": "Server",
+        "url": "corrallm.cjs",
+        "lineNumber": 73669,
+        "columnNumber": 13
+      },
+      "children": [696]
+    },
+    {
+      "id": 696,
+      "callFrame": {
+        "functionName": "AjvJsonSchemaValidator",
+        "url": "corrallm.cjs",
+        "lineNumber": 73376,
+        "columnNumber": 13
+      },
+      "children": [697]
+    },
+    {
+      "id": 697,
+      "callFrame": {
+        "functionName": "createDefaultAjvInstance",
+        "url": "corrallm.cjs",
+        "lineNumber": 73341,
+        "columnNumber": 33
+      },
+      "children": [698]
+    },
+    {
+      "id": 698,
+      "callFrame": {
+        "functionName": "Ajv",
+        "url": "corrallm.cjs",
+        "lineNumber": 72958,
+        "columnNumber": 11
+      },
+      "children": [699]
+    },
+    {
+      "id": 699,
+      "callFrame": {
+        "functionName": "Ajv",
+        "url": "corrallm.cjs",
+        "lineNumber": 70806,
+        "columnNumber": 13
+      },
+      "children": [700, 708]
+    },
+    {
+      "id": 700,
+      "callFrame": {
+        "functionName": "_addVocabularies",
+        "url": "corrallm.cjs",
+        "lineNumber": 72959,
+        "columnNumber": 18
+      },
+      "children": [701]
+    },
+    {
+      "id": 701,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 72961,
+        "columnNumber": 28
+      },
+      "children": [702]
+    },
+    {
+      "id": 702,
+      "callFrame": {
+        "functionName": "addVocabulary",
+        "url": "corrallm.cjs",
+        "lineNumber": 70997,
+        "columnNumber": 15
+      },
+      "children": [703]
+    },
+    {
+      "id": 703,
+      "callFrame": {
+        "functionName": "addKeyword",
+        "url": "corrallm.cjs",
+        "lineNumber": 71001,
+        "columnNumber": 12
+      },
+      "children": [704, 846]
+    },
+    {
+      "id": 704,
+      "callFrame": {
+        "functionName": "eachItem",
+        "url": "corrallm.cjs",
+        "lineNumber": 67660,
+        "columnNumber": 18
+      },
+      "children": [705]
+    },
+    {
+      "id": 705,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 71025,
+        "columnNumber": 107
+      },
+      "children": [706]
+    },
+    {
+      "id": 706,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 71025,
+        "columnNumber": 138
+      },
+      "children": [707]
+    },
+    {
+      "id": 707,
+      "callFrame": {
+        "functionName": "addRule",
+        "url": "corrallm.cjs",
+        "lineNumber": 71188,
+        "columnNumber": 17
+      },
+      "children": []
+    },
+    {
+      "id": 708,
+      "callFrame": {
+        "functionName": "_addDefaultMetaSchema",
+        "url": "corrallm.cjs",
+        "lineNumber": 72964,
+        "columnNumber": 23
+      },
+      "children": [709]
+    },
+    {
+      "id": 709,
+      "callFrame": {
+        "functionName": "addMetaSchema",
+        "url": "corrallm.cjs",
+        "lineNumber": 70926,
+        "columnNumber": 15
+      },
+      "children": [710]
+    },
+    {
+      "id": 710,
+      "callFrame": {
+        "functionName": "addSchema",
+        "url": "corrallm.cjs",
+        "lineNumber": 70910,
+        "columnNumber": 11
+      },
+      "children": [711]
+    },
+    {
+      "id": 711,
+      "callFrame": {
+        "functionName": "_addSchema",
+        "url": "corrallm.cjs",
+        "lineNumber": 71080,
+        "columnNumber": 12
+      },
+      "children": [712]
+    },
+    {
+      "id": 712,
+      "callFrame": {
+        "functionName": "getSchemaRefs",
+        "url": "corrallm.cjs",
+        "lineNumber": 68648,
+        "columnNumber": 23
+      },
+      "children": [713, 716]
+    },
+    {
+      "id": 713,
+      "callFrame": {
+        "functionName": "getFullPath",
+        "url": "corrallm.cjs",
+        "lineNumber": 68628,
+        "columnNumber": 21
+      },
+      "children": [794]
+    },
+    {
+      "id": 716,
+      "callFrame": {
+        "functionName": "module.exports",
+        "url": "corrallm.cjs",
+        "lineNumber": 68496,
+        "columnNumber": 41
+      },
+      "children": [717]
+    },
+    {
+      "id": 717,
+      "callFrame": {
+        "functionName": "_traverse",
+        "url": "corrallm.cjs",
+        "lineNumber": 68550,
+        "columnNumber": 19
+      },
+      "children": [718, 1707]
+    },
+    {
+      "id": 718,
+      "callFrame": {
+        "functionName": "_traverse",
+        "url": "corrallm.cjs",
+        "lineNumber": 68550,
+        "columnNumber": 19
+      },
+      "children": []
+    },
+    {
+      "id": 754,
+      "callFrame": {
+        "functionName": "handlePostRequest",
+        "url": "corrallm.cjs",
+        "lineNumber": 104815,
+        "columnNumber": 25
+      },
+      "children": [765]
+    },
+    {
+      "id": 765,
+      "callFrame": {
+        "functionName": "_Response",
+        "url": "undici",
+        "lineNumber": 11706,
+        "columnNumber": 17
+      },
+      "children": [1980]
+    },
+    {
+      "id": 767,
+      "callFrame": {
+        "functionName": "responseViaResponseObject",
+        "url": "corrallm.cjs",
+        "lineNumber": 104069,
+        "columnNumber": 29
+      },
+      "children": [1770]
+    },
+    {
+      "id": 794,
+      "callFrame": {
+        "functionName": "_getFullPath",
+        "url": "corrallm.cjs",
+        "lineNumber": 68633,
+        "columnNumber": 22
+      },
+      "children": [795]
+    },
+    {
+      "id": 795,
+      "callFrame": {
+        "functionName": "serialize",
+        "url": "corrallm.cjs",
+        "lineNumber": 70332,
+        "columnNumber": 19
+      },
+      "children": [796]
+    },
+    {
+      "id": 796,
+      "callFrame": {
+        "functionName": "recomposeAuthority",
+        "url": "corrallm.cjs",
+        "lineNumber": 69976,
+        "columnNumber": 28
+      },
+      "children": []
+    },
+    {
+      "id": 846,
+      "callFrame": {
+        "functionName": "checkKeyword",
+        "url": "corrallm.cjs",
+        "lineNumber": 71179,
+        "columnNumber": 22
+      },
+      "children": [847]
+    },
+    {
+      "id": 847,
+      "callFrame": {
+        "functionName": "eachItem",
+        "url": "corrallm.cjs",
+        "lineNumber": 67660,
+        "columnNumber": 18
+      },
+      "children": [1963]
+    },
+    {
+      "id": 848,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 66079,
+        "columnNumber": 11
+      },
+      "children": [849]
+    },
+    {
+      "id": 849,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 66495,
+        "columnNumber": 37
+      },
+      "children": [857]
+    },
+    {
+      "id": 857,
+      "callFrame": {
+        "functionName": "wrappedHandler",
+        "url": "corrallm.cjs",
+        "lineNumber": 73720,
+        "columnNumber": 27
+      },
+      "children": [858]
+    },
+    {
+      "id": 858,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 105364,
+        "columnNumber": 50
+      },
+      "children": [859]
+    },
+    {
+      "id": 859,
+      "callFrame": {
+        "functionName": "callTool",
+        "url": "corrallm.cjs",
+        "lineNumber": 105250,
+        "columnNumber": 23
+      },
+      "children": [860]
+    },
+    {
+      "id": 860,
+      "callFrame": {
+        "functionName": "call",
+        "url": "corrallm.cjs",
+        "lineNumber": 131886,
+        "columnNumber": 8
+      },
+      "children": [861]
+    },
+    {
+      "id": 861,
+      "callFrame": {
+        "functionName": "run",
+        "url": "corrallm.cjs",
+        "lineNumber": 129622,
+        "columnNumber": 5
+      },
+      "children": [862]
+    },
+    {
+      "id": 862,
+      "callFrame": {
+        "functionName": "withProcesses",
+        "url": "corrallm.cjs",
+        "lineNumber": 8032,
+        "columnNumber": 22
+      },
+      "children": [863]
+    },
+    {
+      "id": 863,
+      "callFrame": {
+        "functionName": "run",
+        "url": "async_context_frame",
+        "lineNumber": 57,
+        "columnNumber": 5
+      },
+      "children": [864]
+    },
+    {
+      "id": 864,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 131889,
+        "columnNumber": 23
+      },
+      "children": [865]
+    },
+    {
+      "id": 865,
+      "callFrame": {
+        "functionName": "call",
+        "url": "corrallm.cjs",
+        "lineNumber": 85587,
+        "columnNumber": 20
+      },
+      "children": [876]
+    },
+    {
+      "id": 876,
+      "callFrame": {
+        "functionName": "run",
+        "url": "corrallm.cjs",
+        "lineNumber": 85605,
+        "columnNumber": 15
+      },
+      "children": [2086]
+    },
+    {
+      "id": 908,
+      "callFrame": {
+        "functionName": "run",
+        "url": "corrallm.cjs",
+        "lineNumber": 85410,
+        "columnNumber": 19
+      },
+      "children": [909]
+    },
+    {
+      "id": 909,
+      "callFrame": {
+        "functionName": "Object.assign",
+        "url": "corrallm.cjs",
+        "lineNumber": 125560,
+        "columnNumber": 31
+      },
+      "children": [910]
+    },
+    {
+      "id": 910,
+      "callFrame": {
+        "functionName": "published",
+        "url": "corrallm.cjs",
+        "lineNumber": 85482,
+        "columnNumber": 14
+      },
+      "children": [911]
+    },
+    {
+      "id": 911,
+      "callFrame": {
+        "functionName": "attribute",
+        "url": "corrallm.cjs",
+        "lineNumber": 128928,
+        "columnNumber": 11
+      },
+      "children": [912]
+    },
+    {
+      "id": 912,
+      "callFrame": {
+        "functionName": "isPending",
+        "url": "corrallm.cjs",
+        "lineNumber": 128358,
+        "columnNumber": 11
+      },
+      "children": [913]
+    },
+    {
+      "id": 913,
+      "callFrame": {
+        "functionName": "argsOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 127696,
+        "columnNumber": 15
+      },
+      "children": [914]
+    },
+    {
+      "id": 914,
+      "callFrame": {
+        "functionName": "topicRequest",
+        "url": "corrallm.cjs",
+        "lineNumber": 88918,
+        "columnNumber": 21
+      },
+      "children": [915]
+    },
+    {
+      "id": 915,
+      "callFrame": {
+        "functionName": "_parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 5783,
+        "columnNumber": 24
+      },
+      "children": [916]
+    },
+    {
+      "id": 916,
+      "callFrame": {
+        "functionName": "fn",
+        "url": "corrallm.cjs",
+        "lineNumber": 1075,
+        "columnNumber": 13
+      },
+      "children": [917]
+    },
+    {
+      "id": 917,
+      "callFrame": {
+        "functionName": "inst._zod.run",
+        "url": "corrallm.cjs",
+        "lineNumber": 2172,
+        "columnNumber": 19
+      },
+      "children": [918]
+    },
+    {
+      "id": 918,
+      "callFrame": {
+        "functionName": "inst._zod.parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 2757,
+        "columnNumber": 20
+      },
+      "children": [1792]
+    },
+    {
+      "id": 925,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 129128,
+        "columnNumber": 19
+      },
+      "children": [926]
+    },
+    {
+      "id": 926,
+      "callFrame": {
+        "functionName": "#publishRuntime",
+        "url": "corrallm.cjs",
+        "lineNumber": 129142,
+        "columnNumber": 23
+      },
+      "children": [957, 1230, 1338, 1772]
+    },
+    {
+      "id": 927,
+      "callFrame": {
+        "functionName": "runMicrotask",
+        "url": "task_queues",
+        "lineNumber": 146,
+        "columnNumber": 21
+      },
+      "children": [928]
+    },
+    {
+      "id": 928,
+      "callFrame": {
+        "functionName": "runInAsyncScope",
+        "url": "node:async_hooks",
+        "lineNumber": 219,
+        "columnNumber": 17
+      },
+      "children": [929]
+    },
+    {
+      "id": 929,
+      "callFrame": {
+        "functionName": "",
+        "url": "task_queues",
+        "lineNumber": 147,
+        "columnNumber": 23
+      },
+      "children": [930, 1094]
+    },
+    {
+      "id": 930,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 117147,
+        "columnNumber": 18
+      },
+      "children": [931, 1227]
+    },
+    {
+      "id": 931,
+      "callFrame": {
+        "functionName": "needsInput",
+        "url": "corrallm.cjs",
+        "lineNumber": 116338,
+        "columnNumber": 19
+      },
+      "children": [932]
+    },
+    {
+      "id": 932,
+      "callFrame": {
+        "functionName": "unasking",
+        "url": "corrallm.cjs",
+        "lineNumber": 115421,
+        "columnNumber": 10
+      },
+      "children": [933]
+    },
+    {
+      "id": 933,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 115423,
+        "columnNumber": 37
+      },
+      "children": [934]
+    },
+    {
+      "id": 934,
+      "callFrame": {
+        "functionName": "#asking",
+        "url": "corrallm.cjs",
+        "lineNumber": 115672,
+        "columnNumber": 9
+      },
+      "children": [2327]
+    },
+    {
+      "id": 954,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 110688,
+        "columnNumber": 35
+      },
+      "children": [955]
+    },
+    {
+      "id": 955,
+      "callFrame": {
+        "functionName": "changes",
+        "url": "corrallm.cjs",
+        "lineNumber": 110710,
+        "columnNumber": 9
+      },
+      "children": [956, 2578]
+    },
+    {
+      "id": 956,
+      "callFrame": {
+        "functionName": "keep",
+        "url": "corrallm.cjs",
+        "lineNumber": 110385,
+        "columnNumber": 6
+      },
+      "children": []
+    },
+    {
+      "id": 957,
+      "callFrame": {
+        "functionName": "take",
+        "url": "corrallm.cjs",
+        "lineNumber": 128374,
+        "columnNumber": 6
+      },
+      "children": [958, 1173, 1179, 1197]
+    },
+    {
+      "id": 958,
+      "callFrame": {
+        "functionName": "#takeMessages",
+        "url": "corrallm.cjs",
+        "lineNumber": 128640,
+        "columnNumber": 15
+      },
+      "children": [1856, 2258]
+    },
+    {
+      "id": 961,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 128821,
+        "columnNumber": 19
+      },
+      "children": [962]
+    },
+    {
+      "id": 962,
+      "callFrame": {
+        "functionName": "#reread",
+        "url": "corrallm.cjs",
+        "lineNumber": 128828,
+        "columnNumber": 15
+      },
+      "children": [963]
+    },
+    {
+      "id": 963,
+      "callFrame": {
+        "functionName": "read",
+        "url": "corrallm.cjs",
+        "lineNumber": 131297,
+        "columnNumber": 9
+      },
+      "children": [964, 969]
+    },
+    {
+      "id": 964,
+      "callFrame": {
+        "functionName": "canvasOfTopic",
+        "url": "corrallm.cjs",
+        "lineNumber": 88960,
+        "columnNumber": 22
+      },
+      "children": [2527]
+    },
+    {
+      "id": 969,
+      "callFrame": {
+        "functionName": "waitingFor",
+        "url": "corrallm.cjs",
+        "lineNumber": 131370,
+        "columnNumber": 20
+      },
+      "children": [1262, 1357]
+    },
+    {
+      "id": 976,
+      "callFrame": {
+        "functionName": "send",
+        "url": "corrallm.cjs",
+        "lineNumber": 115264,
+        "columnNumber": 12
+      },
+      "children": [977]
+    },
+    {
+      "id": 977,
+      "callFrame": {
+        "functionName": "#pump",
+        "url": "corrallm.cjs",
+        "lineNumber": 115445,
+        "columnNumber": 7
+      },
+      "children": [978, 2251]
+    },
+    {
+      "id": 978,
+      "callFrame": {
+        "functionName": "#forgetReleased",
+        "url": "corrallm.cjs",
+        "lineNumber": 115812,
+        "columnNumber": 17
+      },
+      "children": [2749]
+    },
+    {
+      "id": 998,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 128936,
+        "columnNumber": 26
+      },
+      "children": [1785, 1800]
+    },
+    {
+      "id": 1061,
+      "callFrame": {
+        "functionName": "runMicrotask",
+        "url": "task_queues",
+        "lineNumber": 146,
+        "columnNumber": 21
+      },
+      "children": [1062]
+    },
+    {
+      "id": 1062,
+      "callFrame": {
+        "functionName": "runInAsyncScope",
+        "url": "node:async_hooks",
+        "lineNumber": 219,
+        "columnNumber": 17
+      },
+      "children": [1063]
+    },
+    {
+      "id": 1063,
+      "callFrame": {
+        "functionName": "",
+        "url": "task_queues",
+        "lineNumber": 147,
+        "columnNumber": 23
+      },
+      "children": [1064, 1524]
+    },
+    {
+      "id": 1064,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 115250,
+        "columnNumber": 18
+      },
+      "children": [1065]
+    },
+    {
+      "id": 1065,
+      "callFrame": {
+        "functionName": "#pump",
+        "url": "corrallm.cjs",
+        "lineNumber": 115445,
+        "columnNumber": 7
+      },
+      "children": []
+    },
+    {
+      "id": 1089,
+      "callFrame": {
+        "functionName": "onStreamRead",
+        "url": "stream_base_commons",
+        "lineNumber": 170,
+        "columnNumber": 21
+      },
+      "children": [1115]
+    },
+    {
+      "id": 1094,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 115250,
+        "columnNumber": 18
+      },
+      "children": [1095]
+    },
+    {
+      "id": 1095,
+      "callFrame": {
+        "functionName": "#pump",
+        "url": "corrallm.cjs",
+        "lineNumber": 115445,
+        "columnNumber": 7
+      },
+      "children": [1096, 1186, 1248, 1252, 1373, 1407, 1408, 2130]
+    },
+    {
+      "id": 1096,
+      "callFrame": {
+        "functionName": "#holdOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 115635,
+        "columnNumber": 9
+      },
+      "children": [1100, 1516, 2288]
+    },
+    {
+      "id": 1100,
+      "callFrame": {
+        "functionName": "#admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 115749,
+        "columnNumber": 8
+      },
+      "children": [1498, 1601, 1999]
+    },
+    {
+      "id": 1115,
+      "callFrame": {
+        "functionName": "Readable.push",
+        "url": "readable",
+        "lineNumber": 394,
+        "columnNumber": 34
+      },
+      "children": [1116]
+    },
+    {
+      "id": 1116,
+      "callFrame": {
+        "functionName": "readableAddChunkPushByteMode",
+        "url": "readable",
+        "lineNumber": 470,
+        "columnNumber": 37
+      },
+      "children": [1117]
+    },
+    {
+      "id": 1117,
+      "callFrame": {
+        "functionName": "addChunk",
+        "url": "readable",
+        "lineNumber": 557,
+        "columnNumber": 17
+      },
+      "children": [1118]
+    },
+    {
+      "id": 1118,
+      "callFrame": {
+        "functionName": "emit",
+        "url": "node:events",
+        "lineNumber": 488,
+        "columnNumber": 43
+      },
+      "children": [1119]
+    },
+    {
+      "id": 1119,
+      "callFrame": {
+        "functionName": "ondata",
+        "url": "interface",
+        "lineNumber": 266,
+        "columnNumber": 17
+      },
+      "children": [1120]
+    },
+    {
+      "id": 1120,
+      "callFrame": {
+        "functionName": "",
+        "url": "interface",
+        "lineNumber": 620,
+        "columnNumber": 16
+      },
+      "children": [1203]
+    },
+    {
+      "id": 1123,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 129128,
+        "columnNumber": 19
+      },
+      "children": [1124]
+    },
+    {
+      "id": 1124,
+      "callFrame": {
+        "functionName": "#publishRuntime",
+        "url": "corrallm.cjs",
+        "lineNumber": 129142,
+        "columnNumber": 23
+      },
+      "children": [1550]
+    },
+    {
+      "id": 1169,
+      "callFrame": {
+        "functionName": "#emit",
+        "url": "corrallm.cjs",
+        "lineNumber": 116673,
+        "columnNumber": 13
+      },
+      "children": [1170]
+    },
+    {
+      "id": 1170,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 112449,
+        "columnNumber": 47
+      },
+      "children": [1171]
+    },
+    {
+      "id": 1171,
+      "callFrame": {
+        "functionName": "receive",
+        "url": "corrallm.cjs",
+        "lineNumber": 111306,
+        "columnNumber": 9
+      },
+      "children": [1172, 1314, 1758]
+    },
+    {
+      "id": 1172,
+      "callFrame": {
+        "functionName": "dispatch",
+        "url": "corrallm.cjs",
+        "lineNumber": 112423,
+        "columnNumber": 14
+      },
+      "children": [1268]
+    },
+    {
+      "id": 1173,
+      "callFrame": {
+        "functionName": "#takeSession",
+        "url": "corrallm.cjs",
+        "lineNumber": 128591,
+        "columnNumber": 14
+      },
+      "children": [1174]
+    },
+    {
+      "id": 1174,
+      "callFrame": {
+        "functionName": "entriesDiff",
+        "url": "corrallm.cjs",
+        "lineNumber": 127881,
+        "columnNumber": 20
+      },
+      "children": [2229]
+    },
+    {
+      "id": 1179,
+      "callFrame": {
+        "functionName": "#takeSessions",
+        "url": "corrallm.cjs",
+        "lineNumber": 128571,
+        "columnNumber": 15
+      },
+      "children": [1180, 1211]
+    },
+    {
+      "id": 1180,
+      "callFrame": {
+        "functionName": "sessionSummary",
+        "url": "corrallm.cjs",
+        "lineNumber": 124658,
+        "columnNumber": 23
+      },
+      "children": [1843, 2472]
+    },
+    {
+      "id": 1186,
+      "callFrame": {
+        "functionName": "#forgetReleased",
+        "url": "corrallm.cjs",
+        "lineNumber": 115812,
+        "columnNumber": 17
+      },
+      "children": [1187, 1359]
+    },
+    {
+      "id": 1187,
+      "callFrame": {
+        "functionName": "holding",
+        "url": "corrallm.cjs",
+        "lineNumber": 113120,
+        "columnNumber": 9
+      },
+      "children": [1829]
+    },
+    {
+      "id": 1197,
+      "callFrame": {
+        "functionName": "argsOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 127696,
+        "columnNumber": 15
+      },
+      "children": [1198]
+    },
+    {
+      "id": 1198,
+      "callFrame": {
+        "functionName": "topicRequest",
+        "url": "corrallm.cjs",
+        "lineNumber": 88918,
+        "columnNumber": 21
+      },
+      "children": [1283]
+    },
+    {
+      "id": 1203,
+      "callFrame": {
+        "functionName": "",
+        "url": "interface",
+        "lineNumber": 466,
+        "columnNumber": 11
+      },
+      "children": [1204]
+    },
+    {
+      "id": 1204,
+      "callFrame": {
+        "functionName": "emit",
+        "url": "node:events",
+        "lineNumber": 488,
+        "columnNumber": 43
+      },
+      "children": [1205]
+    },
+    {
+      "id": 1205,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 74975,
+        "columnNumber": 72
+      },
+      "children": [1206]
+    },
+    {
+      "id": 1206,
+      "callFrame": {
+        "functionName": "receive",
+        "url": "corrallm.cjs",
+        "lineNumber": 75113,
+        "columnNumber": 9
+      },
+      "children": []
+    },
+    {
+      "id": 1211,
+      "callFrame": {
+        "functionName": "projectData",
+        "url": "corrallm.cjs",
+        "lineNumber": 124536,
+        "columnNumber": 20
+      },
+      "children": [1212]
+    },
+    {
+      "id": 1212,
+      "callFrame": {
+        "functionName": "share",
+        "url": "corrallm.cjs",
+        "lineNumber": 124539,
+        "columnNumber": 14
+      },
+      "children": [1213]
+    },
+    {
+      "id": 1213,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 124544,
+        "columnNumber": 42
+      },
+      "children": [1214]
+    },
+    {
+      "id": 1214,
+      "callFrame": {
+        "functionName": "share",
+        "url": "corrallm.cjs",
+        "lineNumber": 124539,
+        "columnNumber": 14
+      },
+      "children": []
+    },
+    {
+      "id": 1227,
+      "callFrame": {
+        "functionName": "needs",
+        "url": "corrallm.cjs",
+        "lineNumber": 131431,
+        "columnNumber": 9
+      },
+      "children": [1228, 1259, 1332]
+    },
+    {
+      "id": 1228,
+      "callFrame": {
+        "functionName": "items",
+        "url": "corrallm.cjs",
+        "lineNumber": 96097,
+        "columnNumber": 7
+      },
+      "children": [1229]
+    },
+    {
+      "id": 1229,
+      "callFrame": {
+        "functionName": "worktreesOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 92851,
+        "columnNumber": 13
+      },
+      "children": []
+    },
+    {
+      "id": 1230,
+      "callFrame": {
+        "functionName": "divide",
+        "url": "corrallm.cjs",
+        "lineNumber": 128103,
+        "columnNumber": 15
+      },
+      "children": [1231]
+    },
+    {
+      "id": 1231,
+      "callFrame": {
+        "functionName": "bytesOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 127999,
+        "columnNumber": 16
+      },
+      "children": [1232]
+    },
+    {
+      "id": 1232,
+      "callFrame": {
+        "functionName": "byteLength",
+        "url": "node:buffer",
+        "lineNumber": 853,
+        "columnNumber": 19
+      },
+      "children": [1233]
+    },
+    {
+      "id": 1233,
+      "callFrame": {
+        "functionName": "",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": []
+    },
+    {
+      "id": 1248,
+      "callFrame": {
+        "functionName": "#limited",
+        "url": "corrallm.cjs",
+        "lineNumber": 115408,
+        "columnNumber": 10
+      },
+      "children": []
+    },
+    {
+      "id": 1252,
+      "callFrame": {
+        "functionName": "#tellWaiting",
+        "url": "corrallm.cjs",
+        "lineNumber": 116040,
+        "columnNumber": 14
+      },
+      "children": [1253]
+    },
+    {
+      "id": 1253,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 116042,
+        "columnNumber": 34
+      },
+      "children": []
+    },
+    {
+      "id": 1259,
+      "callFrame": {
+        "functionName": "items",
+        "url": "corrallm.cjs",
+        "lineNumber": 97284,
+        "columnNumber": 7
+      },
+      "children": [1260]
+    },
+    {
+      "id": 1260,
+      "callFrame": {
+        "functionName": "#waiting",
+        "url": "corrallm.cjs",
+        "lineNumber": 97304,
+        "columnNumber": 10
+      },
+      "children": [1261]
+    },
+    {
+      "id": 1261,
+      "callFrame": {
+        "functionName": "bindingsOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 92977,
+        "columnNumber": 12
+      },
+      "children": []
+    },
+    {
+      "id": 1262,
+      "callFrame": {
+        "functionName": "needsInput",
+        "url": "corrallm.cjs",
+        "lineNumber": 116338,
+        "columnNumber": 19
+      },
+      "children": [1275, 1840]
+    },
+    {
+      "id": 1268,
+      "callFrame": {
+        "functionName": "#dispatch",
+        "url": "corrallm.cjs",
+        "lineNumber": 112488,
+        "columnNumber": 11
+      },
+      "children": [1928]
+    },
+    {
+      "id": 1275,
+      "callFrame": {
+        "functionName": "unasking",
+        "url": "corrallm.cjs",
+        "lineNumber": 115421,
+        "columnNumber": 10
+      },
+      "children": [1626]
+    },
+    {
+      "id": 1283,
+      "callFrame": {
+        "functionName": "_parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 5783,
+        "columnNumber": 24
+      },
+      "children": [1284]
+    },
+    {
+      "id": 1284,
+      "callFrame": {
+        "functionName": "fn",
+        "url": "corrallm.cjs",
+        "lineNumber": 1075,
+        "columnNumber": 13
+      },
+      "children": [1320]
+    },
+    {
+      "id": 1314,
+      "callFrame": {
+        "functionName": "#end",
+        "url": "corrallm.cjs",
+        "lineNumber": 111588,
+        "columnNumber": 6
+      },
+      "children": [1575]
+    },
+    {
+      "id": 1319,
+      "callFrame": {
+        "functionName": "look",
+        "url": "corrallm.cjs",
+        "lineNumber": 125776,
+        "columnNumber": 15
+      },
+      "children": [2036]
+    },
+    {
+      "id": 1320,
+      "callFrame": {
+        "functionName": "inst._zod.run",
+        "url": "corrallm.cjs",
+        "lineNumber": 2172,
+        "columnNumber": 19
+      },
+      "children": [1321]
+    },
+    {
+      "id": 1321,
+      "callFrame": {
+        "functionName": "inst._zod.parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 2757,
+        "columnNumber": 20
+      },
+      "children": [1322]
+    },
+    {
+      "id": 1322,
+      "callFrame": {
+        "functionName": "inst._zod.parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 2722,
+        "columnNumber": 20
+      },
+      "children": [1400]
+    },
+    {
+      "id": 1332,
+      "callFrame": {
+        "functionName": "items",
+        "url": "corrallm.cjs",
+        "lineNumber": 100668,
+        "columnNumber": 7
+      },
+      "children": [1333]
+    },
+    {
+      "id": 1333,
+      "callFrame": {
+        "functionName": "open",
+        "url": "corrallm.cjs",
+        "lineNumber": 100638,
+        "columnNumber": 6
+      },
+      "children": []
+    },
+    {
+      "id": 1338,
+      "callFrame": {
+        "functionName": "#attributedBy",
+        "url": "corrallm.cjs",
+        "lineNumber": 129291,
+        "columnNumber": 15
+      },
+      "children": [1339]
+    },
+    {
+      "id": 1339,
+      "callFrame": {
+        "functionName": "canvasOfTopic",
+        "url": "corrallm.cjs",
+        "lineNumber": 88960,
+        "columnNumber": 22
+      },
+      "children": [1887]
+    },
+    {
+      "id": 1357,
+      "callFrame": {
+        "functionName": "items",
+        "url": "corrallm.cjs",
+        "lineNumber": 100668,
+        "columnNumber": 7
+      },
+      "children": [1358]
+    },
+    {
+      "id": 1358,
+      "callFrame": {
+        "functionName": "open",
+        "url": "corrallm.cjs",
+        "lineNumber": 100638,
+        "columnNumber": 6
+      },
+      "children": []
+    },
+    {
+      "id": 1359,
+      "callFrame": {
+        "functionName": "#forget",
+        "url": "corrallm.cjs",
+        "lineNumber": 115821,
+        "columnNumber": 9
+      },
+      "children": [1360]
+    },
+    {
+      "id": 1360,
+      "callFrame": {
+        "functionName": "holdKey",
+        "url": "corrallm.cjs",
+        "lineNumber": 115003,
+        "columnNumber": 16
+      },
+      "children": []
+    },
+    {
+      "id": 1373,
+      "callFrame": {
+        "functionName": "#withdrawGone",
+        "url": "corrallm.cjs",
+        "lineNumber": 115539,
+        "columnNumber": 15
+      },
+      "children": []
+    },
+    {
+      "id": 1400,
+      "callFrame": {
+        "functionName": "",
+        "url": "",
+        "lineNumber": 2,
+        "columnNumber": 16
+      },
+      "children": [1401]
+    },
+    {
+      "id": 1401,
+      "callFrame": {
+        "functionName": "inst._zod.run",
+        "url": "corrallm.cjs",
+        "lineNumber": 2172,
+        "columnNumber": 19
+      },
+      "children": [1402]
+    },
+    {
+      "id": 1402,
+      "callFrame": {
+        "functionName": "runChecks",
+        "url": "corrallm.cjs",
+        "lineNumber": 2131,
+        "columnNumber": 21
+      },
+      "children": [1403]
+    },
+    {
+      "id": 1403,
+      "callFrame": {
+        "functionName": "check._a.check",
+        "url": "corrallm.cjs",
+        "lineNumber": 1501,
+        "columnNumber": 57
+      },
+      "children": [1546]
+    },
+    {
+      "id": 1407,
+      "callFrame": {
+        "functionName": "#withdrawStale",
+        "url": "corrallm.cjs",
+        "lineNumber": 115561,
+        "columnNumber": 16
+      },
+      "children": [1870]
+    },
+    {
+      "id": 1408,
+      "callFrame": {
+        "functionName": "#waiting",
+        "url": "corrallm.cjs",
+        "lineNumber": 115576,
+        "columnNumber": 10
+      },
+      "children": []
+    },
+    {
+      "id": 1412,
+      "callFrame": {
+        "functionName": "flow",
+        "url": "corrallm.cjs",
+        "lineNumber": 103152,
+        "columnNumber": 14
+      },
+      "children": [1413]
+    },
+    {
+      "id": 1413,
+      "callFrame": {
+        "functionName": "end",
+        "url": "node:_http_outgoing",
+        "lineNumber": 1172,
+        "columnNumber": 44
+      },
+      "children": [1414]
+    },
+    {
+      "id": 1414,
+      "callFrame": {
+        "functionName": "Writable.uncork",
+        "url": "writable",
+        "lineNumber": 521,
+        "columnNumber": 36
+      },
+      "children": [1415]
+    },
+    {
+      "id": 1415,
+      "callFrame": {
+        "functionName": "clearBuffer",
+        "url": "writable",
+        "lineNumber": 745,
+        "columnNumber": 20
+      },
+      "children": [1688]
+    },
+    {
+      "id": 1479,
+      "callFrame": {
+        "functionName": "#start",
+        "url": "corrallm.cjs",
+        "lineNumber": 78009,
+        "columnNumber": 14
+      },
+      "children": [1480]
+    },
+    {
+      "id": 1480,
+      "callFrame": {
+        "functionName": "request",
+        "url": "corrallm.cjs",
+        "lineNumber": 75014,
+        "columnNumber": 11
+      },
+      "children": [1481]
+    },
+    {
+      "id": 1481,
+      "callFrame": {
+        "functionName": "request",
+        "url": "corrallm.cjs",
+        "lineNumber": 75090,
+        "columnNumber": 9
+      },
+      "children": [1482]
+    },
+    {
+      "id": 1482,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 75094,
+        "columnNumber": 22
+      },
+      "children": [1483]
+    },
+    {
+      "id": 1483,
+      "callFrame": {
+        "functionName": "#send",
+        "url": "corrallm.cjs",
+        "lineNumber": 75165,
+        "columnNumber": 7
+      },
+      "children": [1484]
+    },
+    {
+      "id": 1484,
+      "callFrame": {
+        "functionName": "onNotification.notification",
+        "url": "corrallm.cjs",
+        "lineNumber": 74969,
+        "columnNumber": 30
+      },
+      "children": [1485]
+    },
+    {
+      "id": 1485,
+      "callFrame": {
+        "functionName": "Writable.write",
+        "url": "writable",
+        "lineNumber": 505,
+        "columnNumber": 35
+      },
+      "children": [1486]
+    },
+    {
+      "id": 1486,
+      "callFrame": {
+        "functionName": "_write",
+        "url": "writable",
+        "lineNumber": 451,
+        "columnNumber": 15
+      },
+      "children": [1487]
+    },
+    {
+      "id": 1487,
+      "callFrame": {
+        "functionName": "writeOrBuffer",
+        "url": "writable",
+        "lineNumber": 549,
+        "columnNumber": 22
+      },
+      "children": [1488]
+    },
+    {
+      "id": 1488,
+      "callFrame": {
+        "functionName": "Socket._write",
+        "url": "node:net",
+        "lineNumber": 1334,
+        "columnNumber": 34
+      },
+      "children": [1489]
+    },
+    {
+      "id": 1489,
+      "callFrame": {
+        "functionName": "Socket._writeGeneric",
+        "url": "node:net",
+        "lineNumber": 1292,
+        "columnNumber": 41
+      },
+      "children": [1490]
+    },
+    {
+      "id": 1490,
+      "callFrame": {
+        "functionName": "writeGeneric",
+        "url": "stream_base_commons",
+        "lineNumber": 92,
+        "columnNumber": 21
+      },
+      "children": [1491]
+    },
+    {
+      "id": 1491,
+      "callFrame": {
+        "functionName": "writeUtf8String",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": []
+    },
+    {
+      "id": 1498,
+      "callFrame": {
+        "functionName": "admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 117059,
+        "columnNumber": 43
+      },
+      "children": [1499]
+    },
+    {
+      "id": 1499,
+      "callFrame": {
+        "functionName": "admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 131445,
+        "columnNumber": 10
+      },
+      "children": [1500]
+    },
+    {
+      "id": 1500,
+      "callFrame": {
+        "functionName": "admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 117602,
+        "columnNumber": 7
+      },
+      "children": [1850, 2647]
+    },
+    {
+      "id": 1502,
+      "callFrame": {
+        "functionName": "emitCloseNT",
+        "url": "node:_http_server",
+        "lineNumber": 1151,
+        "columnNumber": 20
+      },
+      "children": [1503]
+    },
+    {
+      "id": 1503,
+      "callFrame": {
+        "functionName": "emit",
+        "url": "node:events",
+        "lineNumber": 488,
+        "columnNumber": 43
+      },
+      "children": [1504]
+    },
+    {
+      "id": 1504,
+      "callFrame": {
+        "functionName": "wrapper",
+        "url": "node:events",
+        "lineNumber": 634,
+        "columnNumber": 18
+      },
+      "children": [1505]
+    },
+    {
+      "id": 1505,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 105366,
+        "columnNumber": 25
+      },
+      "children": [1506]
+    },
+    {
+      "id": 1506,
+      "callFrame": {
+        "functionName": "close",
+        "url": "corrallm.cjs",
+        "lineNumber": 105190,
+        "columnNumber": 13
+      },
+      "children": [1507]
+    },
+    {
+      "id": 1507,
+      "callFrame": {
+        "functionName": "close",
+        "url": "corrallm.cjs",
+        "lineNumber": 105025,
+        "columnNumber": 13
+      },
+      "children": [1508]
+    },
+    {
+      "id": 1508,
+      "callFrame": {
+        "functionName": "_transport.onclose",
+        "url": "corrallm.cjs",
+        "lineNumber": 65961,
+        "columnNumber": 29
+      },
+      "children": [1509]
+    },
+    {
+      "id": 1509,
+      "callFrame": {
+        "functionName": "_onclose",
+        "url": "corrallm.cjs",
+        "lineNumber": 65980,
+        "columnNumber": 10
+      },
+      "children": [1510]
+    },
+    {
+      "id": 1510,
+      "callFrame": {
+        "functionName": "fromError",
+        "url": "corrallm.cjs",
+        "lineNumber": 65573,
+        "columnNumber": 18
+      },
+      "children": [1511]
+    },
+    {
+      "id": 1511,
+      "callFrame": {
+        "functionName": "McpError",
+        "url": "corrallm.cjs",
+        "lineNumber": 65564,
+        "columnNumber": 13
+      },
+      "children": []
+    },
+    {
+      "id": 1516,
+      "callFrame": {
+        "functionName": "holding",
+        "url": "corrallm.cjs",
+        "lineNumber": 113120,
+        "columnNumber": 9
+      },
+      "children": [1517]
+    },
+    {
+      "id": 1517,
+      "callFrame": {
+        "functionName": "#pauseCauses",
+        "url": "corrallm.cjs",
+        "lineNumber": 113184,
+        "columnNumber": 14
+      },
+      "children": []
+    },
+    {
+      "id": 1524,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 117147,
+        "columnNumber": 18
+      },
+      "children": [1525, 2970]
+    },
+    {
+      "id": 1525,
+      "callFrame": {
+        "functionName": "needs",
+        "url": "corrallm.cjs",
+        "lineNumber": 131431,
+        "columnNumber": 9
+      },
+      "children": [2601]
+    },
+    {
+      "id": 1534,
+      "callFrame": {
+        "functionName": "#frames",
+        "url": "corrallm.cjs",
+        "lineNumber": 81384,
+        "columnNumber": 9
+      },
+      "children": []
+    },
+    {
+      "id": 1543,
+      "callFrame": {
+        "functionName": "then.then.then.errorResponse.jsonrpc",
+        "url": "corrallm.cjs",
+        "lineNumber": 66079,
+        "columnNumber": 51
+      },
+      "children": [1544]
+    },
+    {
+      "id": 1544,
+      "callFrame": {
+        "functionName": "send",
+        "url": "corrallm.cjs",
+        "lineNumber": 105196,
+        "columnNumber": 12
+      },
+      "children": [1545]
+    },
+    {
+      "id": 1545,
+      "callFrame": {
+        "functionName": "send",
+        "url": "corrallm.cjs",
+        "lineNumber": 105055,
+        "columnNumber": 12
+      },
+      "children": [1863]
+    },
+    {
+      "id": 1546,
+      "callFrame": {
+        "functionName": "RegExp: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": []
+    },
+    {
+      "id": 1550,
+      "callFrame": {
+        "functionName": "take",
+        "url": "corrallm.cjs",
+        "lineNumber": 128374,
+        "columnNumber": 6
+      },
+      "children": [1551, 1701, 1886]
+    },
+    {
+      "id": 1551,
+      "callFrame": {
+        "functionName": "#takeSessions",
+        "url": "corrallm.cjs",
+        "lineNumber": 128571,
+        "columnNumber": 15
+      },
+      "children": [1552, 1693]
+    },
+    {
+      "id": 1552,
+      "callFrame": {
+        "functionName": "projectData",
+        "url": "corrallm.cjs",
+        "lineNumber": 124536,
+        "columnNumber": 20
+      },
+      "children": [1553]
+    },
+    {
+      "id": 1553,
+      "callFrame": {
+        "functionName": "share",
+        "url": "corrallm.cjs",
+        "lineNumber": 124539,
+        "columnNumber": 14
+      },
+      "children": []
+    },
+    {
+      "id": 1575,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 112332,
+        "columnNumber": 6
+      },
+      "children": [1576, 2543]
+    },
+    {
+      "id": 1576,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 115901,
+        "columnNumber": 178
+      },
+      "children": [1577]
+    },
+    {
+      "id": 1577,
+      "callFrame": {
+        "functionName": "#ended",
+        "url": "corrallm.cjs",
+        "lineNumber": 115916,
+        "columnNumber": 8
+      },
+      "children": [1973]
+    },
+    {
+      "id": 1601,
+      "callFrame": {
+        "functionName": "usageRule",
+        "url": "corrallm.cjs",
+        "lineNumber": 113958,
+        "columnNumber": 11
+      },
+      "children": []
+    },
+    {
+      "id": 1626,
+      "callFrame": {
+        "functionName": "#waiting",
+        "url": "corrallm.cjs",
+        "lineNumber": 115576,
+        "columnNumber": 10
+      },
+      "children": []
+    },
+    {
+      "id": 1673,
+      "callFrame": {
+        "functionName": "run",
+        "url": "corrallm.cjs",
+        "lineNumber": 85410,
+        "columnNumber": 19
+      },
+      "children": [1674]
+    },
+    {
+      "id": 1674,
+      "callFrame": {
+        "functionName": "Object.assign",
+        "url": "corrallm.cjs",
+        "lineNumber": 125560,
+        "columnNumber": 31
+      },
+      "children": [3963]
+    },
+    {
+      "id": 1688,
+      "callFrame": {
+        "functionName": "doWrite",
+        "url": "writable",
+        "lineNumber": 588,
+        "columnNumber": 16
+      },
+      "children": [1689]
+    },
+    {
+      "id": 1689,
+      "callFrame": {
+        "functionName": "Socket._writev",
+        "url": "node:net",
+        "lineNumber": 1329,
+        "columnNumber": 35
+      },
+      "children": [1690]
+    },
+    {
+      "id": 1690,
+      "callFrame": {
+        "functionName": "Socket._writeGeneric",
+        "url": "node:net",
+        "lineNumber": 1292,
+        "columnNumber": 41
+      },
+      "children": [1691]
+    },
+    {
+      "id": 1691,
+      "callFrame": {
+        "functionName": "writevGeneric",
+        "url": "stream_base_commons",
+        "lineNumber": 71,
+        "columnNumber": 22
+      },
+      "children": [1692]
+    },
+    {
+      "id": 1692,
+      "callFrame": {
+        "functionName": "writev",
+        "url": "",
+        "lineNumber": -1,
+        "columnNumber": -1
+      },
+      "children": []
+    },
+    {
+      "id": 1693,
+      "callFrame": {
+        "functionName": "sessionSummary",
+        "url": "corrallm.cjs",
+        "lineNumber": 124658,
+        "columnNumber": 23
+      },
+      "children": [1848, 2198]
+    },
+    {
+      "id": 1701,
+      "callFrame": {
+        "functionName": "#takeSession",
+        "url": "corrallm.cjs",
+        "lineNumber": 128591,
+        "columnNumber": 14
+      },
+      "children": [1702]
+    },
+    {
+      "id": 1702,
+      "callFrame": {
+        "functionName": "entriesDiff",
+        "url": "corrallm.cjs",
+        "lineNumber": 127881,
+        "columnNumber": 20
+      },
+      "children": [1703]
+    },
+    {
+      "id": 1703,
+      "callFrame": {
+        "functionName": "tailDiff",
+        "url": "corrallm.cjs",
+        "lineNumber": 127817,
+        "columnNumber": 17
+      },
+      "children": []
+    },
+    {
+      "id": 1707,
+      "callFrame": {
+        "functionName": "escapeJsonPtr",
+        "url": "corrallm.cjs",
+        "lineNumber": 68564,
+        "columnNumber": 23
+      },
+      "children": []
+    },
+    {
+      "id": 1758,
+      "callFrame": {
+        "functionName": "find",
+        "url": "corrallm.cjs",
+        "lineNumber": 111308,
+        "columnNumber": 16
+      },
+      "children": [2272]
+    },
+    {
+      "id": 1770,
+      "callFrame": {
+        "functionName": "buildOutgoingHttpHeaders",
+        "url": "corrallm.cjs",
+        "lineNumber": 103901,
+        "columnNumber": 28
+      },
+      "children": [1771]
+    },
+    {
+      "id": 1771,
+      "callFrame": {
+        "functionName": "next",
+        "url": "undici",
+        "lineNumber": 5864,
+        "columnNumber": 12
+      },
+      "children": []
+    },
+    {
+      "id": 1772,
+      "callFrame": {
+        "functionName": "pending",
+        "url": "corrallm.cjs",
+        "lineNumber": 128320,
+        "columnNumber": 9
+      },
+      "children": []
+    },
+    {
+      "id": 1785,
+      "callFrame": {
+        "functionName": "#reread",
+        "url": "corrallm.cjs",
+        "lineNumber": 128828,
+        "columnNumber": 15
+      },
+      "children": [1786]
+    },
+    {
+      "id": 1786,
+      "callFrame": {
+        "functionName": "read",
+        "url": "corrallm.cjs",
+        "lineNumber": 131297,
+        "columnNumber": 9
+      },
+      "children": [1787]
+    },
+    {
+      "id": 1787,
+      "callFrame": {
+        "functionName": "waitingFor",
+        "url": "corrallm.cjs",
+        "lineNumber": 131370,
+        "columnNumber": 20
+      },
+      "children": [2193, 2322]
+    },
+    {
+      "id": 1792,
+      "callFrame": {
+        "functionName": "inst._zod.parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 2722,
+        "columnNumber": 20
+      },
+      "children": [1793]
+    },
+    {
+      "id": 1793,
+      "callFrame": {
+        "functionName": "",
+        "url": "",
+        "lineNumber": 2,
+        "columnNumber": 16
+      },
+      "children": [1794]
+    },
+    {
+      "id": 1794,
+      "callFrame": {
+        "functionName": "inst._zod.run",
+        "url": "corrallm.cjs",
+        "lineNumber": 2172,
+        "columnNumber": 19
+      },
+      "children": [3961]
+    },
+    {
+      "id": 1800,
+      "callFrame": {
+        "functionName": "#publishRuntime",
+        "url": "corrallm.cjs",
+        "lineNumber": 129142,
+        "columnNumber": 23
+      },
+      "children": [2182]
+    },
+    {
+      "id": 1829,
+      "callFrame": {
+        "functionName": "#pauseCauses",
+        "url": "corrallm.cjs",
+        "lineNumber": 113184,
+        "columnNumber": 14
+      },
+      "children": []
+    },
+    {
+      "id": 1840,
+      "callFrame": {
+        "functionName": "limited",
+        "url": "corrallm.cjs",
+        "lineNumber": 115398,
+        "columnNumber": 9
+      },
+      "children": [1841]
+    },
+    {
+      "id": 1841,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 115399,
+        "columnNumber": 37
+      },
+      "children": [1842]
+    },
+    {
+      "id": 1842,
+      "callFrame": {
+        "functionName": "#limited",
+        "url": "corrallm.cjs",
+        "lineNumber": 115408,
+        "columnNumber": 10
+      },
+      "children": [2534]
+    },
+    {
+      "id": 1843,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 124664,
+        "columnNumber": 145
+      },
+      "children": []
+    },
+    {
+      "id": 1844,
+      "callFrame": {
+        "functionName": "look",
+        "url": "corrallm.cjs",
+        "lineNumber": 125776,
+        "columnNumber": 15
+      },
+      "children": [1845]
+    },
+    {
+      "id": 1845,
+      "callFrame": {
+        "functionName": "pageOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 119835,
+        "columnNumber": 15
+      },
+      "children": [1846]
+    },
+    {
+      "id": 1846,
+      "callFrame": {
+        "functionName": "bytesOf$1",
+        "url": "corrallm.cjs",
+        "lineNumber": 119850,
+        "columnNumber": 18
+      },
+      "children": []
+    },
+    {
+      "id": 1848,
+      "callFrame": {
+        "functionName": "all",
+        "url": "corrallm.cjs",
+        "lineNumber": 110467,
+        "columnNumber": 5
+      },
+      "children": []
+    },
+    {
+      "id": 1850,
+      "callFrame": {
+        "functionName": "keyOf$3",
+        "url": "corrallm.cjs",
+        "lineNumber": 117566,
+        "columnNumber": 11
+      },
+      "children": []
+    },
+    {
+      "id": 1856,
+      "callFrame": {
+        "functionName": "nextOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 127714,
+        "columnNumber": 15
+      },
+      "children": [1857]
+    },
+    {
+      "id": 1857,
+      "callFrame": {
+        "functionName": "cursorOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 110234,
+        "columnNumber": 17
+      },
+      "children": [2885]
+    },
+    {
+      "id": 1863,
+      "callFrame": {
+        "functionName": "writeSSEEvent",
+        "url": "corrallm.cjs",
+        "lineNumber": 104780,
+        "columnNumber": 15
+      },
+      "children": []
+    },
+    {
+      "id": 1870,
+      "callFrame": {
+        "functionName": "active",
+        "url": "corrallm.cjs",
+        "lineNumber": 110474,
+        "columnNumber": 8
+      },
+      "children": []
+    },
+    {
+      "id": 1886,
+      "callFrame": {
+        "functionName": "#takeMessages",
+        "url": "corrallm.cjs",
+        "lineNumber": 128640,
+        "columnNumber": 15
+      },
+      "children": [2350, 2582]
+    },
+    {
+      "id": 1887,
+      "callFrame": {
+        "functionName": "isRuntimeTopic",
+        "url": "corrallm.cjs",
+        "lineNumber": 88965,
+        "columnNumber": 23
+      },
+      "children": []
+    },
+    {
+      "id": 1928,
+      "callFrame": {
+        "functionName": "reduce",
+        "url": "corrallm.cjs",
+        "lineNumber": 110912,
+        "columnNumber": 15
+      },
+      "children": [1929]
+    },
+    {
+      "id": 1929,
+      "callFrame": {
+        "functionName": "update",
+        "url": "corrallm.cjs",
+        "lineNumber": 110913,
+        "columnNumber": 16
+      },
+      "children": []
+    },
+    {
+      "id": 1963,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 71181,
+        "columnNumber": 32
+      },
+      "children": []
+    },
+    {
+      "id": 1973,
+      "callFrame": {
+        "functionName": "update",
+        "url": "corrallm.cjs",
+        "lineNumber": 110638,
+        "columnNumber": 8
+      },
+      "children": [1974]
+    },
+    {
+      "id": 1974,
+      "callFrame": {
+        "functionName": "#keep",
+        "url": "corrallm.cjs",
+        "lineNumber": 110782,
+        "columnNumber": 7
+      },
+      "children": [2554]
+    },
+    {
+      "id": 1980,
+      "callFrame": {
+        "functionName": "makeResponse",
+        "url": "undici",
+        "lineNumber": 11875,
+        "columnNumber": 25
+      },
+      "children": []
+    },
+    {
+      "id": 1999,
+      "callFrame": {
+        "functionName": "holding",
+        "url": "corrallm.cjs",
+        "lineNumber": 113120,
+        "columnNumber": 9
+      },
+      "children": [2000]
+    },
+    {
+      "id": 2000,
+      "callFrame": {
+        "functionName": "#pauseCauses",
+        "url": "corrallm.cjs",
+        "lineNumber": 113184,
+        "columnNumber": 14
+      },
+      "children": []
+    },
+    {
+      "id": 2036,
+      "callFrame": {
+        "functionName": "unread",
+        "url": "corrallm.cjs",
+        "lineNumber": 125807,
+        "columnNumber": 15
+      },
+      "children": [2214]
+    },
+    {
+      "id": 2086,
+      "callFrame": {
+        "functionName": "checkReach",
+        "url": "corrallm.cjs",
+        "lineNumber": 85355,
+        "columnNumber": 20
+      },
+      "children": [2087]
+    },
+    {
+      "id": 2087,
+      "callFrame": {
+        "functionName": "idsIn",
+        "url": "corrallm.cjs",
+        "lineNumber": 6510,
+        "columnNumber": 14
+      },
+      "children": [3957]
+    },
+    {
+      "id": 2130,
+      "callFrame": {
+        "functionName": "requiresImages",
+        "url": "corrallm.cjs",
+        "lineNumber": 110619,
+        "columnNumber": 16
+      },
+      "children": []
+    },
+    {
+      "id": 2182,
+      "callFrame": {
+        "functionName": "take",
+        "url": "corrallm.cjs",
+        "lineNumber": 128374,
+        "columnNumber": 6
+      },
+      "children": [2183, 2715]
+    },
+    {
+      "id": 2183,
+      "callFrame": {
+        "functionName": "#takeSessions",
+        "url": "corrallm.cjs",
+        "lineNumber": 128571,
+        "columnNumber": 15
+      },
+      "children": [2191]
+    },
+    {
+      "id": 2191,
+      "callFrame": {
+        "functionName": "sessionSummary",
+        "url": "corrallm.cjs",
+        "lineNumber": 124658,
+        "columnNumber": 23
+      },
+      "children": []
+    },
+    {
+      "id": 2193,
+      "callFrame": {
+        "functionName": "items",
+        "url": "corrallm.cjs",
+        "lineNumber": 96097,
+        "columnNumber": 7
+      },
+      "children": [2194]
+    },
+    {
+      "id": 2194,
+      "callFrame": {
+        "functionName": "worktreesOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 92851,
+        "columnNumber": 13
+      },
+      "children": []
+    },
+    {
+      "id": 2198,
+      "callFrame": {
+        "functionName": "turnReply",
+        "url": "corrallm.cjs",
+        "lineNumber": 9678,
+        "columnNumber": 18
+      },
+      "children": [2620]
+    },
+    {
+      "id": 2214,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 125808,
+        "columnNumber": 24
+      },
+      "children": [2215]
+    },
+    {
+      "id": 2215,
+      "callFrame": {
+        "functionName": "all",
+        "url": "corrallm.cjs",
+        "lineNumber": 110467,
+        "columnNumber": 5
+      },
+      "children": []
+    },
+    {
+      "id": 2229,
+      "callFrame": {
+        "functionName": "tailDiff",
+        "url": "corrallm.cjs",
+        "lineNumber": 127817,
+        "columnNumber": 17
+      },
+      "children": []
+    },
+    {
+      "id": 2251,
+      "callFrame": {
+        "functionName": "#holdOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 115635,
+        "columnNumber": 9
+      },
+      "children": [2252]
+    },
+    {
+      "id": 2252,
+      "callFrame": {
+        "functionName": "#admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 115749,
+        "columnNumber": 8
+      },
+      "children": [2253]
+    },
+    {
+      "id": 2253,
+      "callFrame": {
+        "functionName": "admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 117059,
+        "columnNumber": 43
+      },
+      "children": [2254]
+    },
+    {
+      "id": 2254,
+      "callFrame": {
+        "functionName": "admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 131445,
+        "columnNumber": 10
+      },
+      "children": [2255]
+    },
+    {
+      "id": 2255,
+      "callFrame": {
+        "functionName": "admit",
+        "url": "corrallm.cjs",
+        "lineNumber": 117602,
+        "columnNumber": 7
+      },
+      "children": [2256]
+    },
+    {
+      "id": 2256,
+      "callFrame": {
+        "functionName": "keyOf$3",
+        "url": "corrallm.cjs",
+        "lineNumber": 117566,
+        "columnNumber": 11
+      },
+      "children": []
+    },
+    {
+      "id": 2258,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 128670,
+        "columnNumber": 34
+      },
+      "children": []
+    },
+    {
+      "id": 2272,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 111308,
+        "columnNumber": 50
+      },
+      "children": []
+    },
+    {
+      "id": 2288,
+      "callFrame": {
+        "functionName": "#limited",
+        "url": "corrallm.cjs",
+        "lineNumber": 115408,
+        "columnNumber": 10
+      },
+      "children": []
+    },
+    {
+      "id": 2322,
+      "callFrame": {
+        "functionName": "needsInput",
+        "url": "corrallm.cjs",
+        "lineNumber": 116338,
+        "columnNumber": 19
+      },
+      "children": [2323]
+    },
+    {
+      "id": 2323,
+      "callFrame": {
+        "functionName": "unasking",
+        "url": "corrallm.cjs",
+        "lineNumber": 115421,
+        "columnNumber": 10
+      },
+      "children": [2616]
+    },
+    {
+      "id": 2327,
+      "callFrame": {
+        "functionName": "neverAsks",
+        "url": "corrallm.cjs",
+        "lineNumber": 83407,
+        "columnNumber": 13
+      },
+      "children": []
+    },
+    {
+      "id": 2350,
+      "callFrame": {
+        "functionName": "messageViewOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 124736,
+        "columnNumber": 22
+      },
+      "children": [2351]
+    },
+    {
+      "id": 2351,
+      "callFrame": {
+        "functionName": "messageView",
+        "url": "corrallm.cjs",
+        "lineNumber": 124581,
+        "columnNumber": 20
+      },
+      "children": [2352]
+    },
+    {
+      "id": 2352,
+      "callFrame": {
+        "functionName": "projectData",
+        "url": "corrallm.cjs",
+        "lineNumber": 124536,
+        "columnNumber": 20
+      },
+      "children": [2353]
+    },
+    {
+      "id": 2353,
+      "callFrame": {
+        "functionName": "share",
+        "url": "corrallm.cjs",
+        "lineNumber": 124539,
+        "columnNumber": 14
+      },
+      "children": []
+    },
+    {
+      "id": 2472,
+      "callFrame": {
+        "functionName": "turnReply",
+        "url": "corrallm.cjs",
+        "lineNumber": 9678,
+        "columnNumber": 18
+      },
+      "children": [2587]
+    },
+    {
+      "id": 2527,
+      "callFrame": {
+        "functionName": "topicRequest",
+        "url": "corrallm.cjs",
+        "lineNumber": 88918,
+        "columnNumber": 21
+      },
+      "children": []
+    },
+    {
+      "id": 2534,
+      "callFrame": {
+        "functionName": "now",
+        "url": "corrallm.cjs",
+        "lineNumber": 117046,
+        "columnNumber": 9
+      },
+      "children": []
+    },
+    {
+      "id": 2543,
+      "callFrame": {
+        "functionName": "turnReply",
+        "url": "corrallm.cjs",
+        "lineNumber": 9678,
+        "columnNumber": 18
+      },
+      "children": [3032]
+    },
+    {
+      "id": 2554,
+      "callFrame": {
+        "functionName": "#prune",
+        "url": "corrallm.cjs",
+        "lineNumber": 110806,
+        "columnNumber": 8
+      },
+      "children": []
+    },
+    {
+      "id": 2578,
+      "callFrame": {
+        "functionName": "forget",
+        "url": "corrallm.cjs",
+        "lineNumber": 110397,
+        "columnNumber": 8
+      },
+      "children": []
+    },
+    {
+      "id": 2582,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 128670,
+        "columnNumber": 34
+      },
+      "children": []
+    },
+    {
+      "id": 2587,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 9679,
+        "columnNumber": 41
+      },
+      "children": []
+    },
+    {
+      "id": 2601,
+      "callFrame": {
+        "functionName": "items",
+        "url": "corrallm.cjs",
+        "lineNumber": 96097,
+        "columnNumber": 7
+      },
+      "children": [2602]
+    },
+    {
+      "id": 2602,
+      "callFrame": {
+        "functionName": "worktreesOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 92851,
+        "columnNumber": 13
+      },
+      "children": []
+    },
+    {
+      "id": 2616,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 115423,
+        "columnNumber": 37
+      },
+      "children": [2617]
+    },
+    {
+      "id": 2617,
+      "callFrame": {
+        "functionName": "#asking",
+        "url": "corrallm.cjs",
+        "lineNumber": 115672,
+        "columnNumber": 9
+      },
+      "children": []
+    },
+    {
+      "id": 2620,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 9679,
+        "columnNumber": 41
+      },
+      "children": []
+    },
+    {
+      "id": 2647,
+      "callFrame": {
+        "functionName": "connectionOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 83377,
+        "columnNumber": 22
+      },
+      "children": [2648]
+    },
+    {
+      "id": 2648,
+      "callFrame": {
+        "functionName": "endpoint",
+        "url": "corrallm.cjs",
+        "lineNumber": 83376,
+        "columnNumber": 18
+      },
+      "children": [2649]
+    },
+    {
+      "id": 2649,
+      "callFrame": {
+        "functionName": "agentEndpoint",
+        "url": "corrallm.cjs",
+        "lineNumber": 83340,
+        "columnNumber": 22
+      },
+      "children": []
+    },
+    {
+      "id": 2715,
+      "callFrame": {
+        "functionName": "#takeSession",
+        "url": "corrallm.cjs",
+        "lineNumber": 128591,
+        "columnNumber": 14
+      },
+      "children": [2716]
+    },
+    {
+      "id": 2716,
+      "callFrame": {
+        "functionName": "entriesDiff",
+        "url": "corrallm.cjs",
+        "lineNumber": 127881,
+        "columnNumber": 20
+      },
+      "children": [2717]
+    },
+    {
+      "id": 2717,
+      "callFrame": {
+        "functionName": "tailDiff",
+        "url": "corrallm.cjs",
+        "lineNumber": 127817,
+        "columnNumber": 17
+      },
+      "children": []
+    },
+    {
+      "id": 2749,
+      "callFrame": {
+        "functionName": "#forget",
+        "url": "corrallm.cjs",
+        "lineNumber": 115821,
+        "columnNumber": 9
+      },
+      "children": [2750]
+    },
+    {
+      "id": 2750,
+      "callFrame": {
+        "functionName": "holdKey",
+        "url": "corrallm.cjs",
+        "lineNumber": 115003,
+        "columnNumber": 16
+      },
+      "children": []
+    },
+    {
+      "id": 2885,
+      "callFrame": {
+        "functionName": "toString",
+        "url": "node:buffer",
+        "lineNumber": 917,
+        "columnNumber": 45
+      },
+      "children": []
+    },
+    {
+      "id": 2970,
+      "callFrame": {
+        "functionName": "needs",
+        "url": "corrallm.cjs",
+        "lineNumber": 89509,
+        "columnNumber": 14
+      },
+      "children": [2971]
+    },
+    {
+      "id": 2971,
+      "callFrame": {
+        "functionName": "needsOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 89471,
+        "columnNumber": 16
+      },
+      "children": []
+    },
+    {
+      "id": 3032,
+      "callFrame": {
+        "functionName": "",
+        "url": "corrallm.cjs",
+        "lineNumber": 9679,
+        "columnNumber": 41
+      },
+      "children": []
+    },
+    {
+      "id": 3957,
+      "callFrame": {
+        "functionName": "get",
+        "url": "corrallm.cjs",
+        "lineNumber": 3698,
+        "columnNumber": 5
+      },
+      "children": []
+    },
+    {
+      "id": 3961,
+      "callFrame": {
+        "functionName": "runChecks",
+        "url": "corrallm.cjs",
+        "lineNumber": 2131,
+        "columnNumber": 21
+      },
+      "children": [3962]
+    },
+    {
+      "id": 3962,
+      "callFrame": {
+        "functionName": "check._a.check",
+        "url": "corrallm.cjs",
+        "lineNumber": 1501,
+        "columnNumber": 57
+      },
+      "children": []
+    },
+    {
+      "id": 3963,
+      "callFrame": {
+        "functionName": "published",
+        "url": "corrallm.cjs",
+        "lineNumber": 85482,
+        "columnNumber": 14
+      },
+      "children": [3964]
+    },
+    {
+      "id": 3964,
+      "callFrame": {
+        "functionName": "attribute",
+        "url": "corrallm.cjs",
+        "lineNumber": 128928,
+        "columnNumber": 11
+      },
+      "children": [3965]
+    },
+    {
+      "id": 3965,
+      "callFrame": {
+        "functionName": "isPending",
+        "url": "corrallm.cjs",
+        "lineNumber": 128358,
+        "columnNumber": 11
+      },
+      "children": [3966]
+    },
+    {
+      "id": 3966,
+      "callFrame": {
+        "functionName": "argsOf",
+        "url": "corrallm.cjs",
+        "lineNumber": 127696,
+        "columnNumber": 15
+      },
+      "children": [3967]
+    },
+    {
+      "id": 3967,
+      "callFrame": {
+        "functionName": "topicRequest",
+        "url": "corrallm.cjs",
+        "lineNumber": 88918,
+        "columnNumber": 21
+      },
+      "children": [3968]
+    },
+    {
+      "id": 3968,
+      "callFrame": {
+        "functionName": "_parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 5783,
+        "columnNumber": 24
+      },
+      "children": [3969]
+    },
+    {
+      "id": 3969,
+      "callFrame": {
+        "functionName": "fn",
+        "url": "corrallm.cjs",
+        "lineNumber": 1075,
+        "columnNumber": 13
+      },
+      "children": [3970]
+    },
+    {
+      "id": 3970,
+      "callFrame": {
+        "functionName": "inst._zod.run",
+        "url": "corrallm.cjs",
+        "lineNumber": 2172,
+        "columnNumber": 19
+      },
+      "children": [3971]
+    },
+    {
+      "id": 3971,
+      "callFrame": {
+        "functionName": "inst._zod.parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 2757,
+        "columnNumber": 20
+      },
+      "children": [3972]
+    },
+    {
+      "id": 3972,
+      "callFrame": {
+        "functionName": "inst._zod.parse",
+        "url": "corrallm.cjs",
+        "lineNumber": 2722,
+        "columnNumber": 20
+      },
+      "children": []
+    },
+    {
+      "id": 3973,
+      "callFrame": {
+        "functionName": "foreignRequest",
+        "url": "corrallm.cjs",
+        "lineNumber": 10553,
+        "columnNumber": 23
+      },
+      "children": [3974]
+    },
+    {
+      "id": 3974,
+      "callFrame": {
+        "functionName": "localPort",
+        "url": "node:net",
+        "lineNumber": 1280,
+        "columnNumber": 43
+      },
+      "children": [3975]
+    },
+    {
+      "id": 3975,
+      "callFrame": {
+        "functionName": "Socket._getsockname",
+        "url": "node:net",
+        "lineNumber": 1258,
+        "columnNumber": 40
+      },
+      "children": []
+    }
+  ],
+  "startTime": 1000000,
+  "endTime": 1376598,
+  "samples": [
+    551, 2191, 1800, 1065, 2620, 1703, 2582, 1848, 2353, 1601, 2649, 1870, 2229, 1843, 1171, 1248,
+    1829, 1772, 1261, 1206, 44, 44, 1322, 1171, 1321, 1534, 1171, 2620, 1693, 2885, 1170, 2194,
+    1929, 1373, 2587, 2086, 1187, 1211, 2256, 2130, 1170, 1186, 1373, 1197, 1850, 611, 1180, 1212,
+    1253, 1180, 3962, 2578, 611, 1095, 1928, 2543, 1963, 796, 1707, 707, 1863, 2602, 956, 1846,
+    2717, 1065, 3972, 1692, 1065, 1064, 848, 2000, 2750, 1511, 718, 2472, 1758, 1095, 2229, 2000,
+    1171, 3975, 611, 1800, 2971, 44, 1229, 2534, 1360, 1171, 1171, 1171, 1929, 908, 1511, 1171, 931,
+    1980, 1843, 3957, 1626, 611, 611, 1124, 3032, 1171, 1095, 1360, 2472, 1408, 2554, 1095, 2527,
+    2215, 1333, 1095, 1094, 1170, 2258, 956, 611, 2617, 44, 1065, 998, 2620, 1553, 1065, 2620, 1491,
+    2620, 2582, 1771, 1360, 1253, 2587, 2327, 1214, 2272, 1174, 1546, 1358, 1517, 2288, 1233, 1887,
+    1170, 551
+  ],
+  "timeDeltas": [
+    1064, 1065, 1064, 1064, 1062, 1064, 1064, 1070, 1069, 1073, 1080, 1078, 1080, 1080, 1081, 1078,
+    1080, 1074, 1074, 1082, 1085, 1074, 1076, 1079, 1089, 1079, 1084, 1072, 1074, 1042, 1068, 1066,
+    1073, 1068, 1069, 1069, 1067, 1063, 1065, 1067, 1067, 1062, 1066, 1065, 1073, 1590, 1066, 5345,
+    1081, 1071, 1067, 141586, 1062, 1069, 1067, 1077, 1081, 1084, 1084, 1082, 1078, 1083, 1083,
+    1077, 1084, 1087, 1092, 1089, 1064, 1066, 1063, 1068, 1065, 1087, 1080, 1084, 1076, 1079, 1066,
+    1066, 1043, 1063, 1074, 1083, 1070, 1072, 1068, 1068, 1064, 1067, 1088, 1066, 1054, 1069, 1082,
+    1079, 1076, 1087, 1078, 1089, 1080, 73051, 123, 1080, 1073, 1064, 1078, 1061, 1076, 1080, 1081,
+    1084, 1081, 1082, 1082, 1080, 1081, 1080, 1086, 2176, 1081, 1075, 1465, 1069, 1062, 1085, 1090,
+    1064, 1068, 1074, 1073, 1066, 1065, 1070, 1066, 1065, 1070, 1067, 1064, 1064, 1065, 1055, 1085,
+    1068, 1049, 1064, 1063, 1070
+  ]
+}

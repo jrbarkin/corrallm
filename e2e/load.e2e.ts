@@ -14,6 +14,8 @@ import { expect, test } from '@playwright/test';
 import { TOKEN_WRITES_PER_SECOND } from '../src/shared/api/limits';
 import { toolName } from '../src/shared/api/registry';
 import { keepCanvases } from '../src/main/core/store/test-store';
+import { captureFile, printEvidence } from './g2-profile';
+import { captureEnvironment } from './g2-system';
 
 /*
  * Gate G2 of the core's database (Core Database §8; the Build Plan's load test, B11's, built here
@@ -68,12 +70,30 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let dir: string;
 let serve: ChildProcess | undefined;
+let cpuFile: string | undefined;
+let diagnosticLabel = '';
+let diagnosed = false;
+let environment: (() => Promise<string>) | undefined;
 
 test.beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'corrallm-e2e-load-'));
+  const info = test.info();
+  diagnosticLabel = `repeat-${String(info.repeatEachIndex + 1)} retry-${String(info.retry)}`;
+  cpuFile = captureFile(process.env, info.outputPath('core.cpuprofile'));
+  diagnosed = false;
+  environment = undefined;
+  if (cpuFile) await mkdir(path.dirname(cpuFile), { recursive: true });
 });
 
 test.afterEach(async () => {
+  if (!diagnosed && cpuFile) {
+    try {
+      if (environment) console.log(await environment());
+      await printEvidence(cpuFile, diagnosticLabel);
+    } catch (error) {
+      console.error(`G2-DIAG ${diagnosticLabel}: incomplete capture`, error);
+    }
+  }
   if (serve?.exitCode === null && serve.signalCode === null) serve.kill('SIGKILL');
   serve = undefined;
   await rm(dir, { recursive: true, force: true });
@@ -140,6 +160,8 @@ async function start(profile: string, file: string): Promise<string> {
       'claude-code': path.join(dir, 'no-claude'),
     }),
     LOOP_DELAY_FILE: path.join(dir, 'loop.json'),
+    CORRALLM_LOAD_CPU_PROFILE: cpuFile,
+    CORRALLM_G2_DIAG: cpuFile ? '1' : undefined,
   };
   delete env.CORRALLM_URL;
   delete env.CORRALLM_OUTSIDE_TOKEN;
@@ -419,6 +441,7 @@ async function build(client: Client): Promise<{
 
 test('keeps the core’s event loop within budget under a burst of messages, waits, run saves and doc ops', async () => {
   test.setTimeout(180_000);
+  if (cpuFile) environment = await captureEnvironment(diagnosticLabel);
   const { profile, file, tokens } = await profileOf();
   const url = await start(profile, file);
   const clients = await Promise.all(tokens.map((token) => connect(url, token)));
@@ -513,6 +536,11 @@ test('keeps the core’s event loop within budget under a burst of messages, wai
   console.log(
     `G2: loop delay p50 ${ms(delay.p50)}, p99 ${ms(delay.p99)}, max ${ms(delay.max)} over ${String(delay.samples)} samples (${spans.join('; ')}); ${String(done.sent)} messages sent, ${String(done.replies)} replies waited for, ${String(done.toggles)} pauses and releases, ${String(refusals.length)} calls refused; ${String(built.latencies.length)} doc ops in ${String(built.took)} ms (${String(LANES)} in flight, a wave every ${String(WAVE_EVERY_MS)} ms), each p50 ${ms(percentile(built.latencies, 50))}, p99 ${ms(percentile(built.latencies, 99))}, max ${ms(percentile(built.latencies, 100))}`,
   );
+  if (cpuFile) {
+    if (environment) console.log(await environment());
+    await printEvidence(cpuFile, diagnosticLabel);
+    diagnosed = true;
+  }
   // The burst was one: every party's messages went, and came back, and every doc op was made.
   expect(done.sent).toBeGreaterThan(1000);
   expect(done.replies).toBeGreaterThan(1000);
