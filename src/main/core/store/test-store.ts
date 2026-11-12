@@ -255,34 +255,46 @@ export function readPositions(profile: string, canvas: string): Record<string, n
 
 /**
  * Makes every write to `table` in the profile's database (of `canvas`'s rows alone, if given) fail,
- * saying `why`, as a full disk would, whoever has it open, until what it returns is called.
+ * saying `why`, as a full disk would, until what it returns is called. An open store queues
+ * trigger installation and removal in its own lane; a profile alone is for quiescent disk setup.
  */
 export function refuseWrites(
   profile: string,
   table: string,
   why: string,
   canvas?: string,
-): () => void {
+): () => void;
+export function refuseWrites(
+  store: Pick<Database, 'write' | 'run'>,
+  table: string,
+  why: string,
+  canvas?: string,
+): Promise<() => Promise<void>>;
+export function refuseWrites(
+  target: string | Pick<Database, 'write' | 'run'>,
+  table: string,
+  why: string,
+  canvas?: string,
+): (() => void) | Promise<() => Promise<void>> {
   const said = why.replaceAll("'", "''");
   const changes = { INSERT: 'NEW', UPDATE: 'NEW', DELETE: 'OLD' };
-  writeOnDisk(
-    profile,
-    Object.entries(changes)
-      .map(([change, row]) => {
-        const when = canvas === undefined ? '' : `WHEN ${row}.canvas_id = '${canvas}'`;
-        return `CREATE TRIGGER refuse_${change}_${table} BEFORE ${change} ON ${table} ${when}
+  const create = Object.entries(changes).map(([change, row]) => {
+    const when = canvas === undefined ? '' : `WHEN ${row}.canvas_id = '${canvas}'`;
+    return `CREATE TRIGGER refuse_${change}_${table} BEFORE ${change} ON ${table} ${when}
           BEGIN SELECT RAISE(ABORT, '${said}'); END;`;
-      })
-      .join('\n'),
-  );
-  return () => {
-    writeOnDisk(
-      profile,
-      Object.keys(changes)
-        .map((change) => `DROP TRIGGER refuse_${change}_${table};`)
-        .join('\n'),
-    );
-  };
+  });
+  const drop = Object.keys(changes).map((change) => `DROP TRIGGER refuse_${change}_${table};`);
+  if (typeof target === 'string') {
+    writeOnDisk(target, create.join('\n'));
+    return () => {
+      writeOnDisk(target, drop.join('\n'));
+    };
+  }
+  const write = (statements: string[]) =>
+    target.write(() => {
+      for (const sql of statements) target.run(sql);
+    });
+  return write(create).then(() => () => write(drop));
 }
 
 /**

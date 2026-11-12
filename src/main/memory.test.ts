@@ -63,11 +63,13 @@ describe('CanvasMemory', () => {
       `INSERT INTO conversation (canvas_id, adapter, agent_id, workspace_key, native_id)
        VALUES (?, ?, ?, ?, ?)`,
     );
-    add.run(TEAM, 'future-agent', 'valid', PROJECT, 'session:one');
-    add.run(TEAM, 'future-agent', 'flag', PROJECT, '--resume');
-    add.run(TEAM, 'codex', 'not-a-uuid', PROJECT, 'session:one');
-    // As strictly in a workspace of its own.
-    add.run(TEAM, 'codex', 'not-a-uuid', WORKTREE, 'session:one');
+    store.tx(() => {
+      add.run(TEAM, 'future-agent', 'valid', PROJECT, 'session:one');
+      add.run(TEAM, 'future-agent', 'flag', PROJECT, '--resume');
+      add.run(TEAM, 'codex', 'not-a-uuid', PROJECT, 'session:one');
+      // As strictly in a workspace of its own.
+      add.run(TEAM, 'codex', 'not-a-uuid', WORKTREE, 'session:one');
+    });
     expect(
       (await new CanvasMemory(store, undefined, undefined, isConversationId).get(TEAM))
         .conversations,
@@ -227,8 +229,10 @@ describe('CanvasMemory', () => {
       const memory = new CanvasMemory(store);
       await memory.setFile(TEAM, at('/work/team.corral'));
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      store.exec(`CREATE TRIGGER refuse_conversation BEFORE INSERT ON conversation
+      await store.writeBlocking(() => {
+        store.exec(`CREATE TRIGGER refuse_conversation BEFORE INSERT ON conversation
         BEGIN SELECT RAISE(ABORT, 'conversation write failed'); END`);
+      });
       await memory.update(TEAM, (m) => ({
         ...m,
         project: at('/work/app'),
@@ -238,8 +242,10 @@ describe('CanvasMemory', () => {
       const changed = vi.fn();
       memory.subscribe(changed);
       if (failure === 'delete') {
-        store.exec(`CREATE TRIGGER refuse_delete BEFORE DELETE ON canvas
+        await store.writeBlocking(() => {
+          store.exec(`CREATE TRIGGER refuse_delete BEFORE DELETE ON canvas
           BEGIN SELECT RAISE(ABORT, 'forget failed'); END`);
+        });
       } else {
         const write = store.writeBlocking.bind(store);
         vi.spyOn(store, 'writeBlocking').mockImplementationOnce((run) =>
@@ -252,8 +258,13 @@ describe('CanvasMemory', () => {
       await expect(memory.forget(TEAM)).rejects.toThrow('forget failed');
       expect(await memory.get(TEAM)).toEqual(before);
       expect(changed).not.toHaveBeenCalled();
-      store.exec('DROP TRIGGER refuse_conversation');
-      if (failure === 'delete') store.exec('DROP TRIGGER refuse_delete');
+      await store.writeBlocking(() => {
+        store.exec('DROP TRIGGER refuse_conversation');
+      });
+      if (failure === 'delete')
+        await store.writeBlocking(() => {
+          store.exec('DROP TRIGGER refuse_delete');
+        });
       await memory.update(OTHER, (m) => ({ ...m, project: at('/work/other') }));
       await expect(memory.flush()).resolves.toBeUndefined();
       await reopen();
@@ -299,13 +310,15 @@ describe('CanvasMemory', () => {
          (canvas_id, adapter, agent_id, workspace_key, native_id, role_fingerprint)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
-    for (const adapter of ['claude-code', 'codex', 'not an adapter']) {
-      for (const [agent, id, role] of conversations) {
-        add.run(TEAM, adapter, agent, PROJECT, id, role);
+    store.tx(() => {
+      for (const adapter of ['claude-code', 'codex', 'not an adapter']) {
+        for (const [agent, id, role] of conversations) {
+          add.run(TEAM, adapter, agent, PROJECT, id, role);
+        }
       }
-    }
-    // A workspace whose key is __proto__ is the canvas's own too.
-    add.run(TEAM, 'codex', 'a', '__proto__', SESSION, null);
+      // A workspace whose key is __proto__ is the canvas's own too.
+      add.run(TEAM, 'codex', 'a', '__proto__', SESSION, null);
+    });
     const expected = Object.fromEntries([
       ['role', { id: SESSION, role: fingerprint }],
       ['absent', { id: SESSION, role: 'none' }],
@@ -381,7 +394,9 @@ describe('CanvasMemory', () => {
     await expect(memory.flush()).rejects.toThrow('The disk is full');
     expect(await memory.canvasWithFile('/work/other.corral')).toBe(OTHER);
 
-    store.exec('DROP TRIGGER refuse');
+    await store.writeBlocking(() => {
+      store.exec('DROP TRIGGER refuse');
+    });
     await memory.update(TEAM, (current) => current);
     await expect(memory.flush()).resolves.toBeUndefined();
     await reopen();

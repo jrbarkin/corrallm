@@ -559,6 +559,14 @@ describe('an ask', () => {
     expect(
       await call('reply', { to: `ask/${id}`, answer: { choice: 'allow' } }, YOU),
     ).toMatchObject({ ok: false, error: { code: 'invalid' } });
+    expect(await find(id)).toMatchObject({ state: 'delivered' });
+    expect(
+      await ok(
+        'reply',
+        { to: `ask/${id}`, answer: { answers: { scope: { picked: ['All'] } } } },
+        YOU,
+      ),
+    ).toMatchObject({ outcome: 'answered' });
   });
 
   it('is dismissed by you, its asker sent a settled record', async () => {

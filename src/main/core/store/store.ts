@@ -1,10 +1,13 @@
 import { closeSync, fsync, fsyncSync, ftruncateSync, openSync } from 'node:fs';
 
+import type { Worker } from 'node:worker_threads';
+
 import { Checkpointer } from './checkpointer';
 import { discardSnapshots, takeSnapshot } from './snapshots';
 import { connect } from './sqlite';
 import type { Connection, SqlOutput, Statement } from './sqlite';
 import { rollback, savepoint, transaction } from './transaction';
+import type { Hold, Outcome, Sync, Writer } from './writer';
 
 /*
  * The core's database (Core Database §4, §5), open: one connection to <profile>/core.db, which only
@@ -60,6 +63,13 @@ export interface StoreDeps {
   now: () => number;
   /** Flushes what was written to the file `fd` is open on to the drive, off the loop. */
   flush: (fd: number) => Promise<void>;
+  /**
+   * Test seam for the writer's thread: while `hold[0]` is 1 the writer waits, before each statement
+   * of a planned write, adding 1 to `hold[1]` as it arrives; set `hold[0]` to 0 and notify it to release.
+   */
+  hold?: Hold;
+  /** Test seam: gets the writer's thread as it starts (a test ends it to lose the writer). */
+  writerStarted?: (worker: Worker) => void;
 }
 
 /**
@@ -108,6 +118,11 @@ export interface Opening {
   deps: StoreDeps;
   /** When the profile's newest snapshot was taken, if it has one. */
   snapshotAt: number | undefined;
+  /**
+   * The writer's thread, if the store hands writing to it (open.ts): the connection given then
+   * only reads. Otherwise the connection writes, on the loop (the local executor).
+   */
+  writer?: Writer | undefined;
 }
 
 /** What a statement of a write binds: SQLite's input values. */
@@ -193,11 +208,13 @@ export class Store {
   readonly #deps: StoreDeps;
   /** Each statement prepared, by its SQL. */
   readonly #statements = new Map<string, Statement>();
+  readonly #facades = new Map<string, Statement>();
   /** The writes waiting for the lane's next commit, in order. */
   #queue: Queued[] = [];
   #scheduled = false;
   /** The write whose function is running, if one is. */
   #current: WriteContext | undefined;
+  #returning = false;
   /** Cancels the checkpoint due, if one is. */
   #cancelCheckpoint: (() => void) | undefined;
   /** When the first commit the log holds unchecked came, if one did. */
@@ -229,16 +246,27 @@ export class Store {
   /** Taking back what it hadn't flushed when it failed, then closing its connection. */
   #forgetting: Promise<void> | undefined;
   readonly #checkpointer: Checkpointer;
+  /** The writer's thread, if there is one: the one connection that writes. */
+  readonly #writer: Writer | undefined;
+  /** The lane's commit going on (its writes planned and run one at a time), if one is. */
+  #draining: Promise<void> | undefined;
+  /** The current transaction's cut-back point, including while its commit reply is in flight. */
+  #active: { frames: number; commit: number } | undefined;
   /** The checkpoint going on, if one is: the lane commits nothing meanwhile. */
   #checkpointing: Promise<void> | undefined;
 
-  constructor(connection: Connection, { profile, file, deps, snapshotAt }: Opening) {
+  constructor(connection: Connection, { profile, file, deps, snapshotAt, writer }: Opening) {
     this.#connection = connection;
     this.#profile = profile;
     this.file = file;
     this.#deps = deps;
     this.#snapshotAt = snapshotAt;
     this.#checkpointer = new Checkpointer(file);
+    this.#writer = writer;
+    // A thread that ends while the store is open is a failed flush: nothing it wrote can be trusted.
+    writer?.onLost((error) => {
+      this.#fail(error);
+    });
   }
 
   /**
@@ -246,13 +274,57 @@ export class Store {
    * themselves, or each would be kept apart.
    */
   prepare(sql: string): Statement {
+    this.#sqlAllowed();
     if (this.#failed !== undefined) throw this.#failed;
     if (this.#current?.planned === true) {
       throw new Error(
         'A planned write reads no SQL: it reads memory and gives statements (run, runExpecting, runReturning). A function that must read as it runs is a blocking write.',
       );
     }
-    return this.#prepare(sql);
+    return this.#statement(sql);
+  }
+
+  /**
+   * A statement for a read or a write's own statement: through the writer within a blocking write
+   * or a `tx` (it sees the write), else on this connection.
+   */
+  #statement(sql: string): Statement {
+    const writer = this.#writer;
+    if (writer === undefined || this.#current === undefined) this.#prepare(sql);
+    const kept = this.#facades.get(sql);
+    if (kept !== undefined) return kept;
+    let readBigInts = false;
+    const inside = (): boolean => {
+      this.#sqlAllowed();
+      if (this.#failed !== undefined) throw this.#failed;
+      if (this.#current?.planned === true) throw new Error('A planned write reads no SQL.');
+      return this.#current !== undefined;
+    };
+    const reading = (): Statement => {
+      const statement = this.#prepare(sql);
+      statement.setReadBigInts(readBigInts);
+      return statement;
+    };
+    const statement = {
+      get: (...params: SqlValue[]) =>
+        inside() && writer !== undefined
+          ? writer.sync({ op: 'get', sql, params, readBigInts }).row
+          : reading().get(...params),
+      all: (...params: SqlValue[]) =>
+        inside() && writer !== undefined
+          ? (writer.sync({ op: 'all', sql, params, readBigInts }).rows ?? [])
+          : reading().all(...params),
+      run: (...params: SqlValue[]) => {
+        if (!inside() || writer === undefined) return reading().run(...params);
+        const result = writer.sync({ op: 'run', sql, params, readBigInts });
+        return { changes: result.changes ?? 0, lastInsertRowid: result.lastInsertRowid ?? 0 };
+      },
+      setReadBigInts: (enabled: boolean) => {
+        readBigInts = enabled;
+      },
+    } as unknown as Statement;
+    this.#facades.set(sql, statement);
+    return statement;
   }
 
   #prepare(sql: string): Statement {
@@ -266,25 +338,37 @@ export class Store {
 
   /** Runs SQL without parameters (statements separated by semicolons). */
   exec(sql: string): void {
+    this.#sqlAllowed();
     if (this.#failed !== undefined) throw this.#failed;
     if (this.#current?.planned === true)
       throw new Error('A planned write runs no SQL but its own.');
-    this.#connection.exec(sql);
+    if (this.#current === undefined) {
+      this.tx(() => {
+        this.exec(sql);
+      });
+      return;
+    }
+    if (this.#writer === undefined) this.#connection.exec(sql);
+    else this.#writer.sync({ op: 'exec', sql });
   }
 
   /**
    * Runs `run` in a transaction, committed once it returns, and returns what it returned; within
    * one, as a savepoint (transaction.ts). Synchronous: what it did is on disk once it returns, its
    * log flushed on the loop (a flush that fails failing the store closed). Refused once the store
-   * is closing, but within a write it commits, and once it failed closed.
+   * is closing, but within a write it commits, and once it failed closed. Test callers must be
+   * quiescent; live work uses write or writeBlocking, which wait their turn in the lane.
    */
   tx<T>(run: () => T): T {
+    this.#sqlAllowed();
     if (this.#failed !== undefined) throw this.#failed;
-    const outermost = !this.#connection.isTransaction;
+    const writer = this.#writer;
+    const outermost =
+      writer === undefined ? !this.#connection.isTransaction : this.#current === undefined;
     if (this.#current?.planned === true) throw new Error('A planned write starts no transaction.');
     if (!outermost) {
       const outer = this.#current;
-      const { value, context } = this.#transaction(run);
+      const { value, context } = this.#transaction(run, false);
       outer?.undo(() => {
         context.restore();
       });
@@ -293,43 +377,83 @@ export class Store {
     if (
       this.#inFlush.length > 0 ||
       this.#unflushed.length > 0 ||
-      this.#checkpointing !== undefined
+      this.#checkpointing !== undefined ||
+      this.#draining !== undefined
     ) {
       throw new Error(
-        'A synchronous transaction cannot overlap the store’s write lane or checkpoint.',
+        'A synchronous transaction cannot overlap the store’s write lane or checkpoint. Queue it with writeBlocking instead.',
       );
     }
     if (this.#shut) throw closed();
-    const frames = this.#frames();
+    const frames = writer === undefined ? this.#frames() : this.#begin(writer);
     const commit = ++this.#commits;
-    const { value, context } = this.#transaction(run);
+    if (writer !== undefined) this.#active = { frames, commit };
+    let transaction: { value: T; context: WriteContext };
+    try {
+      transaction = this.#transaction(run, true);
+    } catch (error) {
+      this.#active = undefined;
+      throw error;
+    }
+    const { value, context } = transaction;
     try {
       fsyncSync(this.#logFile());
     } catch (error) {
       context.restore();
       throw this.#fail(error, { frames, commit });
     }
+    this.#active = undefined;
     this.#committed();
     return value;
   }
 
-  /** A synchronous transaction's hooks belong to its own savepoint, not the containing write. */
-  #transaction<T>(run: () => T): { value: T; context: WriteContext } {
+  /** Begins the writer's transaction; the frames the log held before it. */
+  #begin(writer: Writer): number {
+    return framesOf(writer.sync({ op: 'begin' }).frames);
+  }
+
+  /**
+   * A synchronous transaction's hooks belong to its own savepoint, not the containing write.
+   * Through the writer, `outermost` has begun already (`#begin`) and this commits.
+   */
+  #transaction<T>(run: () => T, outermost: boolean): { value: T; context: WriteContext } {
     const context = new WriteContext('tx');
+    const inside = (): T => {
+      const value = this.#within(context, run);
+      for (
+        let next = context.followUps.shift();
+        next !== undefined;
+        next = context.followUps.shift()
+      )
+        this.#within(context, next);
+      return value;
+    };
     try {
-      const value = transaction(this.#connection, () => {
-        const value = this.#within(context, run);
-        for (
-          let next = context.followUps.shift();
-          next !== undefined;
-          next = context.followUps.shift()
-        )
-          this.#within(context, next);
-        return value;
-      });
-      return { value, context };
+      const writer = this.#writer;
+      if (writer === undefined) return { value: transaction(this.#connection, inside), context };
+      return { value: this.#writerTransaction(writer, outermost, inside), context };
     } catch (error) {
       context.restore();
+      throw error;
+    }
+  }
+
+  /** `inside` in the writer's transaction: committed once it returns, else as a savepoint. */
+  #writerTransaction<T>(writer: Writer, outermost: boolean, inside: () => T): T {
+    const undo = (op: 'rollback' | 'rollbackTo'): void => {
+      try {
+        writer.sync({ op });
+      } catch {
+        // The error that made the rollback is the one to throw.
+      }
+    };
+    if (!outermost) writer.sync({ op: 'savepoint' });
+    try {
+      const value = synchronously(inside());
+      writer.sync({ op: outermost ? 'commit' : 'release' });
+      return value;
+    } catch (error) {
+      undo(outermost ? 'rollback' : 'rollbackTo');
       throw error;
     }
   }
@@ -398,7 +522,8 @@ export class Store {
   /**
    * Within a write: as `run`, giving `then` the rows the statement returned (RETURNING), on the
    * loop, once the write's statements have run: in a planned write before the next write is
-   * planned and before this one resolves.
+   * planned and before this one resolves. A result callback reads memory and its rows only;
+   * prepare (including cached statements), exec, tx and statement methods are refused in it.
    */
   runReturning(sql: string, params: readonly SqlValue[], then: (rows: Row[]) => void): void {
     this.#step({ sql, params, then });
@@ -427,11 +552,29 @@ export class Store {
   }
 
   #step(step: Step): void {
+    this.#sqlAllowed();
     const context = this.#context('A statement');
     if (context.planned) {
       context.steps.push(step);
     } else {
-      execute(this.#prepare(step.sql), step)?.();
+      const result = execute(this.#statement(step.sql), step);
+      if (result !== undefined) this.#result(result);
+    }
+  }
+
+  #sqlAllowed(): void {
+    if (this.#returning)
+      throw new Error('A result callback reads memory and returned rows only, and runs no SQL.');
+  }
+
+  /** Result callbacks have no SQL connection: both executors expose only memory and their rows. */
+  #result(run: () => void): void {
+    const outer = this.#returning;
+    this.#returning = true;
+    try {
+      run();
+    } finally {
+      this.#returning = outer;
     }
   }
 
@@ -462,7 +605,7 @@ export class Store {
         const deliver = execute(this.#prepare(step.sql), step);
         if (deliver !== undefined) delivered.push(deliver);
       }
-      for (const deliver of delivered) deliver();
+      for (const deliver of delivered) this.#result(deliver);
       return value;
     });
   }
@@ -481,8 +624,12 @@ export class Store {
     if (this.#failed !== undefined) return Promise.reject(this.#failed);
     if (this.#checkpointing !== undefined) return this.#checkpointing;
     const checkpointing = (async () => {
-      // Only what is on the drive is copied into the database.
-      while (this.#flushing !== undefined) await this.#flushing;
+      // Only what is on the drive is copied into the database, and the checkpointer's beginning of
+      // the log must never meet a write transaction that is open (SQLITE_BUSY, with no timeout).
+      for (let busy = this.#draining ?? this.#flushing; busy !== undefined;) {
+        await busy;
+        busy = this.#draining ?? this.#flushing;
+      }
       if (this.#failed !== undefined) throw this.#failed;
       try {
         const done = await this.#checkpointer.checkpoint();
@@ -536,7 +683,8 @@ export class Store {
       at,
       (file) => {
         if (this.#failed !== undefined) throw this.#failed;
-        this.#taken.push({ file, commits: this.#commits });
+        // A backup can see COMMIT before its reply reaches this thread.
+        this.#taken.push({ file, commits: Math.max(this.#commits, this.#active?.commit ?? 0) });
       },
       this.#checkpointer,
     )
@@ -571,34 +719,53 @@ export class Store {
     this.#cancelCheckpoint?.();
     // The writes queued commit now, or once the checkpoint going on is done.
     while (this.#checkpointing !== undefined) await this.#checkpointing.catch(() => undefined);
-    while (this.#queue.length > 0 || this.#flushing !== undefined) {
+    while (this.#queue.length > 0 || this.#flushing !== undefined || this.#draining !== undefined) {
       this.#flush();
-      if (this.#flushing !== undefined) await this.#flushing;
+      const busy = this.#draining ?? this.#flushing;
+      if (busy !== undefined) await busy;
     }
-    // Failed closed, it took back what it hadn't flushed, and closed its connection then.
-    if (this.#forgetting !== undefined) {
-      await this.#forgetting;
-      return;
-    }
+    // Failure cleanup owns the connections once it starts, including across closing awaits.
+    const failedClose = (): Promise<void> | undefined => this.#forgetting;
+    let failure = failedClose();
+    if (failure !== undefined) return failure;
     await this.#snapshotting?.catch(() => undefined);
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     try {
-      this.#connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+      if (this.#writer === undefined)
+        this.#connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+      else await this.#writer.truncate();
     } catch (error) {
       console.error('Could not checkpoint the core’s database as it closed:', error);
     }
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     try {
       await this.snapshot();
     } catch (error) {
       console.error('Could not take a snapshot of the core’s database as it closed:', error);
     }
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     await this.#checkpointer.close();
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     this.#connection.close();
+    // The writer closes last, so it checkpoints what is left and removes the log and its index.
+    await this.#writer?.close();
     if (this.#log !== undefined) closeSync(this.#log);
   }
 
   /** Schedules the FIFO lane; delivery and publication keep their own microtask ordering. */
   #schedule(): void {
-    if (this.#scheduled || this.#queue.length === 0 || this.#flushing !== undefined) return;
+    if (
+      this.#scheduled ||
+      this.#queue.length === 0 ||
+      this.#flushing !== undefined ||
+      this.#draining !== undefined
+    ) {
+      return;
+    }
     this.#scheduled = true;
     setImmediate(() => {
       this.#scheduled = false;
@@ -608,12 +775,35 @@ export class Store {
 
   /** One bounded commit, with no appends competing with the log's off-loop flush. */
   #flush(): void {
-    if (this.#checkpointing !== undefined || this.#flushing !== undefined) return;
+    if (
+      this.#checkpointing !== undefined ||
+      this.#flushing !== undefined ||
+      this.#draining !== undefined
+    ) {
+      return;
+    }
     const batch = this.#queue;
     this.#queue = [];
     if (batch.length === 0) return;
     if (this.#failed !== undefined) {
       for (const write of batch) write.reject(this.#failed);
+      return;
+    }
+    if (this.#writer !== undefined) {
+      const writer = this.#writer;
+      // Publish the barrier before any plan can synchronously ask for a checkpoint.
+      const draining = Promise.resolve()
+        .then(() => this.#drain(writer, batch))
+        .catch((error: unknown) => {
+          console.error('The core’s write lane failed:', error);
+          return [];
+        })
+        .then((remaining) => {
+          this.#draining = undefined;
+          this.#queue = [...remaining, ...this.#queue];
+          this.#schedule();
+        });
+      this.#draining = draining;
       return;
     }
     const remaining = this.#commit(batch);
@@ -682,6 +872,183 @@ export class Store {
     return remaining;
   }
 
+  /**
+   * A bounded commit through the writer's thread: each write is planned (its function run) only once
+   * the one before it has been answered, so what a failed write restores is back before the next
+   * write reads it. Returns those it didn't run. Never rejects but for a bug: a lost thread
+   * (`#fail`) rejects every write it held.
+   */
+  async #drain(writer: Writer, batch: Queued[]): Promise<Queued[]> {
+    const done: [write: Queued, value: unknown][] = [];
+    const pending = [...batch];
+    let current: Queued | undefined;
+    let open = false;
+    let frames = 0;
+    let ran = 0;
+    let changed = 0;
+    /** The transaction is gone (SQLite rolled it back, or a callback failed): its writes rejected. */
+    const lose = (error: unknown): void => {
+      for (const [lost] of [...done].reverse()) lost.reject(error);
+      done.length = 0;
+      const kept = pending.filter(({ followUp }) => followUp === undefined);
+      pending.splice(0, pending.length, ...kept);
+      open = false;
+      ran = 0;
+      changed = 0;
+      this.#active = undefined;
+    };
+    try {
+      while (pending.length > 0) {
+        if (this.#failed !== undefined) throw this.#failed;
+        if (pending[0]?.followUp === undefined && (ran >= COMMIT_WRITES || changed >= COMMIT_ROWS))
+          break;
+        const write = pending.shift();
+        if (write === undefined) break;
+        current = write;
+        ran++;
+        const context = new WriteContext(write.planned ? 'planned' : 'blocking');
+        write.context = context;
+        let value: unknown;
+        let outcome: Outcome;
+        if (write.planned) {
+          let planned: Outcome | undefined;
+          try {
+            value = synchronously(this.#within(context, write.run));
+          } catch (error) {
+            planned = { changes: 0, error, lost: false };
+          }
+          outcome =
+            planned ??
+            (await writer.savepoint(
+              !open,
+              context.steps.map((step) => ({
+                sql: step.sql,
+                params: step.params,
+                expect: step.expect,
+                rows: step.then === undefined ? undefined : true,
+              })),
+              context.steps.some((step) => step.then !== undefined),
+            ));
+          if (outcome.frames !== undefined) {
+            frames = framesOf(outcome.frames);
+            open = true;
+            this.#active = { frames, commit: this.#commits + 1 };
+          }
+        } else {
+          ({ outcome, value } = this.#blocking(writer, write, context, !open));
+          if (outcome.frames !== undefined) {
+            frames = framesOf(outcome.frames);
+            open = true;
+            this.#active = { frames, commit: this.#commits + 1 };
+          }
+        }
+        changed += outcome.changes;
+        if ('lost' in outcome) {
+          write.reject(outcome.error);
+          if (outcome.lost) lose(outcome.error);
+        } else {
+          let refused: { error: unknown } | undefined;
+          try {
+            this.#result(() => {
+              deliver(context, outcome.rows);
+            });
+          } catch (error) {
+            refused = { error };
+          }
+          if (write.planned && context.steps.some((step) => step.then !== undefined)) {
+            const settled = await writer.settle(refused === undefined);
+            if (settled.error !== undefined) refused = { error: settled.error };
+            if (refused !== undefined) {
+              write.reject(refused.error);
+              if (settled.lost === true) lose(refused.error);
+              current = undefined;
+              continue;
+            }
+          }
+          if (refused !== undefined) {
+            write.reject(refused.error);
+            current = undefined;
+            continue;
+          }
+          done.push([write, value]);
+          // Right after it, in the same commit, whatever the bounds.
+          pending.unshift(...this.#followUps(write));
+        }
+        current = undefined;
+      }
+      if (!open) return pending;
+      let committed: Error | undefined;
+      try {
+        await writer.commit();
+      } catch (error) {
+        if (writer.lost !== undefined) throw error;
+        committed = error as Error;
+      }
+      if (committed !== undefined) {
+        for (const [lost] of [...done].reverse()) lost.reject(committed);
+        this.#active = undefined;
+        return pending;
+      }
+      // The thread was lost as it committed: failed closed, and this commit with it.
+      if (this.#failed !== undefined) throw this.#failed;
+    } catch (error) {
+      const why = this.#failed ?? this.#fail(error);
+      current?.reject(why);
+      for (const [lost] of [...done].reverse()) lost.reject(why);
+      for (const write of pending.splice(0)) write.reject(why);
+      return [];
+    }
+    this.#unflushed.push({
+      resolve: () => {
+        for (const [write, value] of done) write.resolve(value);
+      },
+      reject: (error) => {
+        for (const [write] of [...done].reverse()) write.reject(error);
+      },
+      frames,
+      commit: ++this.#commits,
+    });
+    this.#active = undefined;
+    this.#flushLog();
+    this.#committed();
+    return pending;
+  }
+
+  /**
+   * A blocking write through the writer: its savepoint and each statement run as they are asked
+   * for, the loop waiting on them.
+   */
+  #blocking(
+    writer: Writer,
+    write: Queued,
+    context: WriteContext,
+    begin: boolean,
+  ): { outcome: Outcome; value: unknown } {
+    let frames: number | undefined;
+    try {
+      if (begin) frames = this.#begin(writer);
+      writer.sync({ op: 'savepoint' });
+    } catch (error) {
+      return { outcome: { ...opened(frames), changes: 0, error, lost: false }, value: undefined };
+    }
+    try {
+      const value = synchronously(this.#within(context, write.run));
+      const changes = writer.sync({ op: 'release' }).changes ?? 0;
+      return { outcome: { ...opened(frames), changes, rows: [] }, value };
+    } catch (error) {
+      let changes = 0;
+      let lost = true;
+      try {
+        const undone: Sync = writer.sync({ op: 'rollbackTo' });
+        changes = undone.changes ?? 0;
+        lost = !undone.tx;
+      } catch {
+        // The thread is gone: the transaction with it.
+      }
+      return { outcome: { ...opened(frames), changes, error, lost }, value: undefined };
+    }
+  }
+
   /** The follow-ups a write that ran gave, as blocking writes to run right after it. */
   #followUps({ context }: Queued): Queued[] {
     return (context?.followUps ?? []).map((run) => {
@@ -731,11 +1098,7 @@ export class Store {
 
   /** How many frames the log holds now, as SQLite says without checkpointing any. */
   #frames(): number {
-    const log = this.#prepare('PRAGMA wal_checkpoint(NOOP)').get()?.log;
-    if (typeof log !== 'number' || !Number.isInteger(log) || log < 0) {
-      throw new Error('SQLite did not say how long the core’s database’s log is.');
-    }
-    return log;
+    return framesOf(this.#prepare('PRAGMA wal_checkpoint(NOOP)').get()?.log);
   }
 
   /**
@@ -758,8 +1121,15 @@ export class Store {
     this.#unflushed = [];
     const queued = this.#queue;
     this.#queue = [];
-    const first = [...lost, ...(also === undefined ? [] : [also])].reduce((earliest, commit) =>
-      commit.commit < earliest.commit ? commit : earliest,
+    // None to take back if the writer's thread was lost between commits.
+    const first = [
+      ...lost,
+      ...(also === undefined ? [] : [also]),
+      ...(this.#active === undefined ? [] : [this.#active]),
+    ].reduce<{ frames: number; commit: number } | undefined>(
+      (earliest, commit) =>
+        earliest === undefined || commit.commit < earliest.commit ? commit : earliest,
+      undefined,
     );
     this.#forgetting = this.#forget(first).finally(() => {
       // Refuse new work at once, and finish the best-effort rollback before rejecting commits.
@@ -781,33 +1151,55 @@ export class Store {
    * since it, which may hold it, removed. Once the flush and the snapshot going on have ended, and
    * the checkpointer's connection is closed: nothing else in the process keeps the log's index.
    */
-  async #forget(first: { frames: number; commit: number }): Promise<void> {
-    while (this.#flushing !== undefined) await this.#flushing;
+  async #forget(first: { frames: number; commit: number } | undefined): Promise<void> {
+    if (this.#writer?.lost !== undefined) await this.#writer.stop();
+    while (this.#flushing !== undefined || this.#draining !== undefined) {
+      await (this.#flushing ?? this.#draining);
+    }
     await this.#snapshotting?.catch(() => undefined);
     await this.#checkpointer.close();
-    const unsafe = this.#taken
-      .filter(({ commits }) => commits >= first.commit)
-      .map(({ file }) => file);
-    try {
-      await discardSnapshots(this.#profile, unsafe);
-    } catch (error) {
-      console.error('Could not remove snapshots of what the core’s database lost:', error);
+    if (this.#writer !== undefined && this.#writer.lost === undefined) {
+      await this.#writer.rollback().catch(() => undefined);
     }
-    try {
-      const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
-      const log = this.#logFile();
-      // Best effort: if this cut or its fsync fails, the failed commit is in doubt across a
-      // restart, as in PostgreSQL and SQLite. No recovery marker is kept to change that limit.
-      ftruncateSync(
-        log,
-        first.frames === 0 ? 0 : LOG_HEADER_BYTES + first.frames * (FRAME_HEADER_BYTES + page),
-      );
-      fsyncSync(log);
-    } catch (error) {
-      console.error(
-        'Could not take back the core’s unflushed writes; a write whose flush failed may come back after a restart, in doubt as in PostgreSQL and SQLite:',
-        error,
-      );
+    if (this.#writer?.lost !== undefined) await this.#writer.stop();
+    if (first !== undefined) {
+      const unsafe = this.#taken
+        .filter(({ commits }) => commits >= first.commit)
+        .map(({ file }) => file);
+      try {
+        await discardSnapshots(this.#profile, unsafe);
+      } catch (error) {
+        console.error('Could not remove snapshots of what the core’s database lost:', error);
+      }
+      // Removing snapshots yields too: a loss heard meanwhile must finish before the WAL cut.
+      if (this.#writer?.lost !== undefined) await this.#writer.stop();
+      try {
+        const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
+        const log = this.#logFile();
+        // Best effort: if this cut or its fsync fails, the failed commit is in doubt across a
+        // restart, as in PostgreSQL and SQLite. No recovery marker is kept to change that limit.
+        ftruncateSync(
+          log,
+          first.frames === 0 ? 0 : LOG_HEADER_BYTES + first.frames * (FRAME_HEADER_BYTES + page),
+        );
+        fsyncSync(log);
+      } catch (error) {
+        console.error(
+          'Could not take back the core’s unflushed writes; a write whose flush failed may come back after a restart, in doubt as in PostgreSQL and SQLite:',
+          error,
+        );
+      }
+    }
+    if (this.#writer !== undefined) {
+      // The writer closes while this connection, which only reads, holds the database: it never
+      // checkpoints the log it was cut back to, and neither does this one as it closes.
+      try {
+        await this.#writer.close();
+      } finally {
+        this.#connection.close();
+      }
+      if (this.#log !== undefined) closeSync(this.#log);
+      return;
     }
     let holder: Connection | undefined;
     try {
@@ -892,6 +1284,38 @@ function execute(statement: Statement, { params, expect, then }: Step): (() => v
   const { changes } = statement.run(...params);
   if (expect !== undefined && Number(changes) !== expect.changes) throw new Error(expect.error);
   return undefined;
+}
+
+/** Gives the rows each of a write's `runReturning`s asked for to its callback, in order. */
+function deliver(context: WriteContext, rows: readonly Row[][]): void {
+  let next = 0;
+  for (const step of context.steps) {
+    if (step.then === undefined) continue;
+    step.then(rows[next++] ?? []);
+  }
+}
+
+/** `value`, which must not be a promise: what it awaits would run after the commit. */
+function synchronously<T>(value: T): T {
+  if (value instanceof Promise) {
+    throw new Error(
+      'A transaction’s function must be synchronous: it would commit before it finished.',
+    );
+  }
+  return value;
+}
+
+/** What an outcome says of the transaction it began, if it did. */
+function opened(frames: number | undefined): { frames?: number } {
+  return frames === undefined ? {} : { frames };
+}
+
+/** The frames the log held, as SQLite said; fails if it didn't say. */
+function framesOf(log: unknown): number {
+  if (typeof log !== 'number' || !Number.isInteger(log) || log < 0) {
+    throw new Error('SQLite did not say how long the core’s database’s log is.');
+  }
+  return log;
 }
 
 function closed(): Error {

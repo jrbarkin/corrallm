@@ -14,7 +14,7 @@ import { callTool } from '../api/mcp';
 import { fakeConnector } from '../sessions/test-fake';
 import type { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { cursorOf, readCursor } from './delivery/messages';
 import { SYSTEM_DEPS } from './store/store';
@@ -435,11 +435,11 @@ describe('wait', () => {
     const { caller } = await token();
     const id = await exchange(caller, 'One');
     // Where it has read to can't be written meanwhile.
-    const allow = refuseWrites(profile, 'read_position', 'The disk is full');
+    const allow = await refuseWrites(databaseOf(core), 'read_position', 'The disk is full');
     try {
       expect((await current().call('wait', { timeoutSeconds: 0 }, caller)).ok).toBe(false);
     } finally {
-      allow();
+      await allow();
     }
     expect((await wait(caller)).messages.map(({ replyTo }) => replyTo)).toEqual([id]);
   });
@@ -484,7 +484,7 @@ describe('wait', () => {
     const first = await exchange(caller, 'One', M1);
     const second = await exchange(caller, 'Two', WORKER);
     // Where it has read to on the worker canvas can't be written meanwhile: nor on m1.
-    const allow = refuseWrites(profile, 'read_position', 'The disk is full', WORKER);
+    const allow = await refuseWrites(databaseOf(core), 'read_position', 'The disk is full', WORKER);
     try {
       expect(await current().call('wait', { timeoutSeconds: 0 }, caller)).toEqual({
         ok: false,
@@ -494,7 +494,7 @@ describe('wait', () => {
       expect(keptReads(WORKER)).toEqual({});
       expect(current().engines.canvas(M1)?.reads.of('outside:orchestrator')).toBe(0);
     } finally {
-      allow();
+      await allow();
     }
     const waited = await wait(caller);
     expect(waited.messages.map(({ replyTo }) => replyTo)).toEqual([first, second]);

@@ -13,7 +13,7 @@ import type { Connector } from '../sessions/connector';
 import { fakeConnector } from '../sessions/test-fake';
 import { Settings } from '../settings';
 import { UsageReadings } from '../usage';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { STORE_FILE } from './store/open';
 import { snapshots, takeSnapshot } from './store/snapshots';
@@ -420,7 +420,7 @@ describe('the core runs each canvas’s engine', () => {
       });
     });
     // The canvas's run can't be written any more.
-    refuseWrites(profile, 'run', 'The disk is full');
+    await refuseWrites(databaseOf(core), 'run', 'The disk is full');
     const flushes = [
       vi.spyOn(Settings.prototype, 'flush'),
       vi.spyOn(UsageReadings.prototype, 'flush'),
@@ -443,7 +443,7 @@ describe('the core runs each canvas’s engine', () => {
         outcomes: { hello: 'succeeded' },
       });
     });
-    refuseWrites(profile, 'run', 'The disk is full');
+    await refuseWrites(databaseOf(core), 'run', 'The disk is full');
     // A message changes as the disk fails, so it is not on disk when the core closes.
     const messages = started.engines.canvas(CANVAS)?.messages;
     const first = messages?.all()[0];
@@ -472,12 +472,12 @@ describe('the core runs each canvas’s engine', () => {
       });
     });
     await started.call('window.get', {}, asHuman(7));
-    const allow = refuseWrites(profile, 'run', 'The disk is full');
+    const allow = await refuseWrites(databaseOf(core), 'run', 'The disk is full');
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       await expect(started.flush()).rejects.toThrow('The disk is full');
     } finally {
-      allow();
+      await allow();
     }
     errors.mockRestore();
     expect(

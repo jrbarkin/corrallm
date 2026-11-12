@@ -175,51 +175,63 @@ it('the executable Terminal fake posts native readings before its exact handoff 
   }
 }, 15_000);
 
-it('the executable Terminal fake keeps keys that a pty read joined to the terminal’s probe replies', async () => {
-  const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-fallback-keys-'));
-  const file = pathToFileURL(path.join(import.meta.dirname, 'fixtures/fake-terminal.mjs')).href;
-  const bootstrap = `
+it.each(['message', 'trust'] as const)(
+  'the executable Terminal fake keeps joined %s keys beside terminal probe replies',
+  async (kind) => {
+    const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-fallback-keys-'));
+    if (kind === 'trust') await writeFile(path.join(folder, '.fake-claude-untrusted'), '');
+    const file = pathToFileURL(path.join(import.meta.dirname, 'fixtures/fake-terminal.mjs')).href;
+    const bootstrap = `
     process.stdin.setRawMode=()=>process.stdin;
     process.argv=[process.execPath,'fake'];
     await import(process.env.FAKE_TOOL);
   `;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', bootstrap], {
-    cwd: folder,
-    env: { ...process.env, FAKE_TOOL: file },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  let output = '';
-  child.stdout.on('data', (chunk: Buffer) => {
-    output = `${output}${chunk.toString()}`.slice(-16_384);
-  });
-  const ended = new Promise<void>((resolve) => {
-    child.once('close', () => {
-      resolve();
+    const child = spawn(process.execPath, ['--input-type=module', '-e', bootstrap], {
+      cwd: folder,
+      env: { ...process.env, FAKE_TOOL: file },
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-  });
-  const prompts = async () =>
-    (await readFile(path.join(folder, '.fake-claude', 'log.jsonl'), 'utf8').catch(() => ''))
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { event: string; text?: string })
-      .filter((line) => line.event === 'prompt')
-      .map((line) => line.text);
-  try {
-    await vi.waitFor(() => {
-      expect(output).toContain('\x1b]7501;?');
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      output = `${output}${chunk.toString()}`.slice(-16_384);
     });
-    // One read: the replies to its probes, then the first keys of a message.
-    child.stdin.write('\x1b]11;rgb:0000/0000/0000\x07\x1b[?62;4c\x1b]7501;?\x1b\\\x1b[?0uhello ');
-    await vi.waitFor(() => {
-      expect(output).toContain('state=idle');
+    const ended = new Promise<void>((resolve) => {
+      child.once('close', () => {
+        resolve();
+      });
     });
-    child.stdin.write('world\x1b[?62;4c\r');
-    await vi.waitFor(async () => {
-      expect(await prompts()).toEqual(['hello world']);
-    });
-  } finally {
-    child.kill('SIGTERM');
-    await ended;
-    await rm(folder, { recursive: true, force: true });
-  }
-}, 15_000);
+    const logged = async () =>
+      (await readFile(path.join(folder, '.fake-claude', 'log.jsonl'), 'utf8').catch(() => ''))
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event: string; text?: string });
+    try {
+      await vi.waitFor(() => {
+        expect(output).toContain('\x1b]7501;?');
+      });
+      // One read: the replies to its probes, then the first keys of a message.
+      const probes = '\x1b]11;rgb:0000/0000/0000\x07\x1b[?62;4c\x1b]7501;?\x1b\\\x1b[?0u';
+      child.stdin.write(probes + (kind === 'trust' ? '\x1b[B\r' : 'hello '));
+      if (kind === 'trust') {
+        await vi.waitFor(async () => {
+          expect((await logged()).filter(({ event }) => event === 'trusted')).toHaveLength(1);
+        });
+        child.stdin.write('hello ');
+      }
+      await vi.waitFor(() => {
+        expect(output).toContain('state=idle');
+      });
+      child.stdin.write('world\x1b[?62;4c\r');
+      await vi.waitFor(async () => {
+        expect(
+          (await logged()).filter(({ event }) => event === 'prompt').map(({ text }) => text),
+        ).toEqual(['hello world']);
+      });
+    } finally {
+      child.kill('SIGTERM');
+      await ended;
+      await rm(folder, { recursive: true, force: true });
+    }
+  },
+  15_000,
+);

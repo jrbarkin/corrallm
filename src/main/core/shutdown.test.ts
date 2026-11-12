@@ -11,7 +11,7 @@ import type { Connector } from '../sessions/connector';
 import { fakeConnector } from '../sessions/test-fake';
 import type { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { journaledRun, keepCanvases, refuseWrites } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
@@ -211,13 +211,13 @@ describe('the shutdown barrier', () => {
     await vi.waitFor(() => {
       expect(engine?.run.snapshot().agents.worker?.outcomes).toEqual({ hello: 'succeeded' });
     });
-    const allow = refuseWrites(profile, 'run', 'The disk is full');
+    const allow = await refuseWrites(databaseOf(core), 'run', 'The disk is full');
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let answer;
     try {
       answer = await started.prepareShutdown('quit');
     } finally {
-      allow();
+      await allow();
     }
     expect(answer).toEqual({
       failed: true,

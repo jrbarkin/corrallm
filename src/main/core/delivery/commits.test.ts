@@ -10,7 +10,7 @@ import type { Connector, SessionHost } from '../../sessions/connector';
 import { fakeConnector } from '../../sessions/test-fake';
 import type { Caller, OutsideCaller } from '../caller';
 import { legacyDirectories } from '../workspaces/test-directories';
-import { createCore } from '../core';
+import { createCore, databaseOf } from '../store/test-core';
 import type { Core } from '../core';
 import { MessageStore } from './messages';
 import { Store, SYSTEM_DEPS } from '../store/store';
@@ -224,7 +224,7 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
     const { engines } = await start(fakeConnector({ adapter: 'codex' }));
     const target = { agent: 'builder' };
     if (op === 'run.unpause') await ok('run.pause', { target });
-    const allow = refuseWrites(profile, 'run', 'The disk is full');
+    const allow = await refuseWrites(databaseOf(core), 'run', 'The disk is full');
     try {
       expect(await core?.call(op, { canvas: CANVAS, target }, OUTSIDE)).toEqual({
         ok: false,
@@ -244,7 +244,7 @@ it.each(['run.pause', 'run.kill', 'run.unpause'] as const)(
         op === 'run.unpause' ? 0 : 1,
       );
     } finally {
-      allow();
+      await allow();
     }
   },
 );
@@ -320,7 +320,7 @@ it('commits a kill’s hold with the withdrawals it makes at once, or neither', 
   const waiting = await ok<{ id: string }>('message', { to: 'builder', body: 'Waits' });
   expect(pausesOnDisk()).toEqual([{ id: 'builder', by: 'you' }]);
   // Its withdrawal can't be written: nor can its hold.
-  const allow = refuseWrites(profile, 'message', 'The disk is full');
+  const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full');
   try {
     expect(
       await core?.call('run.kill', { canvas: CANVAS, target: { agent: 'builder' } }, OUTSIDE),
@@ -330,7 +330,7 @@ it('commits a kill’s hold with the withdrawals it makes at once, or neither', 
     expect(pausesOnDisk()).toEqual([{ id: 'builder', by: 'you' }]);
     expect(onDisk(waiting.id)?.state).toBe('pending');
   } finally {
-    allow();
+    await allow();
   }
   // Both land with the next write.
   await open?.journal();
@@ -378,7 +378,7 @@ it('says a withdrawal may not survive a restart when it can’t be written', asy
   const open = engines.canvas(CANVAS);
   await ok('run.pause', { target: { agent: 'builder' } }, CALLERS.you);
   const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Deploy to prod' });
-  const allow = refuseWrites(profile, 'message', 'The disk is full');
+  const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full');
   try {
     expect(await core?.call('withdraw', { canvas: CANVAS, id }, OUTSIDE)).toEqual({
       ok: false,
@@ -392,7 +392,7 @@ it('says a withdrawal may not survive a restart when it can’t be written', asy
     expect(open?.messages.get(id)?.state).toBe('withdrawn');
     expect(onDisk(id)?.state).toBe('pending');
   } finally {
-    allow();
+    await allow();
   }
   // It lands with the next write.
   await open?.messages.durable();
@@ -495,7 +495,7 @@ it('commits a turn’s reply with what its end changed in the run, or neither', 
     );
 
   // The run can't be written as the turn ends: nor can its reply.
-  const allow = refuseWrites(profile, 'run', 'The disk is full');
+  const allow = await refuseWrites(databaseOf(core), 'run', 'The disk is full');
   try {
     host?.emit({ type: 'text', id: `${turn}/reply`, text: 'Hello back' });
     host?.emit({
@@ -512,7 +512,7 @@ it('commits a turn’s reply with what its end changed in the run, or neither', 
     expect(onDisk(id)?.state).toBe('delivered');
     expect(recorded()).toEqual(['running']);
   } finally {
-    allow();
+    await allow();
   }
   await open?.messages.durable();
   expect(replies()).toEqual([{ body: 'Hello back' }]);
@@ -609,7 +609,7 @@ it('keeps waiting what it couldn’t record as delivering, and sends it once its
   const second = await ok<{ id: string }>('message', { to: 'builder', body: 'Second' }, other);
   // Its pending record is on disk; its delivering one can't be committed, and nor can the release
   // of the pause that lets it go, written with it.
-  const allow = refuseWrites(profile, 'message', 'The disk is full');
+  const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full');
   try {
     expect(
       await core?.call(
@@ -630,7 +630,7 @@ it('keeps waiting what it couldn’t record as delivering, and sends it once its
     expect(messages?.all().filter(({ body }) => body.includes('wasn’t sent'))).toEqual([]);
     expect(codex.sessions.flatMap((session) => session.sent)).toEqual([]);
   } finally {
-    allow();
+    await allow();
   }
   await vi.waitFor(
     () => {
@@ -673,13 +673,13 @@ it('holds a party’s message in its session’s queue when its agent is paused 
 it('refuses a message whose record can’t be committed, and never sends it', async () => {
   const codex = fakeConnector({ adapter: 'codex' });
   const messages = (await start(codex)).engines.canvas(CANVAS)?.messages;
-  const allow = refuseWrites(profile, 'message', 'The disk is full');
+  const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full');
   try {
     expect(
       await core?.call('message', { canvas: CANVAS, to: 'builder', body: 'Lost' }, OUTSIDE),
     ).toEqual({ ok: false, error: { code: 'unavailable', sentence: 'The disk is full' } });
   } finally {
-    allow();
+    await allow();
   }
   // What comes next goes; the refused one never does, though the disk works again.
   const next = await ok<{ id: string }>('message', { to: 'builder', body: 'Next' });

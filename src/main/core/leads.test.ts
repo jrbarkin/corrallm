@@ -237,9 +237,9 @@ describe('a lead', () => {
   it('goes with its agent, in the write of the commit that removes it; a failed one keeps it', async () => {
     await makeLead();
     // The lead's row can't be written: the commit removing its agent fails whole.
-    const release = refuseWrites(profile, 'lead', 'The disk is full.');
+    const release = await refuseWrites(store, 'lead', 'The disk is full.');
     await expect(commit(canvasOf(agent('helper')))).rejects.toThrow(/The disk is full/);
-    release();
+    await release();
     expect(now().nodes.map((node) => node.id)).toEqual(['lead', 'helper']);
     expect(leads.isLead(CANVAS, 'lead')).toBe(true);
     expect(rows()).toHaveLength(1);
@@ -336,9 +336,9 @@ describe('an outside grant', () => {
   });
 
   it('changes nothing it keeps where its write fails', async () => {
-    const release = refuseWrites(profile, 'outside_grant', 'The disk is full.');
+    const release = await refuseWrites(store, 'outside_grant', 'The disk is full.');
     await expect(leads.setGrant(CANVAS, 'orchestrator', true)).rejects.toThrow(/disk is full/);
-    release();
+    await release();
     expect(leads.granted(CANVAS)).toEqual([]);
   });
 });

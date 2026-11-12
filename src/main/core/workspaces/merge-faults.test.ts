@@ -395,11 +395,11 @@ describe.skipIf(process.platform === 'win32')('a failure at each phase', () => {
     const w = await make();
     const { before } = diverged(w);
     const was = everything(w);
-    const release = refuseWrites(w.profile, 'merge_job', 'The disk is full');
+    const release = await refuseWrites(w.store, 'merge_job', 'The disk is full');
     try {
       expect(refusal(await w.service.merge(w.request()))).toMatchObject({ code: 'unavailable' });
     } finally {
-      release();
+      await release();
     }
     expect(differing(was, everything(w))).toEqual([]);
     expect(w.g(w.app, 'rev-parse', 'main')).toBe(before);
@@ -413,10 +413,10 @@ describe.skipIf(process.platform === 'win32')('a failure at each phase', () => {
     diverged(w);
     const going = w.service.merge(w.request());
     await pause.reached;
-    const release = refuseWrites(w.profile, 'merge_job', 'The disk is full');
+    const release = await refuseWrites(w.store, 'merge_job', 'The disk is full');
     pause.resume();
     const answer = refusal(await going);
-    release();
+    await release();
     expect(answer.code).toBe('unavailable');
     expect(answer.sentence).toMatch(/is in your checkout/);
     expect(answer.sentence).not.toMatch(/nothing changed/i);

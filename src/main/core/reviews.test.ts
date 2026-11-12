@@ -15,7 +15,8 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { fakeConnector } from '../sessions/test-fake';
 import type { Caller, OutsideCaller } from './caller';
 import type { WatchFolder } from './canvas/watch';
-import { createCore } from './core';
+import { FileWatch } from './canvas/watch';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { mintTrustedPath } from './host';
 import type { HostServices } from './host';
@@ -374,11 +375,11 @@ describe('a file review', () => {
     const review = await reviewOf(TEAM);
 
     // A write that fails keeps nothing of it: the canvas as it was, the review open.
-    const release = refuseWrites(profile, 'file_review', 'The disk is full.');
+    const release = await refuseWrites(databaseOf(core), 'file_review', 'The disk is full.');
     try {
       expect(await answer(TEAM, review.id, 'apply')).toMatchObject({ ok: false });
     } finally {
-      release();
+      await release();
     }
     expect(await labelsOf(TEAM)).toEqual(['Lead', 'Builder']);
     expect((await reviewOf(TEAM)).id).toBe(review.id);
@@ -540,6 +541,18 @@ describe('a file review', () => {
 });
 
 describe('a canvas file’s folder, watched while the canvas is open', () => {
+  it('watches only canvases whose journaled open state has finished writing', async () => {
+    const following = vi.spyOn(FileWatch.prototype, 'follow');
+    await core.engines.open(TEAM);
+    await vi.waitFor(() => {
+      expect(following.mock.lastCall?.[0].has(TEAM)).toBe(true);
+    });
+    await applied('canvas.close', { canvas: TEAM });
+    await vi.waitFor(() => {
+      expect(following.mock.lastCall?.[0].has(TEAM)).toBe(false);
+    });
+  });
+
   it('raises a review as the file changes, one open at a time, and none for corrallm’s own saves', async () => {
     await restart('fs');
     await core.engines.open(TEAM);

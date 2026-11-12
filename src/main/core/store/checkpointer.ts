@@ -105,12 +105,14 @@ parentPort.on('message', async ({ id, partial, vacuum }) => {
  * How the checkpointer's connection syncs, as the store's own does (open.ts), and how large it
  * leaves the log it begins anew.
  */
-const SET_UP = [
+export const SYNC_SET_UP = [
   'PRAGMA synchronous = NORMAL',
   ...(process.platform === 'darwin'
     ? ['PRAGMA fullfsync = ON', 'PRAGMA checkpoint_fullfsync = ON']
     : []),
   'PRAGMA wal_autocheckpoint = 0',
+  'PRAGMA foreign_keys = ON',
+  'PRAGMA trusted_schema = OFF',
   `PRAGMA journal_size_limit = ${String(JOURNAL_SIZE_LIMIT)}`,
 ].join('; ');
 
@@ -176,7 +178,7 @@ export class Checkpointer {
       // stdout can block forever on macOS if serve's terminal has already hung up (#17).
       stdout: true,
       stderr: true,
-      workerData: { file: this.#file, setUp: SET_UP },
+      workerData: { file: this.#file, setUp: SYNC_SET_UP },
     });
     worker.unref();
     worker.on(

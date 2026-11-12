@@ -25,7 +25,7 @@ import type { FakeConnector } from '../sessions/fake';
 import { ownTurn } from './attempts';
 import type { OutsideCaller } from './caller';
 import { mintTrustedPath } from './host';
-import { createCore } from './core';
+import { createCore } from './store/test-core';
 import type { Core } from './core';
 import { cursorOf } from './delivery/messages';
 import { keepCanvases, keepMessages, openTestStore } from './store/test-store';

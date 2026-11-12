@@ -737,7 +737,7 @@ describe('WorkspaceStore', () => {
     expect(seen).toEqual({ run: 1, worktree: 1, bound: 1, jobs: 1 });
 
     // The job can't be written: neither is anything else of the write.
-    const release = refuseWrites(profile, 'worktree_job', 'The disk is full');
+    const release = await refuseWrites(store, 'worktree_job', 'The disk is full');
     await expect(
       store.writeBlocking(() => {
         journal.keep(CANVAS, token, { ...checkpoint, updatedAt: 2 }, messages);
@@ -754,7 +754,7 @@ describe('WorkspaceStore', () => {
     ).rejects.toThrow('The disk is full');
     expect(workspaces.worktree(W2)).toBeUndefined();
     expect(reader.prepare('SELECT updated_at FROM run').get()).toEqual({ updated_at: 1 });
-    release();
+    await release();
   });
 
   it('records its intents within a document’s commit: the commit and the intent, or neither', async () => {
@@ -807,9 +807,9 @@ describe('WorkspaceStore', () => {
     expect(workspaces.binding(CANVAS, 'b')?.workspace).toBe(W1);
     expect(workspaces.openJob(W1, 'create')?.id).toBe(J1);
 
-    const release = refuseWrites(profile, 'worktree_job', 'The disk is full');
+    const release = await refuseWrites(store, 'worktree_job', 'The disk is full');
     await expect(add('c', W2, J2)).rejects.toThrow(/The disk is full/);
-    release();
+    await release();
     expect(documents.live(CANVAS).document.nodes.map(({ id }) => id)).toEqual(['a', 'b']);
     expect(reader.prepare("SELECT count(*) AS rows FROM node WHERE id = 'c'").get()).toEqual({
       rows: 0,
@@ -953,13 +953,13 @@ describe('WorkspaceStore', () => {
     await withWorktrees(W1);
     const binding = await workspaces.write((w) => w.bind(CANVAS, 'a', W1));
     const before = store.prepare('SELECT workspace_generation FROM meta WHERE id = 1').get();
-    const release = refuseWrites(profile, 'agent_worktree', 'The disk is full');
+    const release = await refuseWrites(store, 'agent_worktree', 'The disk is full');
     try {
       await expect(workspaces.write((w) => w.plan(CANVAS, 'a', 'group/team'))).rejects.toThrow(
         'The disk is full',
       );
     } finally {
-      release();
+      await release();
     }
     expect(workspaces.binding(CANVAS, 'a')).toEqual(binding);
     expect(store.prepare('SELECT workspace_generation FROM meta WHERE id = 1').get()).toEqual(
@@ -1280,11 +1280,11 @@ describe('WorkspaceStore’s records in memory', () => {
     );
     await withWorktrees();
     await workspaces.write((w) => w.bindCanvas(CANVAS, REPOSITORY));
-    const allow = refuseWrites(profile, 'canvas', 'The disk is full');
+    const allow = await refuseWrites(store, 'canvas', 'The disk is full');
     try {
       await expect(wired.forget(CANVAS)).rejects.toThrow('The disk is full');
     } finally {
-      allow();
+      await allow();
     }
     expect(workspaces.canvasRepository(CANVAS)).toMatchObject({ repository: REPOSITORY });
   });
@@ -1302,7 +1302,7 @@ describe('WorkspaceStore’s records in memory', () => {
       bindings: workspaces.bindingsOf(CANVAS),
       jobs: workspaces.openJobs(),
     };
-    const release = refuseWrites(profile, 'worktree_job', 'The disk is full');
+    const release = await refuseWrites(store, 'worktree_job', 'The disk is full');
     try {
       await expect(
         workspaces.write((w) => {
@@ -1322,7 +1322,7 @@ describe('WorkspaceStore’s records in memory', () => {
         }),
       ).rejects.toThrow('The disk is full');
     } finally {
-      release();
+      await release();
     }
     expect({
       repositories: workspaces.repositories(),

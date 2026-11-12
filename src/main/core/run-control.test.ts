@@ -13,7 +13,7 @@ import type { SessionMode, UserMessage } from '../../shared/session';
 import type { Connector, SessionHost } from '../sessions/connector';
 import { fakeConnector } from '../sessions/test-fake';
 import type { Caller, OutsideCaller } from './caller';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { STORE_FILE } from './store/open';
 import { journaledRun, keepCanvases, refuseWrites } from './store/test-store';
@@ -302,7 +302,7 @@ describe('run.start', () => {
     const core = await start(connector);
     await core.engines.open(CANVAS);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const allow = refuseWrites(profile, 'run', 'The disk is full', CANVAS);
+    const allow = await refuseWrites(databaseOf(core), 'run', 'The disk is full', CANVAS);
     try {
       expect(await call(core, 'run.start', {})).toMatchObject({
         ok: false,
@@ -314,7 +314,7 @@ describe('run.start', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(sent).toEqual([]);
     } finally {
-      allow();
+      await allow();
       errors.mockRestore();
     }
   });

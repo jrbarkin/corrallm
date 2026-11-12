@@ -1445,12 +1445,12 @@ describe('the message store, when its database fails', () => {
     const messages = await store();
     const first = messages.add(draft('outside:orchestrator', 'agent:builder'));
     await messages.durable();
-    const allow = refuseWrites(profile, 'message', 'The disk is full');
+    const allow = await refuseWrites(database, 'message', 'The disk is full');
     messages.update(first.id, { state: 'withdrawn', by: 'outside:orchestrator' });
     try {
       await expect(messages.durable()).rejects.toThrow('The disk is full');
     } finally {
-      allow();
+      await allow();
     }
     expect(rows().map(({ id, state }) => ({ id, state }))).toEqual([
       { id: first.id, state: 'pending' },

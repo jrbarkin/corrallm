@@ -184,14 +184,15 @@ export async function checkStore(store: Store): Promise<string> {
   const pragma = (name: string): unknown => store.prepare(`PRAGMA ${name}`).get()?.[name];
   const version = store.prepare('SELECT sqlite_version() AS version').get()?.version;
   if (typeof version !== 'string') throw new Error('SQLite did not report its version');
-  for (const [name, value] of Object.entries(storePragmas())) {
-    const read = pragma(name);
-    if (read !== value) throw new Error(`${name} is ${String(read)}, not ${String(value)}`);
-  }
   const seen = [`SQLite ${version}`, 'WAL', 'synchronous NORMAL'];
   if (process.platform === 'darwin') seen.push('fullfsync');
   seen.push('its other pragmas as set');
   await store.writeBlocking(() => {
+    // Per-connection pragmas belong to the writer, including when this connection only reads.
+    for (const [name, value] of Object.entries(storePragmas())) {
+      const read = pragma(name);
+      if (read !== value) throw new Error(`${name} is ${String(read)}, not ${String(value)}`);
+    }
     store.exec('CREATE TABLE selftest (value TEXT NOT NULL) STRICT');
     store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
   });

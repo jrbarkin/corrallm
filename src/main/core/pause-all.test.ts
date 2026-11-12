@@ -8,7 +8,7 @@ import type { CanvasId } from '../../shared/canvas';
 import { fakeConnector } from '../sessions/test-fake';
 import type { FakeConnector } from '../sessions/fake';
 import type { OutsideCaller } from './caller';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { asHuman } from './gui';
 import { keepCanvases, refuseWrites } from './store/test-store';
@@ -193,12 +193,12 @@ describe('run.pauseAll', () => {
   it('says which canvases’ pauses couldn’t be saved, holding them all the same', async () => {
     const started = await start();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const allow = refuseWrites(profile, 'run', 'The disk is full', QUIET);
+    const allow = await refuseWrites(databaseOf(core), 'run', 'The disk is full', QUIET);
     let paused;
     try {
       paused = await started.call('run.pauseAll', {}, HOST);
     } finally {
-      allow();
+      await allow();
     }
     expect(paused).toMatchObject({
       ok: true,

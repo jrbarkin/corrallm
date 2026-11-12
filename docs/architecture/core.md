@@ -4,6 +4,8 @@
 
 ## `src/main/`
 
+The canvas-file watcher reconciles open files after the journal's queued writes finish, coalescing any notifications received while it waits. A plan-time notification therefore cannot leave a closed canvas watched when SQLite executes on the optional writer thread.
+
 Main's entry is index.ts; security.ts, app-protocol.ts, csp.ts and url-policy.ts hold the security baseline. ipc.ts checks the preload's core:connect handshake; main owns windows and native UI, and hosts the core process.
 
 The packaged app's [update checker](updates.md) lives in updates.ts and host/updates.ts, never the core or CLI. Its native Restart action goes through the same quit path as a quit (below), its shutdown barrier prepared for `update`, before installation. A Linux release-page choice uses main's private `openLink` core request, served by `WindowPorts.openLink` through the existing `link.open` operation for a connected window; it shares links.ts's policy rather than opening a raw response URL.

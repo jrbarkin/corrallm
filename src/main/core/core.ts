@@ -1464,31 +1464,38 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     ...(config.watchFolder === undefined ? {} : { watch: config.watchFolder }),
   });
   let following = false;
+  let followVersion = 0;
   /** Soon watches the files of the canvases open then, and no others. */
   function follow(): void {
-    if (following || closing) return;
+    if (closing) return;
+    followVersion++;
+    if (following) return;
     following = true;
     queueMicrotask(() => {
-      following = false;
-      if (closing) return;
-      try {
-        const open = new Set<CanvasId>([
-          ...store
-            .prepare('SELECT canvas_id FROM open_canvas')
-            .all()
-            .map(({ canvas_id: id }) => String(id) as CanvasId),
-          ...engines.opened(),
-          ...windows.canvases(),
-        ]);
-        const files = new Map<CanvasId, string>();
-        for (const canvas of open) {
-          const file = memory.fileOf(canvas);
-          if (file !== undefined) files.set(canvas, file);
-        }
-        watching.follow(files);
-      } catch (error) {
-        console.error('Could not watch the open canvases’ files for changes on disk:', error);
-      }
+      let seen = 0;
+      void (async () => {
+        do {
+          seen = followVersion;
+          // Journal notifications can arrive while their plan is still in flight.
+          const kept = await journal.openCanvases();
+          if (closing) return;
+          if (seen !== followVersion) continue;
+          const open = new Set<CanvasId>([...kept, ...engines.opened(), ...windows.canvases()]);
+          const files = new Map<CanvasId, string>();
+          for (const canvas of open) {
+            const file = memory.fileOf(canvas);
+            if (file !== undefined) files.set(canvas, file);
+          }
+          watching.follow(files);
+        } while (seen !== followVersion);
+      })()
+        .catch((error: unknown) => {
+          console.error('Could not watch the open canvases’ files for changes on disk:', error);
+        })
+        .finally(() => {
+          following = false;
+          if (seen !== followVersion) follow();
+        });
     });
   }
   // B11 C6's session services: live and saved settings, Continue in Terminal, restart, new

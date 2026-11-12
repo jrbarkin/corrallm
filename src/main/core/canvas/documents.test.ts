@@ -402,7 +402,7 @@ describe('a canvas’s document', () => {
     await filed(canvasOf(canvas));
     const before = await documents.load(canvas);
     const next = renamed(before.document, 'worker', 'Builder');
-    const allow = refuseWrites(profile, 'node', 'The disk is full');
+    const allow = await refuseWrites(store, 'node', 'The disk is full');
 
     const failed = commit(canvas, next);
     await expect(failed).rejects.toBeInstanceOf(CommitFailed);
@@ -410,7 +410,7 @@ describe('a canvas’s document', () => {
     expect(documents.live(canvas)).toMatchObject({ document: before.document, rev: 1 });
     expect(count('revision', canvas)).toBe(1);
 
-    allow();
+    await allow();
     await expect(commit(canvas, next)).resolves.toBe(2);
     await restart();
     expect((await documents.load(canvas)).document).toEqual(next);
@@ -552,9 +552,13 @@ describe('a canvas’s document', () => {
     // As a save leaves it when the core stops after the file was written, before its last commit.
     const saving = async (written: boolean) => {
       await restart();
-      store
-        .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
-        .run(sha256(toFile(next)), canvas);
+      store.tx(() => {
+        store.run(
+          'UPDATE document SET writing_hash = ? WHERE canvas_id = ?',
+          sha256(toFile(next)),
+          canvas,
+        );
+      });
       await writeFile(file, written ? toFile(next) : toFile(canvasOf(canvas)));
       await restart();
       await documents.load(canvas);
@@ -724,9 +728,11 @@ describe('a canvas’s document', () => {
     const saved = documentRow(canvas);
     await commit(canvas, renamed(documents.live(canvas).document, 'lead', 'Changed'));
     const next = mintTrustedPath(path.join(profile, 'new.corral'));
-    store.exec(
-      "CREATE TEMP TRIGGER fail_file_memory BEFORE UPDATE OF file ON canvas BEGIN SELECT RAISE(ABORT, 'disk full writing canvas file'); END",
-    );
+    await store.write(() => {
+      store.run(
+        "CREATE TEMP TRIGGER fail_file_memory BEFORE UPDATE OF file ON canvas BEGIN SELECT RAISE(ABORT, 'disk full writing canvas file'); END",
+      );
+    });
     try {
       const result = await documents.save(canvas, next).catch((error: unknown) => error);
       expect(result).toBeInstanceOf(Error);
@@ -745,7 +751,9 @@ describe('a canvas’s document', () => {
       await fresh.load(canvas);
       expect(fresh.edited(canvas)).toBe(true);
     } finally {
-      store.exec('DROP TRIGGER fail_file_memory');
+      await store.write(() => {
+        store.run('DROP TRIGGER fail_file_memory');
+      });
       await memory.setFile(canvas, mintTrustedPath(file));
     }
   });
