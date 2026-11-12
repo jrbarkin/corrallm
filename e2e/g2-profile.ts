@@ -121,13 +121,13 @@ export function formatEvidence(label: string, profile: CpuProfile, activity: Act
       `G2-BUSY #${String(index + 1)} +${ms(run.start - from)}..${ms(run.end - from)} ms (${ms(run.end - run.start)} ms, ${phase})`,
     );
     lines.push(
-      `  self: ${run.self
+      `G2-SELF #${String(index + 1)} ${run.self
         .slice(0, 7)
         .map(({ frame, us }) => `${frame} ${ms(us)} ms`)
         .join('; ')}`,
     );
     lines.push(
-      `  inclusive: ${run.inclusive
+      `G2-INCLUSIVE #${String(index + 1)} ${run.inclusive
         .filter(({ frame }) => !frame.startsWith('(root)'))
         .slice(0, 10)
         .map(({ frame, us }) => `${frame} ${ms(us)} ms`)
@@ -143,10 +143,11 @@ export function formatEvidence(label: string, profile: CpuProfile, activity: Act
       kept.max = Math.max(kept.max, event.end - event.start);
       grouped.set(key, kept);
     }
-    if (grouped.size === 0) lines.push('  activity: no writer/checkpoint/fsync operation overlaps');
+    if (grouped.size === 0)
+      lines.push(`G2-OVERLAP #${String(index + 1)} no writer/checkpoint/fsync operation overlaps`);
     for (const [key, count] of [...grouped].sort((a, b) => b[1].us - a[1].us).slice(0, 15))
       lines.push(
-        `  activity: ${key}: ${String(count.count)} calls, overlap ${ms(count.us)} ms, longest whole call ${ms(count.max)} ms`,
+        `G2-OVERLAP #${String(index + 1)} ${key}: ${String(count.count)} calls, overlap ${ms(count.us)} ms, longest whole call ${ms(count.max)} ms`,
       );
   }
   // A large sample gap can be the only evidence of scheduler starvation, including while idle.

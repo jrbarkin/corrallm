@@ -15,6 +15,7 @@ import { TOKEN_WRITES_PER_SECOND } from '../src/shared/api/limits';
 import { toolName } from '../src/shared/api/registry';
 import { keepCanvases } from '../src/main/core/store/test-store';
 import { printEvidence } from './g2-profile';
+import { printBeforeG2 } from './g2-system';
 
 /*
  * Gate G2 of the core's database (Core Database §8; the Build Plan's load test, B11's, built here
@@ -440,6 +441,7 @@ async function build(client: Client): Promise<{
 
 test('keeps the core’s event loop within budget under a burst of messages, waits, run saves and doc ops', async () => {
   test.setTimeout(180_000);
+  if (process.env.CORRALLM_G2_DIAG === '1') await printBeforeG2(diagnosticLabel);
   const { profile, file, tokens } = await profileOf();
   const url = await start(profile, file);
   const clients = await Promise.all(tokens.map((token) => connect(url, token)));

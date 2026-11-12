@@ -42,5 +42,12 @@ it('clips to the measured window and reports overlapping worker work and large s
   expect(text).toContain('fsync flush');
   expect(text).not.toContain('checkpointer checkpoint');
   expect(text).toContain('sample gap');
+  const extracted = text
+    .split('\n')
+    .filter((line) => line.startsWith('G2-'))
+    .join('\n');
+  expect(extracted).toContain('G2-SELF #1');
+  expect(extracted).toContain('G2-INCLUSIVE #1');
+  expect(extracted).toContain('G2-OVERLAP #1 writer savepoint INSERT message');
   expect(busyStretches(saved, saved.endTime, saved.endTime + 100000)).toEqual([]);
 });
