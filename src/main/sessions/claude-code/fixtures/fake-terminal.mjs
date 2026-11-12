@@ -516,14 +516,25 @@ function key(received) {
   }
   if (data.startsWith('\x1b[?') || data.startsWith('\x1b]')) return;
   if (trusting) {
-    if (data === '\x1b[B' || data === '\x1b[A') trustChoice = 1 - trustChoice;
-    else if (data === '\r') {
+    // A pty read may contain both the selection and its confirmation, in order.
+    for (let at = 0; at < data.length;) {
+      const arrow = data.slice(at, at + 3);
+      if (arrow === '\x1b[B' || arrow === '\x1b[A') {
+        trustChoice = 1 - trustChoice;
+        at += 3;
+        continue;
+      }
+      const pressed = data[at++];
+      if (pressed === '\x1b') quit(0);
+      if (pressed !== '\r') continue;
       if (trustChoice === 0) quit(1);
       trusting = false;
       rmSync(path.join(process.cwd(), '.fake-claude-untrusted'), { force: true });
       log({ event: 'trusted' });
       become('idle');
-    } else if (data === '\x1b') quit(0);
+      if (at < data.length) key(data.slice(at));
+      break;
+    }
     draw();
     return;
   }

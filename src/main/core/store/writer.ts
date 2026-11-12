@@ -590,8 +590,10 @@ export class Writer {
     }
     this.#port.postMessage({ id, op: 'sync', sync: true, request: wired });
     if (fresh !== undefined) this.#ids.set(fresh.sql, fresh.id);
-    for (let quiet = 0; Atomics.wait(this.#flag, 0, 0, 1000) === 'timed-out';) {
-      if (++quiet >= QUIET_SLICES) {
+    // A preceding reply's notify can arrive after main consumed its marker and started this
+    // request. Notifications only wake the loop; the shared marker proves a reply is ready.
+    for (let quiet = 0; Atomics.load(this.#flag, 0) === 0;) {
+      if (Atomics.wait(this.#flag, 0, 0, 1000) === 'timed-out' && ++quiet >= QUIET_SLICES) {
         const error = new Error('The store’s writer thread went quiet for a minute.');
         this.#lose(error);
         throw error;

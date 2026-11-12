@@ -64,6 +64,21 @@ test.afterEach(async () => {
   const close = closeApp;
   closeApp = undefined;
   try {
+    if (test.info().status !== test.info().expectedStatus) {
+      // Native turn/thread progress distinguishes a refused Fresh from a close or startup wait.
+      try {
+        console.log(
+          '[e2e native Codex thread/turn requests]',
+          JSON.stringify(
+            (await codexRequests())
+              .filter(({ method }) => /^(thread|turn)\//.test(method))
+              .slice(-16),
+          ),
+        );
+      } catch (error) {
+        console.log('[e2e native Codex requests unavailable]', String(error));
+      }
+    }
     await close?.();
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -437,6 +452,12 @@ test('Codex applies a changed role in an explicit new conversation, retaining it
   settings = await settingsFrom(view, 'Builder');
   await expect(fresh()).toBeEnabled();
   await fresh().click();
+  // Fresh first closes and forgets the old conversation, then clears its transcript and starts
+  // the new native thread. Observe the clear before waiting for the next startup stage.
+  await expect(
+    transcript.getByText(/^Interrupted · \d+s$/),
+    'Fresh must close the earlier conversation and clear its transcript before starting another',
+  ).toHaveCount(0);
   await expect
     .poll(async () => (await codexRequests()).filter(({ method }) => method === 'thread/start'))
     .toHaveLength(2);

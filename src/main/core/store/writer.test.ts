@@ -114,6 +114,34 @@ describe('the writer thread', () => {
     vi.spyOn(Atomics, 'wait').mockReturnValueOnce('not-equal');
     expect(() => writer.sync({ op: 'get', sql: 'SELECT 1', params: [] })).toThrow(/thread ended/);
   });
+
+  it('waits for its reply marker after a notification without a reply', async () => {
+    const writer = await thread();
+    let send: (() => void) | undefined;
+    vi.spyOn(MessagePort.prototype, 'postMessage').mockImplementationOnce(function (
+      this: MessagePort,
+      message: unknown,
+    ) {
+      send = MessagePort.prototype.postMessage.bind(this, message);
+    });
+    const wait = Atomics.wait;
+    let notified = false;
+    vi.spyOn(Atomics, 'wait').mockImplementation((array, index, value, timeout) => {
+      if (!notified) {
+        // The preceding request's notify can arrive after main consumed its reply marker.
+        notified = true;
+        expect(Atomics.load(array, index)).toBe(0);
+        return 'ok';
+      }
+      send?.();
+      send = undefined;
+      return wait(array, index, value, timeout);
+    });
+    expect(writer.sync({ op: 'get', sql: 'SELECT 42 AS value', params: [] }).row).toEqual({
+      value: 42,
+    });
+  });
+
   it('keeps SQLite errors and trigger words across the thread, with a savepoint of each write’s own', async () => {
     const writer = await thread();
     writer.sync({
