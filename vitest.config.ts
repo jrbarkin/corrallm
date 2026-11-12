@@ -14,7 +14,10 @@ export default defineConfig({
           name: 'main',
           environment: 'node',
           include: ['src/main/**/*.test.ts', 'src/shared/**/*.test.ts'],
-          exclude: ['src/main/core/store/snapshots-loop.test.ts'],
+          exclude: [
+            'src/main/core/store/snapshots-loop.test.ts',
+            'src/main/core/store/writer-loop.test.ts',
+          ],
           // Builds the CLI bundle the tests of `corrallm serve` run.
           globalSetup: ['./src/main/cli/global-setup.ts'],
         },
@@ -23,7 +26,10 @@ export default defineConfig({
         test: {
           name: 'store-performance',
           environment: 'node',
-          include: ['src/main/core/store/snapshots-loop.test.ts'],
+          include: [
+            'src/main/core/store/snapshots-loop.test.ts',
+            'src/main/core/store/writer-loop.test.ts',
+          ],
           // Disk/loop measurements must not compete with the suite's parallel workers.
           sequence: { groupOrder: 2 },
           fileParallelism: false,

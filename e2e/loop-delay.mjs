@@ -3,8 +3,7 @@
 // and over each span between two SIGUSR2s. At each later one it writes what it measured so far, in
 // milliseconds, to the file LOOP_DELAY_FILE names (whole, then renamed into place, so a reader
 // never sees half of it): the whole, and each span that has ended.
-import { renameSync, writeFileSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { rename, writeFile } from 'node:fs/promises';
 import { Session } from 'node:inspector/promises';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 
@@ -23,6 +22,7 @@ whole.enable();
 span.enable();
 let measuring = false;
 const spans = [];
+let publishing = Promise.resolve();
 
 const ms = (ns) => ns / 1e6;
 const of = (histogram) => ({
@@ -37,23 +37,32 @@ process.on('SIGUSR2', () => {
   if (measuring && file) {
     spans.push(of(span));
     const result = JSON.stringify({ ...of(whole), spans });
-    const publish = () => {
-      writeFileSync(`${file}.part`, result);
-      renameSync(`${file}.part`, file);
+    const publish = async () => {
+      await writeFile(`${file}.part`, result);
+      await rename(`${file}.part`, file);
     };
-    if (cpu && spans.length === 3) {
-      // The test may stop the CLI as soon as it reads the last span, even on a failed assertion.
-      void cpu
-        .post('Profiler.stop')
-        .then(({ profile }) => writeFile(cpuFile, JSON.stringify(profile), { mode: 0o600 }))
-        .catch(() => {
-          process.stderr.write('G2 CPU profile could not be written.\n');
-        })
-        .finally(() => {
-          cpu.disconnect();
-          publish();
-        });
-    } else publish();
+    // Stop at the signal boundary even if a previous result is still being written.
+    const profiled =
+      cpu && spans.length === 3
+        ? cpu
+            .post('Profiler.stop')
+            .then(({ profile }) => writeFile(cpuFile, JSON.stringify(profile), { mode: 0o600 }))
+            .catch(() => {
+              process.stderr.write('G2 CPU profile could not be written.\n');
+            })
+            .finally(() => cpu.disconnect())
+        : Promise.resolve();
+    // One FIFO keeps the shared partial path and the final profile ordered without blocking
+    // the loop whose delay is measured. Each result was captured at its signal boundary.
+    publishing = publishing
+      .then(async () => {
+        // The test may stop the CLI as soon as it reads the last span, even on a failed assertion.
+        await profiled;
+        await publish();
+      })
+      .catch(() => {
+        process.stderr.write('G2 loop measurements could not be written.\n');
+      });
   } else {
     whole.reset();
   }
