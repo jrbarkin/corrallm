@@ -728,9 +728,11 @@ describe('a canvas’s document', () => {
     const saved = documentRow(canvas);
     await commit(canvas, renamed(documents.live(canvas).document, 'lead', 'Changed'));
     const next = mintTrustedPath(path.join(profile, 'new.corral'));
-    store.exec(
-      "CREATE TEMP TRIGGER fail_file_memory BEFORE UPDATE OF file ON canvas BEGIN SELECT RAISE(ABORT, 'disk full writing canvas file'); END",
-    );
+    await store.write(() => {
+      store.run(
+        "CREATE TEMP TRIGGER fail_file_memory BEFORE UPDATE OF file ON canvas BEGIN SELECT RAISE(ABORT, 'disk full writing canvas file'); END",
+      );
+    });
     try {
       const result = await documents.save(canvas, next).catch((error: unknown) => error);
       expect(result).toBeInstanceOf(Error);
@@ -749,7 +751,9 @@ describe('a canvas’s document', () => {
       await fresh.load(canvas);
       expect(fresh.edited(canvas)).toBe(true);
     } finally {
-      store.exec('DROP TRIGGER fail_file_memory');
+      await store.write(() => {
+        store.run('DROP TRIGGER fail_file_memory');
+      });
       await memory.setFile(canvas, mintTrustedPath(file));
     }
   });
