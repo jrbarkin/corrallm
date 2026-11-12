@@ -71,7 +71,7 @@ function documentsOf(planner: WorkspacePlanner): Documents {
 beforeEach(async () => {
   t = await testWorkspaces({ 'README.md': 'hello\n' });
   memory = new CanvasMemory(t.store);
-  reviews = new FileReviews({ store: t.store });
+  reviews = new FileReviews({ store: t.store, memory });
   documents = documentsOf(
     new WorkspacePlanner({ workspaces: t.workspaces, provisioner: t.provisioner }),
   );

@@ -148,6 +148,9 @@ export class CanvasMemory {
   #touched: CanvasId[] = [];
   /** The canvases that have a row, as committed and as the writes planned since will leave it. */
   readonly #rows = new Set<CanvasId>();
+  /** The remembered rows, loaded before work starts; hot reads never enter SQLite. */
+  readonly #remembered = new Map<CanvasId, Remembered | Error>();
+  readonly #forgetListeners = new Set<(canvas: CanvasId) => void>();
   /** Why canvas membership could not be loaded, rather than treating unread rows as absent. */
   readonly #rowsError: Error | undefined;
   /** How many times it deleted a canvas's row, by canvas (none: 0). */
@@ -174,7 +177,13 @@ export class CanvasMemory {
     this.#forgotten = forgotten;
     try {
       for (const { id } of store.prepare('SELECT id FROM canvas').all()) {
-        if (isCanvasId(id)) this.#rows.add(id);
+        if (!isCanvasId(id)) continue;
+        this.#rows.add(id);
+        try {
+          this.#remembered.set(id, this.#read(id));
+        } catch (error) {
+          this.#remembered.set(id, error instanceof Error ? error : new Error(String(error)));
+        }
       }
     } catch (error) {
       this.#rowsError = error instanceof Error ? error : new Error(String(error));
@@ -259,6 +268,14 @@ export class CanvasMemory {
     };
   }
 
+  /** Within the deleting write: a canvas's row and its dependent rows go. Register undo for memory. */
+  whenForgotten(listener: (canvas: CanvasId) => void): () => void {
+    this.#forgetListeners.add(listener);
+    return () => {
+      this.#forgetListeners.delete(listener);
+    };
+  }
+
   /** The canvas whose file `file` is, if any. */
   async canvasWithFile(file: string): Promise<CanvasId | undefined> {
     await this.#writing;
@@ -324,8 +341,10 @@ export class CanvasMemory {
       this.#rows.add(canvas);
     });
     this.#rows.delete(canvas);
+    this.#remember(canvas, undefined);
     this.#generations.set(canvas, this.generation(canvas) + 1);
     this.#forgotten(canvas);
+    for (const listener of this.#forgetListeners) listener(canvas);
   }
 
   /**
@@ -449,7 +468,13 @@ export class CanvasMemory {
     const written = [...this.#unwritten];
     const clear = this.#store.prepare('UPDATE canvas SET file = NULL WHERE file = ? AND id <> ?');
     for (const [canvas, { remembered }] of written) {
-      if (remembered.file !== undefined) clear.run(remembered.file, canvas);
+      if (remembered.file !== undefined) {
+        clear.run(remembered.file, canvas);
+        for (const [other, kept] of this.#remembered) {
+          if (other !== canvas && !(kept instanceof Error) && kept.file === remembered.file)
+            this.#remember(other, withFile(kept, undefined));
+        }
+      }
     }
     for (const [canvas, { remembered }] of written) this.#keep(canvas, remembered);
     this.#forgetOldest();
@@ -460,9 +485,25 @@ export class CanvasMemory {
     };
   }
 
-  /** What it remembers of a canvas now: as changed, else as on disk. */
+  /** What it remembers of a canvas now: as changed, else as loaded or written. */
   #current(canvas: CanvasId): Remembered {
-    return this.#unwritten.get(canvas)?.remembered ?? this.#read(canvas);
+    const unwritten = this.#unwritten.get(canvas);
+    if (unwritten !== undefined) return unwritten.remembered;
+    if (this.#rowsError !== undefined) throw this.#rowsError;
+    const kept = this.#remembered.get(canvas);
+    if (kept instanceof Error) throw kept;
+    return kept ?? NOTHING;
+  }
+
+  /** Within a write: the row's memory follows its SQL, and goes back if the write fails. */
+  #remember(canvas: CanvasId, remembered: Remembered | undefined): void {
+    const before = this.#remembered.get(canvas);
+    this.#store.undo(() => {
+      if (before === undefined) this.#remembered.delete(canvas);
+      else this.#remembered.set(canvas, before);
+    });
+    if (remembered === undefined) this.#remembered.delete(canvas);
+    else this.#remembered.set(canvas, remembered);
   }
 
   /** Remembers `canvas` as `remembered`, its row unwritten until a write has it on disk. */
@@ -492,44 +533,13 @@ export class CanvasMemory {
   #read(canvas: CanvasId): Remembered {
     const row = this.#store.prepare('SELECT file, project FROM canvas WHERE id = ?').get(canvas);
     if (row === undefined) return NOTHING;
-    /** By workspace, then adapter: each adapter's agents' conversations. */
-    const byWorkspace = new Map<string, Map<string, [agent: string, Conversation][]>>();
     const rows = this.#store
       .prepare(
         `SELECT workspace_key, adapter, agent_id, native_id, role_fingerprint FROM conversation
          WHERE canvas_id = ? ORDER BY workspace_key, adapter, agent_id`,
       )
       .all(canvas);
-    for (const row of rows) {
-      const { workspace_key: workspace, adapter, agent_id: agent } = row;
-      const { native_id: id, role_fingerprint: role } = row;
-      if (typeof workspace !== 'string' || workspace === '') continue;
-      if (typeof adapter !== 'string' || !ID_PATTERN.test(adapter)) continue;
-      if (typeof agent !== 'string') continue;
-      if (!isNativeId(id) || !this.#conversationId(adapter, id)) {
-        console.error(`A saved ${adapter} conversation id is invalid; it will not be resumed.`);
-        continue;
-      }
-      const adapters = byWorkspace.get(workspace) ?? new Map<string, [string, Conversation][]>();
-      const agents = adapters.get(adapter) ?? [];
-      agents.push([agent, isFingerprint(role) ? { id, role } : { id }]);
-      adapters.set(adapter, agents);
-      byWorkspace.set(workspace, adapters);
-    }
-    const { file, project } = row;
-    return {
-      ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
-      ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
-      // Built from entries, so that an agent or a workspace keyed __proto__ is the canvas's own.
-      conversations: Object.fromEntries(
-        [...byWorkspace].map(([workspace, adapters]) => [
-          workspace,
-          Object.fromEntries(
-            [...adapters].map(([adapter, agents]) => [adapter, Object.fromEntries(agents)]),
-          ),
-        ]),
-      ),
-    };
+    return rememberedOf(row, rows, this.#conversationId);
   }
 
   /**
@@ -569,13 +579,22 @@ export class CanvasMemory {
        ON CONFLICT (canvas_id, adapter, agent_id, workspace_key) DO UPDATE SET
          native_id = excluded.native_id, role_fingerprint = excluded.role_fingerprint`,
     );
+    const rows: Record<string, unknown>[] = [];
     for (const [workspace, adapters] of Object.entries(conversations)) {
       for (const [adapter, agents] of Object.entries(adapters)) {
         for (const [agent, { id, role }] of Object.entries(agents)) {
           remember.run(canvas, adapter, agent, workspace, id, role ?? null);
+          rows.push({
+            workspace_key: workspace,
+            adapter,
+            agent_id: agent,
+            native_id: id,
+            role_fingerprint: role,
+          });
         }
       }
     }
+    this.#remember(canvas, rememberedOf({ file, project }, rows, this.#conversationId));
   }
 
   /**
@@ -638,4 +657,44 @@ function isFingerprint(value: unknown): value is string {
 
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);
+}
+
+/** The same canonical view after loading or writing rows: no empty conversation containers. */
+function rememberedOf(
+  row: Record<string, unknown>,
+  rows: readonly Record<string, unknown>[],
+  conversationId: (adapter: string, id: string) => boolean,
+): Remembered {
+  /** By workspace, then adapter: each adapter's agents' conversations. */
+  const byWorkspace = new Map<string, Map<string, [agent: string, Conversation][]>>();
+  for (const row of rows) {
+    const { workspace_key: workspace, adapter, agent_id: agent } = row;
+    const { native_id: id, role_fingerprint: role } = row;
+    if (typeof workspace !== 'string' || workspace === '') continue;
+    if (typeof adapter !== 'string' || !ID_PATTERN.test(adapter)) continue;
+    if (typeof agent !== 'string') continue;
+    if (!isNativeId(id) || !conversationId(adapter, id)) {
+      console.error(`A saved ${adapter} conversation id is invalid; it will not be resumed.`);
+      continue;
+    }
+    const adapters = byWorkspace.get(workspace) ?? new Map<string, [string, Conversation][]>();
+    const agents = adapters.get(adapter) ?? [];
+    agents.push([agent, isFingerprint(role) ? { id, role } : { id }]);
+    adapters.set(adapter, agents);
+    byWorkspace.set(workspace, adapters);
+  }
+  const { file, project } = row;
+  return {
+    ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
+    ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
+    // Built from entries, so that an agent or a workspace keyed __proto__ is the canvas's own.
+    conversations: Object.fromEntries(
+      [...byWorkspace].map(([workspace, adapters]) => [
+        workspace,
+        Object.fromEntries(
+          [...adapters].map(([adapter, agents]) => [adapter, Object.fromEntries(agents)]),
+        ),
+      ]),
+    ),
+  };
 }

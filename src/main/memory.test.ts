@@ -56,6 +56,26 @@ async function reopen(): Promise<void> {
 }
 
 describe('CanvasMemory', () => {
+  it('reads remembered files and conversations from memory after recovery', async () => {
+    const memory = new CanvasMemory(store);
+    await memory.setFile(TEAM, at('/work/team.corral'));
+    await memory.update(TEAM, (m) => ({
+      ...m,
+      conversations: inProject({ codex: { a: { id: THREAD } } }),
+    }));
+    await reopen();
+    const recovered = new CanvasMemory(store);
+    const reads = vi.spyOn(store, 'prepare');
+    for (let i = 0; i < 10; i++) {
+      expect(recovered.fileOf(TEAM)).toBe('/work/team.corral');
+      expect((await recovered.get(TEAM)).conversations).toEqual(
+        inProject({ codex: { a: { id: THREAD } } }),
+      );
+      expect(recovered.fileOf(OTHER)).toBeUndefined();
+    }
+    expect(reads).not.toHaveBeenCalled();
+  });
+
   it('checks unknown adapters’ saved ids against the platform minimum and reports a refused id', async () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     store.exec(`INSERT INTO canvas (id, used_at) VALUES ('${TEAM}', 1)`);

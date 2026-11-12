@@ -287,10 +287,51 @@ export class Documents {
    * asked: they change only once it is loaded.
    */
   readonly #unsaved = new Map<CanvasId, boolean>();
+  /** Committed ownership, including canvases whose full document isn't loaded. */
+  readonly #owners = new Map<CanvasId, PartyId | undefined>();
+  readonly #agents = new Map<CanvasId, ReadonlyMap<string, PartyId>>();
+  readonly #ownersError: Error | undefined;
+  readonly #agentsError: Error | undefined;
 
   constructor(deps: DocumentsDeps) {
     this.#deps = deps;
     this.#now = deps.now ?? (() => Date.now());
+    try {
+      for (const row of deps.store.prepare('SELECT canvas_id, created_by FROM document').all()) {
+        if (typeof row.canvas_id === 'string')
+          this.#owners.set(row.canvas_id as CanvasId, text(row.created_by) as PartyId | undefined);
+      }
+    } catch (error) {
+      this.#ownersError = error instanceof Error ? error : new Error(String(error));
+    }
+    try {
+      const agents = new Map<CanvasId, Map<string, PartyId>>();
+      for (const row of deps.store
+        .prepare(
+          "SELECT canvas_id, id, created_by FROM node WHERE kind = 'agent' AND created_by IS NOT NULL",
+        )
+        .all()) {
+        if (typeof row.canvas_id !== 'string' || typeof row.created_by !== 'string') continue;
+        const canvas = row.canvas_id as CanvasId;
+        const known = agents.get(canvas) ?? new Map<string, PartyId>();
+        known.set(String(row.id), row.created_by as PartyId);
+        agents.set(canvas, known);
+      }
+      for (const [canvas, known] of agents) this.#agents.set(canvas, known);
+    } catch (error) {
+      this.#agentsError = error instanceof Error ? error : new Error(String(error));
+    }
+    deps.memory.whenForgotten((canvas) => {
+      const had = this.#owners.has(canvas);
+      const owner = this.#owners.get(canvas);
+      const agents = this.#agents.get(canvas);
+      deps.store.undo(() => {
+        if (had) this.#owners.set(canvas, owner);
+        if (agents !== undefined) this.#agents.set(canvas, agents);
+      });
+      this.#owners.delete(canvas);
+      this.#agents.delete(canvas);
+    });
     // Canvas memory forgets the canvases used least recently with all it keeps of them: the
     // document loaded of one goes too, once its document is done with what it was doing.
     deps.memory.subscribe((canvas) => {
@@ -456,10 +497,8 @@ export class Documents {
 
   /** Whether the canvas's document is kept in rows. */
   hasRows(canvas: CanvasId): boolean {
-    return (
-      this.#deps.store.prepare('SELECT 1 AS kept FROM document WHERE canvas_id = ?').get(canvas) !==
-      undefined
-    );
+    if (this.#ownersError !== undefined) throw this.#ownersError;
+    return this.#owners.has(canvas);
   }
 
   /**
@@ -556,6 +595,7 @@ export class Documents {
         this.#ensure(live, live.createdBy ?? 'you');
       });
       live.kept = true;
+      this.#index(live);
     });
   }
 
@@ -569,10 +609,8 @@ export class Documents {
 
   /** The canvases `party` made (canvas.create) that the core keeps: those its reach reads. */
   createdBy(party: PartyId): CanvasId[] {
-    return this.#deps.store
-      .prepare('SELECT canvas_id FROM document WHERE created_by = ? ORDER BY canvas_id')
-      .all(party)
-      .flatMap(({ canvas_id: id }) => (typeof id === 'string' ? [id as CanvasId] : []));
+    if (this.#ownersError !== undefined) throw this.#ownersError;
+    return [...this.#owners].flatMap(([canvas, by]) => (by === party ? [canvas] : [])).sort();
   }
 
   /**
@@ -644,36 +682,16 @@ export class Documents {
     canvas?: CanvasId,
     removing?: Pick<ChangeSet, 'canvas' | 'removed'>,
   ): number {
-    const { store } = this.#deps;
     const parties: readonly PartyId[] = typeof party === 'string' ? [party] : party;
     if (parties.length === 0) return 0;
-    const marks = parties.map(() => '?').join(', ');
-    const kept =
-      canvas === undefined
-        ? store
-            .prepare(
-              `SELECT count(*) AS n FROM node WHERE created_by IN (${marks}) AND kind = 'agent'`,
-            )
-            .get(...parties)
-        : store
-            .prepare(
-              `SELECT count(*) AS n FROM node
-               WHERE created_by IN (${marks}) AND kind = 'agent' AND canvas_id = ?`,
-            )
-            .get(...parties, canvas);
-    let count = Number(kept?.n ?? 0);
-    if (
-      removing !== undefined &&
-      removing.removed.size > 0 &&
-      (canvas === undefined || canvas === removing.canvas)
-    ) {
-      // Only these parties' rows on the changed canvas count as removals: ids may repeat elsewhere.
-      const owned = store
-        .prepare(
-          `SELECT id FROM node WHERE created_by IN (${marks}) AND kind = 'agent' AND canvas_id = ?`,
-        )
-        .all(...parties, removing.canvas);
-      count -= owned.filter((row) => removing.removed.has(String(row.id))).length;
+    if (this.#agentsError !== undefined) throw this.#agentsError;
+    let count = 0;
+    for (const [one, agents] of this.#agents) {
+      if (canvas !== undefined && canvas !== one) continue;
+      for (const [id, by] of agents) {
+        if (parties.includes(by) && !(removing?.canvas === one && removing.removed.has(id)))
+          count++;
+      }
     }
     for (const one of this.#creating) {
       if (parties.includes(one.by) && (canvas === undefined || one.canvas === canvas)) {
@@ -724,6 +742,7 @@ export class Documents {
         change.committing();
         const rev = await this.#commit(live, next, rows, change.revision, {
           creator: change.revision.by,
+          creating,
           ...(copies === undefined ? {} : { copies }),
           ...(change.within === undefined ? {} : { within: () => change.within?.() }),
           ...(removals === undefined ? {} : { removals }),
@@ -761,6 +780,7 @@ export class Documents {
           store.run('UPDATE document SET writing_hash = ? WHERE canvas_id = ?', hash, canvas);
         });
         live.kept = true;
+        this.#index(live);
         live.writingHash = hash;
         await writeWhole(file, text, { durable: true });
         // The chosen path and hashes are one savepoint, so neither can succeed alone.
@@ -852,6 +872,7 @@ export class Documents {
 
   /** The canvas's document as its rows keep it, if they do. */
   #read(canvas: CanvasId): Live | undefined {
+    if (!this.hasRows(canvas)) return undefined;
     const { store } = this.#deps;
     const head = store
       .prepare(
@@ -877,7 +898,8 @@ export class Documents {
       )
       .all(canvas)) {
       const id = String(node.id);
-      if (typeof node.created_by === 'string') creators.set(id, node.created_by as PartyId);
+      if (node.kind === 'agent' && typeof node.created_by === 'string')
+        creators.set(id, node.created_by as PartyId);
       const row = present({
         id,
         kind: node.kind,
@@ -1073,6 +1095,7 @@ export class Documents {
     {
       hashes,
       creator,
+      creating,
       copies,
       within,
       removals,
@@ -1080,6 +1103,7 @@ export class Documents {
     }: {
       hashes?: { saved: string; file: string };
       creator?: PartyId;
+      creating?: Creating;
       copies?: ReadonlyMap<string, string>;
       within?: () => Staged | undefined;
       /** What is decided of the trees it leaves with no agent (B9a C7): removed, as said. */
@@ -1136,6 +1160,9 @@ export class Documents {
     live.rev = rev;
     live.kept = true;
     live.creators = creators;
+    // Replace the admission reservation with the committed index before a listener can count it.
+    if (creating !== undefined) this.#creating.delete(creating);
+    this.#index(live);
     if (hashes !== undefined) {
       live.savedHash = hashes.saved;
       live.fileHash = hashes.file;
@@ -1156,6 +1183,14 @@ export class Documents {
     // The trees it forks, made now that their intents are on disk (in the background).
     this.#deps.workspaces?.made(made);
     return rev;
+  }
+
+  /** A durable document's ownership, unless retention in that commit already deleted its rows. */
+  #index(live: Live): void {
+    const canvas = live.document.id;
+    if (live.generation !== this.#deps.memory.generation(canvas)) return;
+    this.#owners.set(canvas, live.createdBy);
+    this.#agents.set(canvas, live.creators);
   }
 
   /**

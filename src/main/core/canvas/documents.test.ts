@@ -846,6 +846,18 @@ describe('the agents a party created', () => {
     expect(documents.created(ORCHESTRATOR)).toBe(1);
   });
 
+  it('counts an admission reservation exactly once when commit listeners run', async () => {
+    const canvas = newCanvasId();
+    await made(canvas, canvasOf(canvas));
+    const counts: number[] = [];
+    documents.subscribe(() => counts.push(documents.created(ORCHESTRATOR)));
+    await commit(canvas, withAgent(documents.live(canvas).document, 'new-agent'), {
+      op: 'canvas.addAgent',
+      by: ORCHESTRATOR,
+    });
+    expect(counts).toEqual([1]);
+  });
+
   it('subtracts only this party’s removals on this canvas, even when another canvas repeats an id', async () => {
     const [one, two] = [newCanvasId(), newCanvasId()];
     for (const canvas of [one, two]) {
@@ -931,6 +943,94 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
   const ORCHESTRATOR = 'outside:orchestrator' as const;
   const createdBy = (canvas: CanvasId) =>
     disk.prepare('SELECT created_by FROM document WHERE canvas_id = ?').get(canvas)?.created_by;
+
+  it('reads ownership, agent counts and edited state from memory after recovery', async () => {
+    const canvas = newCanvasId();
+    documents.create(canvas, ORCHESTRATOR);
+    await commit(canvas, canvasOf(canvas), { op: 'canvas.create', by: ORCHESTRATOR });
+    await documents.save(canvas, mintTrustedPath(path.join(profile, 'team.corral')));
+    await restart();
+    await documents.load(canvas);
+    const reads = vi.spyOn(store, 'prepare');
+    for (let i = 0; i < 10; i++) {
+      expect(documents.createdBy(ORCHESTRATOR)).toEqual([canvas]);
+      expect(documents.createdBy('outside:other')).toEqual([]);
+      expect(documents.created(ORCHESTRATOR)).toBe(2);
+      expect(documents.created(ORCHESTRATOR, canvas)).toBe(2);
+      expect(documents.hasRows(canvas)).toBe(true);
+      expect(documents.hasRows(newCanvasId())).toBe(false);
+      expect(documents.edited(canvas)).toBe(false);
+    }
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it('publishes canvas ownership only after its write is acknowledged, and forgets it atomically', async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let holding = false;
+    releaseWriter = () => {
+      release.resolve(undefined);
+    };
+    await restart({
+      ...SYSTEM_DEPS,
+      flush: async (fd) => {
+        if (holding) {
+          entered.resolve(undefined);
+          await release.promise;
+        }
+        await SYSTEM_DEPS.flush(fd);
+      },
+    });
+    const canvas = newCanvasId();
+    documents.create(canvas, ORCHESTRATOR);
+    holding = true;
+    const keeping = documents.keep(canvas);
+    try {
+      await entered.promise;
+      expect(documents.createdBy(ORCHESTRATOR)).toEqual([]);
+      expect(documents.hasRows(canvas)).toBe(false);
+    } finally {
+      release.resolve(undefined);
+      await keeping;
+    }
+    expect(documents.createdBy(ORCHESTRATOR)).toEqual([canvas]);
+    const unsubscribe = memory.whenForgotten(() => {
+      throw new Error('Not forgotten.');
+    });
+    try {
+      await expect(documents.forget(canvas)).rejects.toThrow('Not forgotten.');
+    } finally {
+      unsubscribe();
+    }
+    expect(documents.createdBy(ORCHESTRATOR)).toEqual([canvas]);
+    expect(documents.hasRows(canvas)).toBe(true);
+    await documents.forget(canvas);
+    expect(documents.createdBy(ORCHESTRATOR)).toEqual([]);
+    expect(documents.hasRows(canvas)).toBe(false);
+  });
+
+  it('does not index a draft removed by retention in the commit that kept it', async () => {
+    memory = new CanvasMemory(store, 0);
+    documents = documentsOf();
+    const canvas = newCanvasId();
+    documents.create(canvas, ORCHESTRATOR);
+    await documents.keep(canvas);
+    expect(documentRow(canvas)).toBeUndefined();
+    expect(documents.hasRows(canvas)).toBe(false);
+    expect(documents.createdBy(ORCHESTRATOR)).toEqual([]);
+  });
+
+  it('indexes an empty draft once saving makes its document durable, even if the file write fails', async () => {
+    const canvas = newCanvasId();
+    await documents.load(canvas);
+    expect(documents.hasRows(canvas)).toBe(false);
+    vi.spyOn(wholeFile, 'writeWhole').mockRejectedValue(new Error('File write failed.'));
+    await expect(
+      documents.save(canvas, mintTrustedPath(path.join(profile, 'empty.corral'))),
+    ).rejects.toThrow('File write failed.');
+    expect(documentRow(canvas)).toBeDefined();
+    expect(documents.hasRows(canvas)).toBe(true);
+  });
 
   it('says whether a canvas has edits not saved, loaded or not, as canvas memory asks', async () => {
     const [saved, edited, draft, empty] = [

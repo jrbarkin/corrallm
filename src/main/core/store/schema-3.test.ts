@@ -155,7 +155,7 @@ async function keepReference(): Promise<void> {
       body: 'Plan the work',
     });
     await messages.durable();
-    const reviews = new FileReviews({ store, newId: () => 'review' });
+    const reviews = new FileReviews({ store, memory, newId: () => 'review' });
     await store.writeBlocking(() => {
       journal.moveRead(CANVAS, 'outside:orchestrator', messages.seqOf(sent.id) ?? 0);
       reviews.raiseWithin(CANVAS, 'f'.repeat(64), SUMMARY);
@@ -271,7 +271,7 @@ async function readThrough(store: Store) {
     })),
     messages: messages.all().map(({ from, to, body, state }) => ({ from, to, body, state })),
     proposals: proposals.open(CANVAS).map(({ op, by }) => ({ op, by })),
-    review: new FileReviews({ store }).open(CANVAS)?.summary,
+    review: new FileReviews({ store, memory }).open(CANVAS)?.summary,
   };
 }
 

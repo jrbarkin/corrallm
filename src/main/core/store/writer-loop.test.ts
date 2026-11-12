@@ -9,7 +9,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
+import { CATALOG } from '../../sessions/adapters';
+import { Documents } from '../canvas/documents';
+import { FileReviews } from '../canvas/reviews';
 import { MessageStore, MessageTable } from '../delivery/messages';
+import { mintTrustedPath } from '../host';
 import { openStore } from './open';
 import { SYSTEM_DEPS } from './store';
 import type { Store } from './store';
@@ -52,6 +56,7 @@ let profile: string | undefined;
 let store: Store | undefined;
 const before = process.listeners('SIGUSR2');
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const listener of process.listeners('SIGUSR2'))
     if (!before.includes(listener)) process.removeListener('SIGUSR2', listener);
   vi.unstubAllEnvs();
@@ -60,6 +65,86 @@ afterEach(async () => {
   await store?.close();
   if (profile !== undefined) await rm(profile, { recursive: true, force: true });
 });
+
+it('keeps Needs, authentication and canvas metadata responsive during a slow WAL flush', async () => {
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-needs-loop-'));
+  let slow = false;
+  let flushing = false;
+  const started = Promise.withResolvers<undefined>();
+  const opened = await openStore(profile, {
+    ...SYSTEM_DEPS,
+    later: () => () => undefined,
+    flush: async (fd) => {
+      if (slow) {
+        flushing = true;
+        started.resolve(undefined);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      try {
+        await SYSTEM_DEPS.flush(fd);
+      } finally {
+        flushing = false;
+      }
+    },
+  });
+  store = opened.store;
+  if (store === undefined) throw new Error(opened.said.join(' '));
+  const database = store;
+  const canvas = '11111111-1111-4111-8111-111111111111' as CanvasId;
+  const memory = new CanvasMemory(database);
+  const reviews = new FileReviews({ store: database, memory });
+  const documents = new Documents({ store: database, memory, catalog: CATALOG });
+  documents.create(canvas, 'outside:load');
+  await documents.keep(canvas);
+  await memory.setFile(canvas, mintTrustedPath('/work/load.corral'));
+  await database.write(() => {
+    reviews.raiseWithin(canvas, 'f'.repeat(64), { file: 'load.corral', from: null });
+  });
+  let reads = 0;
+  const prepare = database.prepare.bind(database);
+  vi.spyOn(database, 'prepare').mockImplementation((sql) => {
+    // Model the Linux VFS wait seen in G2 when entering the reader during WAL fsync.
+    // Delaying fsync alone cannot force this kernel behaviour on every developer filesystem.
+    if (flushing && /^\s*SELECT/i.test(sql)) {
+      reads++;
+      if (reads === 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+    return prepare(sql);
+  });
+  const histogram = monitorEventLoopDelay({ resolution: 1 });
+  histogram.enable();
+  let samples = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    slow = true;
+    const writing = database.write(() => {
+      database.run('UPDATE document SET changed_at = changed_at + 1 WHERE canvas_id = ?', canvas);
+    });
+    await started.promise;
+    timer = setInterval(() => {
+      expect(reviews.items(canvas)).toHaveLength(1);
+      expect(documents.createdBy('outside:load')).toEqual([canvas]);
+      expect(documents.created('outside:load')).toBe(0);
+      expect(documents.hasRows(canvas)).toBe(true);
+      expect(memory.fileOf(canvas)).toBe('/work/load.corral');
+      samples++;
+    }, 5);
+    await writing;
+    clearInterval(timer);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const max = histogram.max / 1e6;
+    console.info(
+      `Needs/flush: loop max ${max.toFixed(2)} ms; ${String(reads)} disk reads; ${String(samples)} samples`,
+    );
+    expect(samples).toBeGreaterThan(0);
+    expect(max).toBeLessThan(100);
+    expect(reads).toBe(0);
+  } finally {
+    clearInterval(timer);
+    histogram.disable();
+  }
+}, 30_000);
 
 it('keeps writer work and its measurement responsive across warmup and slow result publication', async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-writer-loop-'));

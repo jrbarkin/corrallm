@@ -106,7 +106,7 @@ beforeEach(async () => {
   disk = onDisk(profile);
   memory = new CanvasMemory(store);
   workspaces = new WorkspaceStore({ store });
-  reviews = new FileReviews({ store });
+  reviews = new FileReviews({ store, memory });
   restoring = new Map();
   documents = new Documents({
     store,
