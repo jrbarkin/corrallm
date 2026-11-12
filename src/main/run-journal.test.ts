@@ -341,7 +341,9 @@ describe('RunJournal', () => {
     store.exec(`CREATE TRIGGER refuse BEFORE UPDATE ON run
       BEGIN SELECT RAISE(ABORT, 'The disk is full'); END`);
     await expect(runs.save(canvas, token, edited)).rejects.toThrow('The disk is full');
-    store.exec('DROP TRIGGER refuse');
+    await store.writeBlocking(() => {
+      store.exec('DROP TRIGGER refuse');
+    });
     await runs.save(canvas, token, { ...edited, updatedAt: 457 });
     expect(ran(canvas)).toMatchObject({
       state: expect.stringContaining('two') as string,
@@ -554,7 +556,9 @@ describe('RunJournal', () => {
     );
     await expect(runs.flush()).resolves.toBeUndefined();
     expect(await runs.get(canvas)).toMatchObject({ token, checkpoint });
-    store.exec('DROP TRIGGER refuse');
+    await store.writeBlocking(() => {
+      store.exec('DROP TRIGGER refuse');
+    });
     const next = { ...checkpoint, updatedAt: 789 };
     await runs.save(canvas, token, next);
     expect((await runs.get(canvas)).checkpoint).toEqual(next);
@@ -574,7 +578,7 @@ describe('RunJournal', () => {
     const runs = journal();
     await runs.opened(canvas);
     await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
-    store.prepare('UPDATE run SET state = ?').run(state);
+    store.tx(() => store.prepare('UPDATE run SET state = ?').run(state));
     const next = journal();
     const context = await next.get(canvas);
     expect(context).toMatchObject({ checkpoint: null, savedText: '{"saved":true}' });

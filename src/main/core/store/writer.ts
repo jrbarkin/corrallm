@@ -86,7 +86,7 @@ export type SyncRequest =
   | { op: 'commit' }
   | { op: 'rollback' }
   | { op: 'exec'; sql: string }
-  | { op: 'get' | 'all' | 'run'; sql: string; params: readonly WireValue[] };
+  | { op: 'get' | 'all' | 'run'; sql: string; params: readonly WireValue[]; readBigInts?: boolean };
 
 /** The answer to a blocking request. */
 export interface Sync {
@@ -96,6 +96,7 @@ export interface Sync {
   frames?: number;
   /** `release` and `rollbackTo`: `total_changes()` over the savepoint. */
   changes?: number;
+  lastInsertRowid?: number | bigint;
   row?: WireRow | undefined;
   rows?: WireRow[];
   error?: WireError;
@@ -122,11 +123,18 @@ const wire = (error) => {
 };
 const total = () => Number(connection.prepare('SELECT total_changes() AS count').get().count);
 const frames = () => connection.prepare('PRAGMA wal_checkpoint(NOOP)').get().log;
-const prepared = (sql) => {
-  let statement = statements.get(sql);
+const text = (step) => {
+  if (step.sql !== undefined) texts.set(step.id, step.sql);
+  const sql = texts.get(step.id);
+  if (sql === undefined) throw new Error('The writer received an unknown statement.');
+  return sql;
+};
+const prepared = (step) => {
+  const sql = text(step);
+  let statement = statements.get(step.id);
   if (statement === undefined) {
     statement = connection.prepare(sql);
-    statements.set(sql, statement);
+    statements.set(step.id, statement);
   }
   return statement;
 };
@@ -142,7 +150,7 @@ const rollbackQuietly = (sql) => {
 };
 
 const handlers = {
-  savepoint({ begin, steps }) {
+  savepoint({ begin, steps, deferRelease }) {
     let began;
     let before = 0;
     for (const step of steps) if (step.sql !== undefined) texts.set(step.id, step.sql);
@@ -156,7 +164,8 @@ const handlers = {
       const rows = [];
       for (const step of steps) {
         held();
-        const statement = prepared(texts.get(step.id));
+        const statement = prepared(step);
+        statement.setReadBigInts(false);
         if (step.rows) {
           rows.push(statement.all(...step.params));
         } else {
@@ -164,7 +173,7 @@ const handlers = {
           if (step.expect && Number(changes) !== step.expect.changes) throw new Error(step.expect.error);
         }
       }
-      connection.exec('RELEASE nested');
+      if (!deferRelease) connection.exec('RELEASE nested');
       return { frames: began, changes: total() - before, rows };
     } catch (error) {
       const kept = began !== undefined && connection.isTransaction ? began : undefined;
@@ -172,6 +181,15 @@ const handlers = {
       let changes = 0;
       try { changes = total() - before; } catch {}
       return { frames: kept, changes, error: wire(error), lost: !connection.isTransaction };
+    }
+  },
+  settle({ keep }) {
+    try {
+      connection.exec(keep ? 'RELEASE nested' : 'ROLLBACK TO nested; RELEASE nested');
+      return {};
+    } catch (error) {
+      rollbackQuietly('ROLLBACK TO nested; RELEASE nested');
+      return { error: wire(error), lost: !connection.isTransaction };
     }
   },
   commit() {
@@ -231,16 +249,24 @@ const handlers = {
           rollbackQuietly('ROLLBACK');
           break;
         case 'exec':
-          connection.exec(request.sql);
+          connection.exec(text(request.statement));
           break;
         case 'get':
-          reply.row = prepared(request.sql).get(...request.params);
+          { const statement = prepared(request.statement);
+            statement.setReadBigInts(request.readBigInts === true);
+            reply.row = statement.get(...request.statement.params); }
           break;
         case 'all':
-          reply.rows = prepared(request.sql).all(...request.params);
+          { const statement = prepared(request.statement);
+            statement.setReadBigInts(request.readBigInts === true);
+            reply.rows = statement.all(...request.statement.params); }
           break;
         case 'run':
-          reply.changes = Number(prepared(request.sql).run(...request.params).changes);
+          { const statement = prepared(request.statement);
+            statement.setReadBigInts(request.readBigInts === true);
+            const result = statement.run(...request.statement.params);
+            reply.changes = result.changes;
+            reply.lastInsertRowid = result.lastInsertRowid; }
           break;
       }
     } catch (error) {
@@ -285,7 +311,7 @@ port.on('message', (message) => {
 `;
 
 /** How its connection is set up: as the checkpointer's, and foreign keys on, no schema functions. */
-const WRITER_SET_UP = `${SYNC_SET_UP}; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF`;
+const WRITER_SET_UP = SYNC_SET_UP;
 
 /** How long a blocking statement may wait on a writer gone quiet, in one-second slices. */
 const QUIET_SLICES = 60;
@@ -363,17 +389,20 @@ export class Writer {
     const lose = (error: Error) => {
       writer.#lose(error);
     };
-    worker.on('error', (error) => {
+    worker.on('error', (error: Error) => {
       lose(new Error(`The store’s writer thread failed: ${error.message}`, { cause: error }));
     });
     worker.on('exit', (code) => {
       lose(new Error(`The store’s writer thread ended (exit ${String(code)}).`));
     });
-    started?.(worker);
     try {
+      started?.(worker);
       await ready;
     } catch (error) {
+      const stopped = ready.catch(() => undefined);
       await worker.terminate();
+      await stopped;
+      port1.close();
       throw error;
     }
     return writer;
@@ -381,7 +410,8 @@ export class Writer {
 
   /** Calls `listener` once if the thread ends or fails while the store is open (not as it closes). */
   onLost(listener: (error: Error) => void): void {
-    this.#listeners.push(listener);
+    if (this.#lost !== undefined) listener(this.#lost);
+    else this.#listeners.push(listener);
   }
 
   /** Why the thread ended, if it did. */
@@ -401,11 +431,14 @@ export class Writer {
     this.#lost = error;
     for (const asked of [...this.#asked.values()]) asked.reject(error);
     this.#asked.clear();
+    this.#port.unref();
     if (!this.#closing) for (const listener of this.#listeners) listener(error);
   }
 
   #ask(request: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (this.#lost !== undefined) return Promise.reject(this.#lost);
+    if (this.#asked.size > 0)
+      return Promise.reject(new Error('The store’s writer has a request outstanding.'));
     const id = this.#next++;
     return new Promise((resolve, reject) => {
       this.#asked.set(id, { resolve, reject });
@@ -415,7 +448,7 @@ export class Writer {
       } catch (error) {
         this.#asked.delete(id);
         if (this.#asked.size === 0) this.#port.unref();
-        reject(error as Error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
@@ -424,7 +457,11 @@ export class Writer {
    * Runs one write's statements in a savepoint of its own, beginning the transaction first if
    * `begin`. Rejects only if the thread is lost.
    */
-  async savepoint(begin: boolean, planned: readonly PlannedStep[]): Promise<Outcome> {
+  async savepoint(
+    begin: boolean,
+    planned: readonly PlannedStep[],
+    deferRelease = false,
+  ): Promise<Outcome> {
     // A SQL text goes with its first use only: known to the thread once its request is sent.
     const fresh = new Map<string, number>();
     const steps: WireStep[] = planned.map(({ sql, params, expect, rows }) => {
@@ -441,7 +478,7 @@ export class Writer {
     });
     let reply: Record<string, unknown>;
     try {
-      reply = await this.#ask({ op: 'savepoint', begin, steps });
+      reply = await this.#ask({ op: 'savepoint', begin, steps, deferRelease });
       for (const [sql, id] of fresh) this.#ids.set(sql, id);
     } catch (error) {
       // A value that can't cross the thread (a clone error) fails its write alone.
@@ -468,6 +505,17 @@ export class Writer {
       changes: outcome.changes,
       rows: outcome.rows ?? [],
     };
+  }
+
+  /** Completes a savepoint whose RETURNING callbacks had to run before it could be released. */
+  async settle(keep: boolean): Promise<{ error?: Error; lost?: boolean }> {
+    const reply = (await this.#ask({ op: 'settle', keep })) as {
+      error?: WireError;
+      lost?: boolean;
+    };
+    return reply.error === undefined
+      ? {}
+      : { error: errorOf(reply.error), lost: reply.lost === true };
   }
 
   /** Commits the transaction; rejects with why it couldn't (the writer rolled it back). */
@@ -508,9 +556,30 @@ export class Writer {
   sync(request: SyncRequest): Sync {
     if (this.#lost !== undefined) throw this.#lost;
     if (this.#asked.size > 0) throw new Error('The store’s writer has a request outstanding.');
+    if (Atomics.load(this.#flag, 0) === 2) {
+      const error = new Error('The store’s writer thread ended.');
+      this.#lose(error);
+      throw error;
+    }
     const id = this.#next++;
-    Atomics.store(this.#flag, 0, 0);
-    this.#port.postMessage({ id, op: 'sync', sync: true, request });
+    let fresh: { sql: string; id: number } | undefined;
+    let wired: unknown = request;
+    if ('sql' in request) {
+      const known = this.#ids.get(request.sql);
+      const statementId = known ?? this.#ids.size;
+      if (known === undefined) fresh = { sql: request.sql, id: statementId };
+      wired = {
+        op: request.op,
+        ...('readBigInts' in request ? { readBigInts: request.readBigInts } : {}),
+        statement: {
+          id: statementId,
+          ...(known === undefined ? { sql: request.sql } : {}),
+          params: 'params' in request ? request.params : [],
+        },
+      };
+    }
+    this.#port.postMessage({ id, op: 'sync', sync: true, request: wired });
+    if (fresh !== undefined) this.#ids.set(fresh.sql, fresh.id);
     for (let quiet = 0; Atomics.wait(this.#flag, 0, 0, 1000) === 'timed-out';) {
       if (++quiet >= QUIET_SLICES) {
         const error = new Error('The store’s writer thread went quiet for a minute.');
@@ -523,7 +592,8 @@ export class Writer {
       this.#lose(error);
       throw error;
     }
-    Atomics.store(this.#flag, 0, 0);
+    // Reset a reply marker only: a concurrent exit marker must survive for the next request.
+    Atomics.compareExchange(this.#flag, 0, 1, 0);
     const received = receiveMessageOnPort(this.#port);
     const reply = received?.message as (Sync & { id: number }) | undefined;
     if (reply?.id !== id) throw new Error('The store’s writer answered out of turn.');

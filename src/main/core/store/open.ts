@@ -3,7 +3,7 @@ import { closeSync, existsSync, openSync, rmSync } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-import { beginLog, JOURNAL_SIZE_LIMIT, SYNC_SET_UP } from './checkpointer';
+import { beginLog, SYNC_SET_UP } from './checkpointer';
 import { faults } from './faults';
 import { migrate, minReaderOf, SCHEMA, schemaOf, SEQUENCES } from './migrations';
 import { settleRestored } from './restored';
@@ -384,7 +384,6 @@ function setUp(connection: Connection): void {
   }
   // The pragmas every connection that writes shares: the writer's thread and the checkpointer's.
   connection.exec(SYNC_SET_UP);
-  connection.exec('PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF');
   migrate(connection);
 }
 

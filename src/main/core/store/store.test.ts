@@ -217,7 +217,9 @@ describe('the write lane', () => {
           .then(() => settled.push(i)),
       );
       try {
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await vi.waitFor(() => {
+          expect(flushes).toHaveLength(1);
+        });
         const first = Array.from({ length: rows === 4 ? 8 : 16 }, (_, i) => i);
         expect(ran).toEqual(first);
         expect(notes()).toEqual(first.flatMap(entries));
@@ -241,7 +243,9 @@ describe('the write lane', () => {
     });
     const second = store.writeBlocking(() => add('next'));
     try {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await vi.waitFor(() => {
+        expect(flushes).toHaveLength(1);
+      });
       expect(notes()).toEqual(Array.from({ length: 40 }, (_, i) => String(i)));
     } finally {
       const held = flushes;
@@ -901,7 +905,7 @@ describe('snapshots', () => {
     await store.writeBlocking(() => {
       for (let i = 0; i < 300; i++) add('x'.repeat(200));
     });
-    store.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    await store.checkpoint();
     await store.snapshot();
     // The disk damages pages of the open database (as a failing drive may), unnoticed by the core.
     const pages = (await stat(store.file)).size / 4096;
@@ -1216,6 +1220,15 @@ describe('planned writes', () => {
   });
 
   describe('within a blocking write, or a tx', () => {
+    it('rejects exec outside a write if its synchronous log flush fails', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      diskFault.sync = true;
+      expect(() => {
+        store.exec("INSERT INTO note VALUES ('not durable')");
+      }).toThrow(/could not be written to the drive/);
+      diskFault.sync = false;
+    });
+
     it('restores a synchronous transaction’s memory if its log flush fails', () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       let staged = 'before';

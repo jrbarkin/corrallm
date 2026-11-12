@@ -115,9 +115,11 @@ describe('a save of the core’s own', () => {
     // Cut after its first step (the hash of what it writes committed), before the file was
     // written; then after the file was written, before its last commit.
     for (const written of [false, true]) {
-      store
-        .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
-        .run(sha256(toFile(ours)), canvas);
+      store.tx(() =>
+        store
+          .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
+          .run(sha256(toFile(ours)), canvas),
+      );
       if (written) await writeFile(file, toFile(ours));
       await restart();
       await documents.review(canvas);
@@ -126,9 +128,11 @@ describe('a save of the core’s own', () => {
     }
     expect(documents.edited(canvas)).toBe(false);
     // And once it has gone on, from a check while the canvas is loaded.
-    store
-      .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
-      .run(sha256('a save that never wrote'), canvas);
+    store.tx(() =>
+      store
+        .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
+        .run(sha256('a save that never wrote'), canvas),
+    );
     await restart();
     await documents.load(canvas);
     expect(reviewRows(canvas)).toEqual([]);

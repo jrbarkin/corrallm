@@ -552,9 +552,13 @@ describe('a canvas’s document', () => {
     // As a save leaves it when the core stops after the file was written, before its last commit.
     const saving = async (written: boolean) => {
       await restart();
-      store
-        .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
-        .run(sha256(toFile(next)), canvas);
+      store.tx(() => {
+        store.run(
+          'UPDATE document SET writing_hash = ? WHERE canvas_id = ?',
+          sha256(toFile(next)),
+          canvas,
+        );
+      });
       await writeFile(file, written ? toFile(next) : toFile(canvasOf(canvas)));
       await restart();
       await documents.load(canvas);

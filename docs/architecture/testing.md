@@ -2,6 +2,8 @@
 
 [Architecture index](overview.md) · [Canonical instructions](../../AGENTS.md)
 
+The store-writer matrix is part of `pnpm test`: `main` uses the local production default, and `main-writer` runs the core/store/delivery suites and canvas-memory/run-journal fixtures with the optional thread. The writer project follows the ordinary projects, before the serial store-performance project, so their disk and scheduling contention do not decide its results. Run either with `pnpm exec vitest run --project main-writer src/main/core/store/`. Raw SQL setup uses `tx`, or a queued blocking write when it follows a rejected write; reads outside a write use the read-only connection. `StoreDeps.hold` gates planned statements with shared Int32s, and `writerStarted` permits deterministic worker-loss tests. No real agent CLI is involved.
+
 ## `e2e/`
 
 Playwright Electron tests (*.e2e.ts) and their global setup.

@@ -208,6 +208,7 @@ export class Store {
   readonly #deps: StoreDeps;
   /** Each statement prepared, by its SQL. */
   readonly #statements = new Map<string, Statement>();
+  readonly #facades = new Map<string, Statement>();
   /** The writes waiting for the lane's next commit, in order. */
   #queue: Queued[] = [];
   #scheduled = false;
@@ -248,6 +249,8 @@ export class Store {
   readonly #writer: Writer | undefined;
   /** The lane's commit going on (its writes planned and run one at a time), if one is. */
   #draining: Promise<void> | undefined;
+  /** The current transaction's cut-back point, including while its commit reply is in flight. */
+  #active: { frames: number; commit: number } | undefined;
   /** The checkpoint going on, if one is: the lane commits nothing meanwhile. */
   #checkpointing: Promise<void> | undefined;
 
@@ -284,10 +287,42 @@ export class Store {
    * or a `tx` (it sees the write), else on this connection.
    */
   #statement(sql: string): Statement {
-    if (this.#writer !== undefined && this.#current !== undefined) {
-      return throughWriter(this.#writer, sql);
-    }
-    return this.#prepare(sql);
+    const writer = this.#writer;
+    if (writer === undefined) return this.#prepare(sql);
+    if (this.#current === undefined) this.#prepare(sql);
+    const kept = this.#facades.get(sql);
+    if (kept !== undefined) return kept;
+    let readBigInts = false;
+    const inside = (): boolean => {
+      if (this.#failed !== undefined) throw this.#failed;
+      if (this.#current?.planned === true) throw new Error('A planned write reads no SQL.');
+      return this.#current !== undefined;
+    };
+    const reading = (): Statement => {
+      const statement = this.#prepare(sql);
+      statement.setReadBigInts(readBigInts);
+      return statement;
+    };
+    const statement = {
+      get: (...params: SqlValue[]) =>
+        inside()
+          ? writer.sync({ op: 'get', sql, params, readBigInts }).row
+          : reading().get(...params),
+      all: (...params: SqlValue[]) =>
+        inside()
+          ? (writer.sync({ op: 'all', sql, params, readBigInts }).rows ?? [])
+          : reading().all(...params),
+      run: (...params: SqlValue[]) => {
+        if (!inside()) return reading().run(...params);
+        const result = writer.sync({ op: 'run', sql, params, readBigInts });
+        return { changes: result.changes ?? 0, lastInsertRowid: result.lastInsertRowid ?? 0 };
+      },
+      setReadBigInts: (enabled: boolean) => {
+        readBigInts = enabled;
+      },
+    } as unknown as Statement;
+    this.#facades.set(sql, statement);
+    return statement;
   }
 
   #prepare(sql: string): Statement {
@@ -304,18 +339,14 @@ export class Store {
     if (this.#failed !== undefined) throw this.#failed;
     if (this.#current?.planned === true)
       throw new Error('A planned write runs no SQL but its own.');
-    if (this.#writer === undefined) {
-      this.#connection.exec(sql);
-    } else if (this.#current === undefined) {
-      // This connection only reads: outside a write it runs through the writer, on its own (as
-      // today's does, so PRAGMAs that can't be in a transaction work), never within the lane's.
-      if (this.#draining !== undefined || this.#inFlush.length > 0 || this.#unflushed.length > 0) {
-        throw new Error('exec cannot overlap the store’s write lane.');
-      }
-      this.#writer.sync({ op: 'exec', sql });
-    } else {
-      this.#writer.sync({ op: 'exec', sql });
+    if (this.#current === undefined) {
+      this.tx(() => {
+        this.exec(sql);
+      });
+      return;
     }
+    if (this.#writer === undefined) this.#connection.exec(sql);
+    else this.#writer.sync({ op: 'exec', sql });
   }
 
   /**
@@ -351,13 +382,22 @@ export class Store {
     if (this.#shut) throw closed();
     const frames = writer === undefined ? this.#frames() : this.#begin(writer);
     const commit = ++this.#commits;
-    const { value, context } = this.#transaction(run, true);
+    if (writer !== undefined) this.#active = { frames, commit };
+    let transaction: { value: T; context: WriteContext };
+    try {
+      transaction = this.#transaction(run, true);
+    } catch (error) {
+      this.#active = undefined;
+      throw error;
+    }
+    const { value, context } = transaction;
     try {
       fsyncSync(this.#logFile());
     } catch (error) {
       context.restore();
       throw this.#fail(error, { frames, commit });
     }
+    this.#active = undefined;
     this.#committed();
     return value;
   }
@@ -404,7 +444,7 @@ export class Store {
     };
     if (!outermost) writer.sync({ op: 'savepoint' });
     try {
-      const value = inside();
+      const value = synchronously(inside());
       writer.sync({ op: outermost ? 'commit' : 'release' });
       return value;
     } catch (error) {
@@ -619,7 +659,8 @@ export class Store {
       at,
       (file) => {
         if (this.#failed !== undefined) throw this.#failed;
-        this.#taken.push({ file, commits: this.#commits });
+        // A backup can see COMMIT before its reply reaches this thread.
+        this.#taken.push({ file, commits: Math.max(this.#commits, this.#active?.commit ?? 0) });
       },
       this.#checkpointer,
     )
@@ -659,12 +700,13 @@ export class Store {
       const busy = this.#draining ?? this.#flushing;
       if (busy !== undefined) await busy;
     }
-    // Failed closed, it took back what it hadn't flushed, and closed its connection then.
-    if (this.#forgetting !== undefined) {
-      await this.#forgetting;
-      return;
-    }
+    // Failure cleanup owns the connections once it starts, including across closing awaits.
+    const failedClose = (): Promise<void> | undefined => this.#forgetting;
+    let failure = failedClose();
+    if (failure !== undefined) return failure;
     await this.#snapshotting?.catch(() => undefined);
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     try {
       if (this.#writer === undefined)
         this.#connection.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
@@ -672,12 +714,18 @@ export class Store {
     } catch (error) {
       console.error('Could not checkpoint the core’s database as it closed:', error);
     }
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     try {
       await this.snapshot();
     } catch (error) {
       console.error('Could not take a snapshot of the core’s database as it closed:', error);
     }
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     await this.#checkpointer.close();
+    failure = failedClose();
+    if (failure !== undefined) return failure;
     this.#connection.close();
     // The writer closes last, so it checkpoints what is left and removes the log and its index.
     await this.#writer?.close();
@@ -718,7 +766,10 @@ export class Store {
       return;
     }
     if (this.#writer !== undefined) {
-      const draining = this.#drain(this.#writer, batch)
+      const writer = this.#writer;
+      // Publish the barrier before any plan can synchronously ask for a checkpoint.
+      const draining = Promise.resolve()
+        .then(() => this.#drain(writer, batch))
         .catch((error: unknown) => {
           console.error('The core’s write lane failed:', error);
           return [];
@@ -820,10 +871,16 @@ export class Store {
       open = false;
       ran = 0;
       changed = 0;
+      this.#active = undefined;
     };
     try {
-      for (current = pending.shift(); current !== undefined; current = pending.shift()) {
-        const write = current;
+      while (pending.length > 0) {
+        if (this.#failed !== undefined) throw this.#failed;
+        if (pending[0]?.followUp === undefined && (ran >= COMMIT_WRITES || changed >= COMMIT_ROWS))
+          break;
+        const write = pending.shift();
+        if (write === undefined) break;
+        current = write;
         ran++;
         const context = new WriteContext(write.planned ? 'planned' : 'blocking');
         write.context = context;
@@ -846,16 +903,19 @@ export class Store {
                 expect: step.expect,
                 rows: step.then === undefined ? undefined : true,
               })),
+              context.steps.some((step) => step.then !== undefined),
             ));
           if (outcome.frames !== undefined) {
             frames = framesOf(outcome.frames);
             open = true;
+            this.#active = { frames, commit: this.#commits + 1 };
           }
         } else {
           ({ outcome, value } = this.#blocking(writer, write, context, !open));
           if (outcome.frames !== undefined) {
             frames = framesOf(outcome.frames);
             open = true;
+            this.#active = { frames, commit: this.#commits + 1 };
           }
         }
         changed += outcome.changes;
@@ -863,13 +923,24 @@ export class Store {
           write.reject(outcome.error);
           if (outcome.lost) lose(outcome.error);
         } else {
+          let refused: { error: unknown } | undefined;
           try {
             deliver(context, outcome.rows);
           } catch (error) {
-            // Its savepoint is released already: the transaction cannot keep the rest of it.
-            await writer.rollback();
-            write.reject(error);
-            lose(error);
+            refused = { error };
+          }
+          if (write.planned && context.steps.some((step) => step.then !== undefined)) {
+            const settled = await writer.settle(refused === undefined);
+            if (settled.error !== undefined) refused = { error: settled.error };
+            if (refused !== undefined) {
+              write.reject(refused.error);
+              if (settled.lost === true) lose(refused.error);
+              current = undefined;
+              continue;
+            }
+          }
+          if (refused !== undefined) {
+            write.reject(refused.error);
             current = undefined;
             continue;
           }
@@ -878,13 +949,6 @@ export class Store {
           pending.unshift(...this.#followUps(write));
         }
         current = undefined;
-        if (
-          pending[0] !== undefined &&
-          pending[0].followUp === undefined &&
-          (ran >= COMMIT_WRITES || changed >= COMMIT_ROWS)
-        ) {
-          break;
-        }
       }
       if (!open) return pending;
       let committed: Error | undefined;
@@ -896,12 +960,13 @@ export class Store {
       }
       if (committed !== undefined) {
         for (const [lost] of [...done].reverse()) lost.reject(committed);
+        this.#active = undefined;
         return pending;
       }
       // The thread was lost as it committed: failed closed, and this commit with it.
       if (this.#failed !== undefined) throw this.#failed;
     } catch (error) {
-      const why = this.#failed ?? error;
+      const why = this.#failed ?? this.#fail(error);
       current?.reject(why);
       for (const [lost] of [...done].reverse()) lost.reject(why);
       for (const write of pending.splice(0)) write.reject(why);
@@ -917,6 +982,7 @@ export class Store {
       frames,
       commit: ++this.#commits,
     });
+    this.#active = undefined;
     this.#flushLog();
     this.#committed();
     return pending;
@@ -1030,9 +1096,11 @@ export class Store {
     const queued = this.#queue;
     this.#queue = [];
     // None to take back if the writer's thread was lost between commits.
-    const first = [...lost, ...(also === undefined ? [] : [also])].reduce<
-      { frames: number; commit: number } | undefined
-    >(
+    const first = [
+      ...lost,
+      ...(also === undefined ? [] : [also]),
+      ...(this.#active === undefined ? [] : [this.#active]),
+    ].reduce<{ frames: number; commit: number } | undefined>(
       (earliest, commit) =>
         earliest === undefined || commit.commit < earliest.commit ? commit : earliest,
       undefined,
@@ -1063,6 +1131,9 @@ export class Store {
     }
     await this.#snapshotting?.catch(() => undefined);
     await this.#checkpointer.close();
+    if (this.#writer !== undefined && this.#writer.lost === undefined) {
+      await this.#writer.rollback().catch(() => undefined);
+    }
     if (first !== undefined) {
       const unsafe = this.#taken
         .filter(({ commits }) => commits >= first.commit)
@@ -1215,22 +1286,6 @@ function framesOf(log: unknown): number {
     throw new Error('SQLite did not say how long the core’s database’s log is.');
   }
   return log;
-}
-
-/**
- * A statement of the writer's connection, for a blocking write's reads and writes: each call is
- * answered by the writer's thread, the loop waiting, and sees the write's earlier statements.
- */
-function throughWriter(writer: Writer, sql: string): Statement {
-  const statement = {
-    get: (...params: SqlValue[]) => writer.sync({ op: 'get', sql, params }).row,
-    all: (...params: SqlValue[]) => writer.sync({ op: 'all', sql, params }).rows ?? [],
-    run: (...params: SqlValue[]) => ({
-      changes: writer.sync({ op: 'run', sql, params }).changes ?? 0,
-      lastInsertRowid: 0,
-    }),
-  };
-  return statement as unknown as Statement;
 }
 
 function closed(): Error {

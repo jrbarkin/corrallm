@@ -82,32 +82,34 @@ describe('openStore', () => {
   it('sets SQLite up as the core needs it, and it reads back so', async () => {
     const { store } = await open();
     const darwin = process.platform === 'darwin' ? 1 : 0;
-    expect({
-      auto_vacuum: pragma(store, 'auto_vacuum'),
-      journal_mode: pragma(store, 'journal_mode'),
-      synchronous: pragma(store, 'synchronous'),
-      fullfsync: pragma(store, 'fullfsync'),
-      checkpoint_fullfsync: pragma(store, 'checkpoint_fullfsync'),
-      foreign_keys: pragma(store, 'foreign_keys'),
-      trusted_schema: pragma(store, 'trusted_schema'),
-      journal_size_limit: pragma(store, 'journal_size_limit'),
-      wal_autocheckpoint: pragma(store, 'wal_autocheckpoint'),
-      application_id: pragma(store, 'application_id'),
-      user_version: pragma(store, 'user_version'),
-    }).toEqual({
-      // INCREMENTAL
-      auto_vacuum: 2,
-      journal_mode: 'wal',
-      // NORMAL: the store flushes its log itself, after each commit, off the loop (store.ts)
-      synchronous: 1,
-      fullfsync: darwin,
-      checkpoint_fullfsync: darwin,
-      foreign_keys: 1,
-      trusted_schema: 0,
-      journal_size_limit: JOURNAL_SIZE_LIMIT,
-      wal_autocheckpoint: 0,
-      application_id: APPLICATION_ID,
-      user_version: SCHEMA,
+    await store.writeBlocking(() => {
+      expect({
+        auto_vacuum: pragma(store, 'auto_vacuum'),
+        journal_mode: pragma(store, 'journal_mode'),
+        synchronous: pragma(store, 'synchronous'),
+        fullfsync: pragma(store, 'fullfsync'),
+        checkpoint_fullfsync: pragma(store, 'checkpoint_fullfsync'),
+        foreign_keys: pragma(store, 'foreign_keys'),
+        trusted_schema: pragma(store, 'trusted_schema'),
+        journal_size_limit: pragma(store, 'journal_size_limit'),
+        wal_autocheckpoint: pragma(store, 'wal_autocheckpoint'),
+        application_id: pragma(store, 'application_id'),
+        user_version: pragma(store, 'user_version'),
+      }).toEqual({
+        // INCREMENTAL
+        auto_vacuum: 2,
+        journal_mode: 'wal',
+        // NORMAL: the store flushes its log itself, after each commit, off the loop (store.ts)
+        synchronous: 1,
+        fullfsync: darwin,
+        checkpoint_fullfsync: darwin,
+        foreign_keys: 1,
+        trusted_schema: 0,
+        journal_size_limit: JOURNAL_SIZE_LIMIT,
+        wal_autocheckpoint: 0,
+        application_id: APPLICATION_ID,
+        user_version: SCHEMA,
+      });
     });
   });
 
@@ -515,14 +517,18 @@ describe('a damaged database', () => {
 
       const { store } = await open(stoppedAt(Date.UTC(2026, 9, 19, 18)));
 
-      if (!snapshot) store.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(CANVAS);
-      const next = store
-        .prepare(
-          `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
+      if (!snapshot)
+        store.tx(() => store.prepare('INSERT INTO canvas (id, used_at) VALUES (?, 1)').run(CANVAS));
+      const next = store.tx(
+        () =>
+          store
+            .prepare(
+              `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
              sent_at)
            VALUES ('after', ?, 'you', 'agent:a', 'text', 'manual', 'Hello', 'pending', 1) RETURNING seq`,
-        )
-        .get(CANVAS)?.seq;
+            )
+            .get(CANVAS)?.seq,
+      );
       expect(next).toBeGreaterThan(noon + 303);
       expect(Number.isSafeInteger(next)).toBe(true);
       expect(store.prepare('SELECT typeof(seq) AS type FROM sqlite_sequence').all()).toEqual([

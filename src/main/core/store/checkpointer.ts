@@ -111,6 +111,8 @@ export const SYNC_SET_UP = [
     ? ['PRAGMA fullfsync = ON', 'PRAGMA checkpoint_fullfsync = ON']
     : []),
   'PRAGMA wal_autocheckpoint = 0',
+  'PRAGMA foreign_keys = ON',
+  'PRAGMA trusted_schema = OFF',
   `PRAGMA journal_size_limit = ${String(JOURNAL_SIZE_LIMIT)}`,
 ].join('; ');
 
