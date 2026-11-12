@@ -1,0 +1,151 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import type * as Fs from 'node:fs';
+import type * as FsPromises from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+import { afterEach, expect, it, vi } from 'vitest';
+
+import type { CanvasId } from '../../../shared/canvas';
+import { CanvasMemory } from '../../memory';
+import { MessageStore, MessageTable } from '../delivery/messages';
+import { openStore } from './open';
+import { SYSTEM_DEPS } from './store';
+import type { Store } from './store';
+
+const io = vi.hoisted((): { file: string; published: () => void } => ({
+  file: '',
+  published: () => undefined,
+}));
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof Fs>();
+  return {
+    ...fs,
+    writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+      if (args[0] === `${io.file}.part`)
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      fs.writeFileSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof fs.renameSync>) => {
+      fs.renameSync(...args);
+      if (args[1] === io.file) io.published();
+    },
+  };
+});
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof FsPromises>();
+  return {
+    ...fs,
+    writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
+      if (args[0] === `${io.file}.part`) await new Promise((resolve) => setTimeout(resolve, 500));
+      return fs.writeFile(...args);
+    },
+    rename: async (...args: Parameters<typeof fs.rename>) => {
+      await fs.rename(...args);
+      if (args[1] === io.file) io.published();
+    },
+  };
+});
+
+let profile: string | undefined;
+let store: Store | undefined;
+const before = process.listeners('SIGUSR2');
+afterEach(async () => {
+  for (const listener of process.listeners('SIGUSR2'))
+    if (!before.includes(listener)) process.removeListener('SIGUSR2', listener);
+  vi.unstubAllEnvs();
+  io.file = '';
+  io.published = () => undefined;
+  await store?.close();
+  if (profile !== undefined) await rm(profile, { recursive: true, force: true });
+});
+
+it('keeps writer work and its measurement responsive across warmup and slow result publication', async () => {
+  profile = await mkdtemp(path.join(tmpdir(), 'corrallm-writer-loop-'));
+  const opened = await openStore(
+    profile,
+    {
+      ...SYSTEM_DEPS,
+      later: () => () => undefined,
+      flush: async (fd) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        await SYSTEM_DEPS.flush(fd);
+      },
+    },
+    { writer: true },
+  );
+  store = opened.store;
+  if (store === undefined) throw new Error(opened.said.join(' '));
+  const database = store;
+  const canvas = '11111111-1111-4111-8111-111111111111' as CanvasId;
+  const memory = new CanvasMemory(database);
+  await memory.update(canvas, (remembered) => remembered);
+  const messages = new MessageStore(canvas, new MessageTable(database, memory), Date.now);
+  await messages.load();
+  database.exec('CREATE TABLE load_document (id INTEGER PRIMARY KEY, body TEXT) STRICT');
+  io.file = path.join(profile, 'loop.json');
+  vi.stubEnv('LOOP_DELAY_FILE', io.file);
+  vi.stubEnv('CORRALLM_LOAD_CPU_PROFILE', '');
+  vi.stubEnv('CORRALLM_G2_DIAG', '');
+  const probe = new URL('../../../../e2e/loop-delay.mjs', import.meta.url).href;
+  await import(probe);
+  // A slow warmup before the first mark must never become a measured core interval.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  process.emit('SIGUSR2');
+  const histogram = monitorEventLoopDelay({ resolution: 1 });
+  histogram.enable();
+  try {
+    const writing = (async () => {
+      for (let wave = 0; wave < 32; wave++) {
+        messages.add({
+          from: 'outside:load',
+          to: 'agent:worker',
+          kind: 'text',
+          origin: 'party',
+          body: 'x'.repeat(200 + wave * 97),
+          state: 'pending',
+        });
+        await Promise.all([
+          messages.durable(),
+          database.write(() => {
+            database.run(
+              'INSERT INTO load_document VALUES (?, ?)',
+              wave,
+              JSON.stringify({ paused: wave % 2 === 0 }),
+            );
+          }),
+        ]);
+        database.prepare('SELECT count(*) FROM message').get();
+        if (wave === 16) await database.checkpoint();
+      }
+    })();
+    for (let mark = 0; mark < 2; mark++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const published = Promise.withResolvers<undefined>();
+      io.published = () => {
+        published.resolve(undefined);
+      };
+      process.emit('SIGUSR2');
+      await published.promise;
+    }
+    await writing;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const measured = JSON.parse(await readFile(io.file, 'utf8')) as {
+      max: number;
+      spans: unknown[];
+    };
+    const max = histogram.max / 1e6;
+    console.info(
+      `Writer/probe: loop max ${max.toFixed(2)} ms; reported max ${measured.max.toFixed(2)} ms`,
+    );
+    expect(database.prepare('SELECT count(*) AS n FROM message').get()?.n).toBe(32);
+    expect(database.prepare('SELECT count(*) AS n FROM load_document').get()?.n).toBe(32);
+    expect(measured.spans).toHaveLength(2);
+    expect(max).toBeLessThan(100);
+    expect(measured.max).toBeLessThan(100);
+  } finally {
+    histogram.disable();
+  }
+}, 30_000);

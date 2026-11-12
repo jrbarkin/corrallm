@@ -7,7 +7,8 @@ import path from 'node:path';
  * in step with the files that name dist-cli, test-children or test-lifetime (global-setup.test.ts
  * fails when a test file outside it uses them).
  */
-export const CLI_BUILD_USERS = /^src\/main\/(?:cli\/|core\/entry\.test|e2e-build\.test|shipped-)/;
+export const CLI_BUILD_USERS =
+  /^src\/main\/(?:cli\/|core\/entry\.test|e2e-build\.test|g2-system\.test|shipped-)/;
 
 /**
  * Whether a run needs the build: always for a full run or for a filter that is not one exact test
