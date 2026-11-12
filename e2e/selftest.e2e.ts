@@ -18,23 +18,12 @@ import { agentElectronExecutable } from './agent-electron';
 
 const projectDir = path.dirname(import.meta.dirname);
 
-/** checkStore reports read-only only after main's write fails with SQLITE_READONLY. */
-const STORE_CHECKED = new RegExp(
-  [
-    '^SQLite \\d+\\.\\d+\\.\\d+, WAL, synchronous NORMAL',
-    process.platform === 'darwin' ? ', fullfsync' : '',
-    ', its other writer pragmas as set, a blocking write and a planned write through the writer flushed and read back by main, main’s connection read-only, a checkpoint off the loop, its log begun anew there, a snapshot read back',
-    process.platform === 'win32' ? '' : ', core\\.db, -wal and -shm 0600',
-    '$',
-  ].join(''),
-);
-
 /** Every check the self-test runs outside a packaged app, as each one reports passing. */
 const PASSED = [
   /node-pty ok \(pid \d+, exit 0\)/,
   /@xterm\/headless ok \(40×5\)/,
   /Agent SDK ok \(the fake claude said “ok”\)/,
-  STORE_CHECKED,
+  /SQLite \d+\.\d+\.\d+, WAL, synchronous NORMAL(?:, fullfsync)?, its other pragmas as set, a write through the lane flushed and read back, a checkpoint off the loop, its log begun anew there, a snapshot read back/,
   /loopback HTTP ok \(127\.0\.0\.1:\d+\)/,
   /spawn ok \(pid \d+, exit 0\)/,
 ];

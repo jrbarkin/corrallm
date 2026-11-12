@@ -11,7 +11,7 @@ import { Screen } from '../sessions/terminal/screen';
 import type { ProgramStatus } from '../sessions/terminal/status';
 import { JOURNAL_SIZE_LIMIT } from './store/checkpointer';
 import { APPLICATION_ID, openStore } from './store/open';
-import { connect, resultCode, SQLITE_READONLY } from './store/sqlite';
+import { connect } from './store/sqlite';
 import type { Store } from './store/store';
 
 /*
@@ -136,8 +136,8 @@ export async function checkTerminalScreen(): Promise<string> {
 
 /**
  * The core's database (store/), opened in a temporary profile as the core opens it, through Node's
- * SQLite: its writer's pragmas, blocking and planned writes (their log flushed on Node's thread
- * pool) read back by main's read-only connection, a checkpoint on its checkpointer's thread, which
+ * SQLite: each of its pragmas as set, a write through its lane (its log flushed on Node's thread
+ * pool) read back by another connection, a checkpoint on its checkpointer's worker thread, which
  * begins the log anew there (its header's salts change), a snapshot of it (SQLite's backup,
  * Node's one call on its thread pool) read back, and its file, log and index the user's alone
  * (not on Windows, whose files have no such modes).
@@ -186,35 +186,18 @@ export async function checkStore(store: Store): Promise<string> {
   if (typeof version !== 'string') throw new Error('SQLite did not report its version');
   const seen = [`SQLite ${version}`, 'WAL', 'synchronous NORMAL'];
   if (process.platform === 'darwin') seen.push('fullfsync');
-  seen.push('its other writer pragmas as set');
+  seen.push('its other pragmas as set');
   await store.writeBlocking(() => {
-    // Per-connection pragmas belong to the writer, not main's read-only connection.
+    // Per-connection pragmas belong to the writer, including when this connection only reads.
     for (const [name, value] of Object.entries(storePragmas())) {
       const read = pragma(name);
       if (read !== value) throw new Error(`${name} is ${String(read)}, not ${String(value)}`);
     }
     store.exec('CREATE TABLE selftest (value TEXT NOT NULL) STRICT');
-    store.prepare('INSERT INTO selftest (value) VALUES (?)').run('blocking');
+    store.prepare('INSERT INTO selftest (value) VALUES (?)').run('written');
   });
-  const fromMain = () => store.prepare('SELECT value FROM selftest').get()?.value;
-  if (fromMain() !== 'blocking') throw new Error('main’s reader did not see the blocking write');
-  await store.write(() => {
-    store.run('UPDATE selftest SET value = ?', 'written');
-  });
-  if (fromMain() !== 'written') throw new Error('main’s reader did not see the planned write');
-  seen.push(
-    'a blocking write and a planned write through the writer flushed and read back by main',
-  );
-  let readOnly = false;
-  try {
-    store.prepare('INSERT INTO selftest (value) VALUES (?)').run('outside');
-  } catch (error) {
-    if (resultCode(error) !== SQLITE_READONLY) throw error;
-    readOnly = true;
-  }
-  if (!readOnly) throw new Error('main’s connection accepted a write');
-  seen.push('main’s connection read-only');
   readBack(store.file, 'core.db, read by another connection,');
+  seen.push('a write through the lane flushed and read back');
   const header = async () => (await readFile(`${store.file}-wal`)).subarray(12, 24).toString('hex');
   const before = await header();
   await store.checkpoint();

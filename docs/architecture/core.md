@@ -4,7 +4,7 @@
 
 ## `src/main/`
 
-The canvas-file watcher reconciles open files after the journal's queued writes finish, coalescing any notifications received while it waits. A plan-time notification therefore cannot leave a closed canvas watched when SQLite executes on the writer thread.
+The canvas-file watcher reconciles open files after the journal's queued writes finish, coalescing any notifications received while it waits. A plan-time notification therefore cannot leave a closed canvas watched when SQLite executes on the optional writer thread.
 
 Main's entry is index.ts; security.ts, app-protocol.ts, csp.ts and url-policy.ts hold the security baseline. ipc.ts checks the preload's core:connect handshake; main owns windows and native UI, and hosts the core process.
 
