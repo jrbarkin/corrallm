@@ -92,7 +92,7 @@ export interface KeptMessage {
 export async function grantOutside(profile: string, canvas: CanvasId, name: string): Promise<void> {
   const store = await openTestStore(profile);
   try {
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare('INSERT INTO outside_grant (canvas_id, name, changed_at) VALUES (?, ?, ?)')
         .run(canvas, name, Date.now());
@@ -114,7 +114,7 @@ export async function keepMessages(
   const store = await openTestStore(profile);
   try {
     const table = new MessageTable(store, new CanvasMemory(store));
-    await store.write(() => {
+    await store.writeBlocking(() => {
       table.ensure(canvas);
       for (const { seq, message, origin, display, told, withdrawal } of messages) {
         table.keep({

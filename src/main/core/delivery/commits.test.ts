@@ -135,12 +135,15 @@ async function holdCommits(only?: 'messages'): Promise<() => void> {
       return held.promise.then(() => durable.call(this));
     });
   } else {
-    const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, 'write') as {
-      value: Store['write'];
-    };
-    vi.spyOn(Store.prototype, 'write').mockImplementation(function (this: Store, run, failed) {
-      return held.promise.then(() => write.call(this, run, failed));
-    });
+    // Every write the lane takes, planned or blocking.
+    for (const name of ['write', 'writeBlocking'] as const) {
+      const { value: write } = Object.getOwnPropertyDescriptor(Store.prototype, name) as {
+        value: Store['write'];
+      };
+      vi.spyOn(Store.prototype, name).mockImplementation(function (this: Store, run, failed) {
+        return held.promise.then(() => write.call(this, run, failed));
+      });
+    }
   }
   return () => {
     held.resolve(undefined);

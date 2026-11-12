@@ -133,7 +133,7 @@ describe('the message store', () => {
       const staged: Staged[] = [];
       pending.push(
         database
-          .write(() => {
+          .writeBlocking(() => {
             for (let i = 0; i < 6; i++) {
               messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
               staged.push(database.tx(() => messages.changes()));
@@ -169,7 +169,7 @@ describe('the message store', () => {
     const messages = await store();
     const message = messages.add(draft('outside:orchestrator', 'agent:builder'));
     let staged: Staged | undefined;
-    const failed = database.write(
+    const failed = database.writeBlocking(
       () => {
         staged = messages.changes();
         throw new Error('The containing write failed');
@@ -752,7 +752,7 @@ describe('the message store', () => {
     let fail = false;
     const marked: string[] = [];
     messages.writeWith(() => {
-      database.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/beside', CANVAS);
+      database.run('UPDATE canvas SET project = ? WHERE id = ?', '/beside', CANVAS);
       if (fail) throw new Error('The run is too large');
       return () => marked.push('beside');
     });
@@ -776,8 +776,8 @@ describe('the message store', () => {
     const before = messages.add(draft('you', 'agent:builder'));
     await messages.durable();
     let staged: ReturnType<MessageStore['stageWithin']> | undefined;
-    await database.write(() => {
-      database.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/beside', CANVAS);
+    await database.writeBlocking(() => {
+      database.run('UPDATE canvas SET project = ? WHERE id = ?', '/beside', CANVAS);
       staged = messages.stageWithin(draft('corrallm', 'outside:orchestrator', 'delivered'));
       // Kept in its place at once, so no reader reads past it; not yet told.
       expect(messages.seqOf(staged.message.id)).toBeGreaterThan(messages.seqOf(before.id) ?? 0);
@@ -795,7 +795,7 @@ describe('the message store', () => {
     const messages = await store();
     let staged: ReturnType<MessageStore['stageWithin']> | undefined;
     await expect(
-      database.write(() => {
+      database.writeBlocking(() => {
         staged = messages.stageWithin(draft('corrallm', 'outside:orchestrator', 'delivered'));
         throw new Error('The settlement failed');
       }),
@@ -921,7 +921,7 @@ describe('incremental pruning', () => {
             } else if (roll === 7) {
               const fails = random() < 0.5;
               const staged: ReturnType<MessageStore['stageWithin']>[] = [];
-              const writing = database.write(() => {
+              const writing = database.writeBlocking(() => {
                 for (let i = 0; i < 3; i++) {
                   const one = messages.stageWithin(
                     draft(pick(parties), pick(parties), pick(MESSAGE_STATES)),
@@ -1118,7 +1118,7 @@ describe('what delivery acts on', () => {
             const fails = random() < 0.5;
             let staged: ReturnType<MessageStore['stageWithin']> | undefined;
             await database
-              .write(() => {
+              .writeBlocking(() => {
                 staged = messages.stageWithin(draft(pick(parties), pick(agents), pick(states)));
                 if (fails) throw new Error('The settlement failed');
               })
@@ -1602,5 +1602,18 @@ describe('readdress (B24 C4)', () => {
       settled: { v: 1, type: 'expired' } as never,
     });
     expect(messages.readdress(via.id, 'you')).toBeUndefined();
+  });
+});
+
+describe('its writes', () => {
+  it('are planned writes, which read nothing, even for a canvas that has no row yet', async () => {
+    const blocking = vi.spyOn(database, 'writeBlocking');
+    const planned = vi.spyOn(database, 'write');
+    const messages = await store();
+    messages.add(draft('agent:builder', 'outside:orchestrator', 'delivered'));
+    await messages.durable();
+    expect(blocking).not.toHaveBeenCalled();
+    expect(planned).toHaveBeenCalled();
+    expect(rows()).toHaveLength(1);
   });
 });

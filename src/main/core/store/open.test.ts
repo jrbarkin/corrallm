@@ -134,7 +134,7 @@ describe('openStore', () => {
     const header = async () => (await readFile(`${file}-wal`)).subarray(12, 24).toString('hex');
     const begun = await header();
     expect(begun).toMatch(/^[0-9a-f]{24}$/);
-    await store.write(() =>
+    await store.writeBlocking(() =>
       store.prepare("INSERT INTO canvas (id, used_at) VALUES ('c', 1)").run(),
     );
     expect(await header()).toBe(begun);

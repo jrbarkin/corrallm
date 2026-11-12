@@ -271,7 +271,7 @@ describe('a commit', () => {
       callOf(YOU, {
         proposedBy: 'outside:orchestrator',
         within: () => {
-          store.prepare('UPDATE canvas SET project = ? WHERE id = ?').run('/settled', canvas);
+          store.run('UPDATE canvas SET project = ? WHERE id = ?', '/settled', canvas);
           said.push('staged');
           return { reveal: () => said.push('revealed'), undo: () => said.push('undone') };
         },

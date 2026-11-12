@@ -90,9 +90,8 @@ export class HandoffTable {
     { handoff, acceptedTurns, carry, carryWhy, exported, export: state }: HandoffRecord,
   ): void {
     this.#memory.ensure(canvas);
-    this.#store
-      .prepare(
-        `INSERT INTO handoff (canvas_id, agent_id, text, at, source, during, bytes, carry,
+    this.#store.run(
+      `INSERT INTO handoff (canvas_id, agent_id, text, at, source, during, bytes, carry,
            carry_why, exported, accepted_turns)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (canvas_id, agent_id) DO UPDATE SET
@@ -100,41 +99,39 @@ export class HandoffTable {
            during = excluded.during, bytes = excluded.bytes, carry = excluded.carry,
            carry_why = excluded.carry_why, exported = excluded.exported,
            accepted_turns = excluded.accepted_turns`,
-      )
-      .run(
-        canvas,
-        agent,
-        handoff?.text ?? null,
-        handoff?.at ?? null,
-        json(handoff?.source),
-        json(handoff?.during),
-        handoff?.bytes ?? null,
-        carry ?? null,
-        carryWhy ?? null,
-        exported === undefined && state === undefined
-          ? null
-          : JSON.stringify({ ...exported, ...(state === undefined ? {} : { state }) }),
-        JSON.stringify(acceptedTurns ?? []),
-      );
+      canvas,
+      agent,
+      handoff?.text ?? null,
+      handoff?.at ?? null,
+      json(handoff?.source),
+      json(handoff?.during),
+      handoff?.bytes ?? null,
+      carry ?? null,
+      carryWhy ?? null,
+      exported === undefined && state === undefined
+        ? null
+        : JSON.stringify({ ...exported, ...(state === undefined ? {} : { state }) }),
+      JSON.stringify(acceptedTurns ?? []),
+    );
   }
 
   /** Within a write: an agent's carry and why there was no handoff, its row made if it has none. */
   carry(canvas: CanvasId, agent: string, carry: string, why: CarryWhy | undefined): void {
     this.#memory.ensure(canvas);
-    this.#store
-      .prepare(
-        `INSERT INTO handoff (canvas_id, agent_id, carry, carry_why) VALUES (?, ?, ?, ?)
+    this.#store.run(
+      `INSERT INTO handoff (canvas_id, agent_id, carry, carry_why) VALUES (?, ?, ?, ?)
          ON CONFLICT (canvas_id, agent_id) DO UPDATE SET
            carry = excluded.carry, carry_why = excluded.carry_why`,
-      )
-      .run(canvas, agent, carry, why ?? null);
+      canvas,
+      agent,
+      carry,
+      why ?? null,
+    );
   }
 
   /** Within a write: deletes an agent's row. */
   forget(canvas: CanvasId, agent: string): void {
-    this.#store
-      .prepare('DELETE FROM handoff WHERE canvas_id = ? AND agent_id = ?')
-      .run(canvas, agent);
+    this.#store.run('DELETE FROM handoff WHERE canvas_id = ? AND agent_id = ?', canvas, agent);
   }
 }
 

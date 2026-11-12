@@ -335,11 +335,15 @@ describe.skipIf(process.platform === 'win32')('a crash at each phase, and the re
       ...job.intent,
       destination: { ...job.intent.destination, identity: before },
     });
-    await w.store.write(() => {
+    await w.store.writeBlocking(() => {
       w.store
         .prepare('UPDATE merge_job SET intent = ?, intent_hash = ? WHERE id = ?')
         .run(intent, createHash('sha256').update(intent).digest('hex'), job.id);
-      w.store.prepare('UPDATE repository SET identity = ? WHERE id = ?').run(before, w.record.id);
+    });
+    await w.workspaces.write((workspaces) => {
+      const kept = workspaces.repository(w.record.id);
+      if (kept === undefined) throw new Error('No repository.');
+      workspaces.reidentify(w.record.id, kept.identity, before);
     });
     // The next core rewrites its repository's record as it starts, comparing the inode once.
     expect(await upgradeIdentities(w.workspaces)).toBe(1);

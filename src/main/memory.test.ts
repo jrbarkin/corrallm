@@ -191,8 +191,8 @@ describe('CanvasMemory', () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const fault = new Error('The save’s final write failed');
       if (failure === 'after callback') {
-        const write = store.write.bind(store);
-        vi.spyOn(store, 'write').mockImplementationOnce((run) =>
+        const write = store.writeBlocking.bind(store);
+        vi.spyOn(store, 'writeBlocking').mockImplementationOnce((run) =>
           write(() => {
             run();
             throw fault;
@@ -241,8 +241,8 @@ describe('CanvasMemory', () => {
         store.exec(`CREATE TRIGGER refuse_delete BEFORE DELETE ON canvas
           BEGIN SELECT RAISE(ABORT, 'forget failed'); END`);
       } else {
-        const write = store.write.bind(store);
-        vi.spyOn(store, 'write').mockImplementationOnce((run) =>
+        const write = store.writeBlocking.bind(store);
+        vi.spyOn(store, 'writeBlocking').mockImplementationOnce((run) =>
           write(() => {
             run();
             throw new Error('forget failed');
@@ -416,7 +416,7 @@ describe('CanvasMemory', () => {
     // TEAM is open (a window shows it, or the core holds it); OTHER has edits not saved.
     const memory = new CanvasMemory(store, 1, (canvas) => canvas === OTHER);
     await memory.setFile(TEAM, at('/1.corral'));
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store.prepare('INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, 1)').run(TEAM);
     });
     await memory.setFile(OTHER, at('/2.corral'));
@@ -431,11 +431,11 @@ describe('CanvasMemory', () => {
     // Drafts too: one with edits not saved is kept, however many come after it.
     const DRAFT = '55555555-5555-4555-8555-555555555555' as CanvasId;
     const drafts = new CanvasMemory(store, 1, (canvas) => canvas === DRAFT || canvas === OTHER);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       drafts.ensure(DRAFT);
     });
     for (const id of ['66666666-6666-4666-8666-666666666666', THREAD] as CanvasId[]) {
-      await store.write(() => {
+      await store.writeBlocking(() => {
         drafts.ensure(id);
       });
     }
@@ -475,7 +475,7 @@ describe('CanvasMemory', () => {
 
   /** Gives `canvas` a workspace record in `state`, as the core keeps one for its agents' work. */
   async function ownWorkspace(canvas: CanvasId, id: string, state: string): Promise<void> {
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare(
           `INSERT INTO repository (id, picked_root, real_root, common_dir, identity, root_kind,
@@ -512,7 +512,7 @@ describe('CanvasMemory', () => {
     }));
     for (const [i, state] of states.entries()) {
       await ownWorkspace(TEAM, `w${String(i)}`, state);
-      await store.write(() => {
+      await store.writeBlocking(() => {
         if (i > 0) store.prepare('DELETE FROM worktree WHERE id = ?').run(`w${String(i - 1)}`);
       });
       // Used least recently: kept all the same.
@@ -529,12 +529,12 @@ describe('CanvasMemory', () => {
     }
     // A draft too, among the drafts used least recently.
     const DRAFT = '55555555-5555-4555-8555-555555555555' as CanvasId;
-    await store.write(() => {
+    await store.writeBlocking(() => {
       memory.ensure(DRAFT);
     });
     await ownWorkspace(DRAFT, 'draft', 'ready');
     for (const id of ['66666666-6666-4666-8666-666666666666', THIRD] as CanvasId[]) {
-      await store.write(() => {
+      await store.writeBlocking(() => {
         memory.ensure(id);
       });
     }
@@ -542,7 +542,7 @@ describe('CanvasMemory', () => {
     await reopen();
     // Once its last workspace record is gone, it is forgotten as any other.
     const again = new CanvasMemory(store, 1);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store.prepare('DELETE FROM worktree').run();
     });
     await again.setFile(THIRD, at('/3.corral'));
@@ -556,7 +556,7 @@ describe('CanvasMemory', () => {
     await memory.setFile(TEAM, at('/1.corral'));
     await memory.setFile(OTHER, at('/2.corral'));
     // A draft's run, journaled: its canvas has a row now, and nothing else kept.
-    await store.write(() => {
+    await store.writeBlocking(() => {
       memory.ensure(THIRD);
     });
     expect(reader.prepare('SELECT id FROM canvas WHERE file IS NULL').all()).toEqual([
@@ -566,7 +566,7 @@ describe('CanvasMemory', () => {
     expect((await memory.get(TEAM)).file).toBe('/1.corral');
     expect((await memory.get(OTHER)).file).toBe('/2.corral');
     // A canvas that has a row keeps all it had.
-    await store.write(() => {
+    await store.writeBlocking(() => {
       memory.ensure(OTHER);
     });
     expect((await memory.get(OTHER)).file).toBe('/2.corral');
@@ -576,10 +576,143 @@ describe('CanvasMemory', () => {
     const why = 'The core’s database could not be opened (disk I/O error).';
     const memory = new CanvasMemory(unopened(why));
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(() => memory.keeps(TEAM)).toThrow(why);
     await expect(memory.get(TEAM)).rejects.toThrow(why);
     await expect(memory.canvasWithFile('/work/team.corral')).rejects.toThrow(why);
     await memory.setFile(TEAM, at('/work/team.corral'));
     expect(logged).toHaveBeenCalledOnce();
     await expect(memory.flush()).rejects.toThrow(why);
+  });
+});
+
+describe('ensure, within a planned write', () => {
+  it('lets its listeners read canvas membership within the plan', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const memory = new CanvasMemory(store);
+    const seen: boolean[] = [];
+    memory.subscribe(() => {
+      seen.push(memory.keeps(TEAM));
+    });
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(seen).toEqual([true]);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it('can ensure an absent canvas after its forget was rolled back with the containing commit', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const memory = new CanvasMemory(store);
+    store.exec(`CREATE TABLE deferred_canvas (
+      canvas_id TEXT REFERENCES canvas(id) DEFERRABLE INITIALLY DEFERRED
+    )`);
+    const forgetting = memory.forget(TEAM);
+    const invalid = store.write(() => {
+      store.run('INSERT INTO deferred_canvas VALUES (?)', OTHER);
+    });
+    await Promise.all([
+      expect(forgetting).rejects.toThrow(/FOREIGN KEY/),
+      expect(invalid).rejects.toThrow(/FOREIGN KEY/),
+    ]);
+    expect(memory.generation(TEAM)).toBe(0);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(reader.prepare('SELECT id FROM canvas WHERE id = ?').get(TEAM)).toEqual({ id: TEAM });
+  });
+
+  const rowsOf = () => reader.prepare('SELECT id FROM canvas ORDER BY used_at').all();
+
+  it('gives no statement for a canvas it keeps, and a row for one it does not', async () => {
+    const memory = new CanvasMemory(store);
+    const run = vi.spyOn(store, 'run');
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(rowsOf()).toEqual([{ id: TEAM }]);
+    run.mockClear();
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).not.toHaveBeenCalled();
+    // Kept from the database too, when it is made.
+    const again = new CanvasMemory(store);
+    await store.write(() => {
+      again.ensure(TEAM);
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('gives the canvas the use after every other’s, whatever the clock says', async () => {
+    const memory = new CanvasMemory(store);
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    vi.spyOn(Date, 'now').mockReturnValue(10);
+    await store.write(() => {
+      memory.ensure(OTHER);
+    });
+    expect(reader.prepare('SELECT id FROM canvas ORDER BY used_at DESC').all()).toEqual([
+      { id: OTHER },
+      { id: TEAM },
+    ]);
+  });
+
+  it('forgets the drafts used least recently in the same commit', async () => {
+    const memory = new CanvasMemory(store, 1);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    await store.write(() => {
+      memory.ensure(OTHER);
+    });
+    // On disk once the second write resolves: its commit held the forgetting too.
+    expect(rowsOf()).toEqual([{ id: OTHER }]);
+    // And the canvas forgotten is a new one again.
+    const run = vi.spyOn(store, 'run');
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).toHaveBeenCalled();
+    expect(rowsOf()).toEqual([{ id: TEAM }]);
+  });
+
+  it('forgets nothing a failed write made', async () => {
+    const memory = new CanvasMemory(store);
+    await expect(
+      store.write(() => {
+        memory.ensure(TEAM);
+        throw new Error('The write failed');
+      }),
+    ).rejects.toThrow('The write failed');
+    expect(rowsOf()).toEqual([]);
+    const run = vi.spyOn(store, 'run');
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(rowsOf()).toEqual([{ id: TEAM }]);
+  });
+
+  it('moves a canvas’s generation each time it forgets the canvas’s row', async () => {
+    const memory = new CanvasMemory(store);
+    await store.write(() => {
+      memory.ensure(TEAM);
+    });
+    expect(memory.generation(TEAM)).toBe(0);
+    await expect(memory.forget(TEAM)).resolves.toBe(true);
+    expect(memory.generation(TEAM)).toBe(1);
+    expect(memory.generation(OTHER)).toBe(0);
+    // Forgotten by use, too.
+    const small = new CanvasMemory(store, 1);
+    await store.write(() => {
+      small.ensure(TEAM);
+    });
+    await store.write(() => {
+      small.ensure(OTHER);
+    });
+    expect(small.generation(TEAM)).toBe(1);
   });
 });

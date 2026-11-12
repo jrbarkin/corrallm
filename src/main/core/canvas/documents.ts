@@ -261,6 +261,11 @@ interface Live extends LiveDocument {
   fileHash: string | undefined;
   /** Of the text a save is writing, until its file is written. */
   writingHash: string | undefined;
+  /**
+   * The generation of its canvas's row (canvas memory's) its document's rows were written under:
+   * none while it has no rows, and behind it once memory deleted the canvas's row, rows and all.
+   */
+  generation: number | undefined;
 }
 
 export class Documents {
@@ -719,7 +724,6 @@ export class Documents {
         change.committing();
         const rev = await this.#commit(live, next, rows, change.revision, {
           creator: change.revision.by,
-          creating,
           ...(copies === undefined ? {} : { copies }),
           ...(change.within === undefined ? {} : { within: () => change.within?.() }),
           ...(removals === undefined ? {} : { removals }),
@@ -754,9 +758,7 @@ export class Documents {
         const { text, hash } = this.#text(live.document);
         await store.write(() => {
           this.#ensure(live, 'you');
-          store
-            .prepare('UPDATE document SET writing_hash = ? WHERE canvas_id = ?')
-            .run(hash, canvas);
+          store.run('UPDATE document SET writing_hash = ? WHERE canvas_id = ?', hash, canvas);
         });
         live.kept = true;
         live.writingHash = hash;
@@ -764,12 +766,13 @@ export class Documents {
         // The chosen path and hashes are one savepoint, so neither can succeed alone.
         let told: Told | undefined;
         await memory.setFile(canvas, file, () => {
-          store
-            .prepare(
-              `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL,
+          store.run(
+            `UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL,
                  file_generation = file_generation + 1 WHERE canvas_id = ?`,
-            )
-            .run(hash, hash, canvas);
+            hash,
+            hash,
+            canvas,
+          );
           // The file is corrallm's now: a review of the one it had (Save As) is moot.
           told = reviews?.supersedeWithin(canvas);
         });
@@ -937,6 +940,7 @@ export class Documents {
       savedHash: text(head.saved_hash),
       fileHash: text(head.file_hash),
       writingHash: text(head.writing_hash),
+      generation: this.#deps.memory.generation(canvas),
     };
   }
 
@@ -950,14 +954,13 @@ export class Documents {
     const { store } = this.#deps;
     await store.write(() => {
       if (written) {
-        store
-          .prepare(
-            `UPDATE document SET saved_hash = writing_hash, file_hash = writing_hash,
+        store.run(
+          `UPDATE document SET saved_hash = writing_hash, file_hash = writing_hash,
                writing_hash = NULL, file_generation = file_generation + 1 WHERE canvas_id = ?`,
-          )
-          .run(canvas);
+          canvas,
+        );
       } else {
-        store.prepare('UPDATE document SET writing_hash = NULL WHERE canvas_id = ?').run(canvas);
+        store.run('UPDATE document SET writing_hash = NULL WHERE canvas_id = ?', canvas);
       }
     });
     if (written) {
@@ -1013,9 +1016,12 @@ export class Documents {
         // Written another way: nothing to review, and these bytes are the file's from now on.
         const saved = text === this.#text(live.document).hash ? text : live.savedHash;
         const told = await this.#writeAlone(() => {
-          store
-            .prepare('UPDATE document SET file_hash = ?, saved_hash = ? WHERE canvas_id = ?')
-            .run(hash, saved ?? null, canvas);
+          store.run(
+            'UPDATE document SET file_hash = ?, saved_hash = ? WHERE canvas_id = ?',
+            hash,
+            saved ?? null,
+            canvas,
+          );
           return reviews.supersedeWithin(canvas);
         });
         live.fileHash = hash;
@@ -1053,7 +1059,7 @@ export class Documents {
    * Commits `next` over `live`, by what it changes of it (`change`): in one write, at the next
    * revision; `live` is `next` once it is on disk. With `hashes`, its text's and its file's as read
    * from it; with `creator`, the party that created the agents it makes (none: they are read from
-   * a file), whose count `creating` holds until their rows do; with `within`, what else its write
+   * a file), whose count `change` holds, as `creating`, until its write has settled (a reader sees its rows only once they are committed); with `within`, what else its write
    * holds (told once it is on disk, after those who hear commits); the workspaces' records of it,
    * whatever made it (`copies`: the new agents copied from another; `forks`: the bases its
    * preflight read for the trees it forks, whose jobs run once it is on disk). Throws CommitFailed,
@@ -1067,7 +1073,6 @@ export class Documents {
     {
       hashes,
       creator,
-      creating,
       copies,
       within,
       removals,
@@ -1075,7 +1080,6 @@ export class Documents {
     }: {
       hashes?: { saved: string; file: string };
       creator?: PartyId;
-      creating?: Creating;
       copies?: ReadonlyMap<string, string>;
       within?: () => Staged | undefined;
       /** What is decided of the trees it leaves with no agent (B9a C7): removed, as said. */
@@ -1094,14 +1098,13 @@ export class Documents {
     try {
       await this.#deps.store.write(() => {
         this.#write(live, { rows, changed, renumbered, rev, at, revision, creators });
-        // Its rows hold them now: counted there.
-        if (creating !== undefined) this.#creating.delete(creating);
         if (hashes !== undefined) {
-          this.#deps.store
-            .prepare(
-              'UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL WHERE canvas_id = ?',
-            )
-            .run(hashes.saved, hashes.file, next.id);
+          this.#deps.store.run(
+            'UPDATE document SET saved_hash = ?, file_hash = ?, writing_hash = NULL WHERE canvas_id = ?',
+            hashes.saved,
+            hashes.file,
+            next.id,
+          );
         }
         // Who works where, in the same write (B9a Design §3): on disk with the document, or neither.
         made = this.#deps.workspaces?.within(
@@ -1178,19 +1181,27 @@ export class Documents {
     const { rows, rev, at, revision, creators } = change;
     const by = revision.by;
     this.#ensure(live, by);
-    store
-      .prepare(
-        `INSERT INTO document (canvas_id, rev, arrange, by_party, changed_at) VALUES (?, ?, ?, ?, ?)
+    store.run(
+      `INSERT INTO document (canvas_id, rev, arrange, by_party, changed_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (canvas_id) DO UPDATE SET rev = excluded.rev, arrange = excluded.arrange,
            by_party = excluded.by_party, changed_at = excluded.changed_at`,
-      )
-      .run(canvas, rev, (rows[META] as MetaRow).arrange ? 1 : 0, by, at);
-    store
-      .prepare(
-        `INSERT INTO revision (canvas_id, rev, op, by_party, proposed_by, request, at)
+      canvas,
+      rev,
+      (rows[META] as MetaRow).arrange ? 1 : 0,
+      by,
+      at,
+    );
+    store.run(
+      `INSERT INTO revision (canvas_id, rev, op, by_party, proposed_by, request, at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(canvas, rev, revision.op, by, revision.proposedBy ?? null, revision.request ?? null, at);
+      canvas,
+      rev,
+      revision.op,
+      by,
+      revision.proposedBy ?? null,
+      revision.request ?? null,
+      at,
+    );
     const changed = new Set(change.changed);
     const renumbered = new Set(change.renumbered);
     for (const [key, row] of Object.entries(rows)) {
@@ -1201,14 +1212,12 @@ export class Documents {
       const row = live.rows[key];
       if (!Object.hasOwn(rows, key) && row !== undefined) this.#remove(canvas, key, row);
     }
-    const record = store.prepare(
-      `INSERT INTO change (canvas_id, rev, entity, rev_before, before_data, after_data)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    );
     for (const key of change.changed) {
       const before = live.rows[key];
       const after = rows[key];
-      record.run(
+      store.run(
+        `INSERT INTO change (canvas_id, rev, entity, rev_before, before_data, after_data)
+       VALUES (?, ?, ?, ?, ?, ?)`,
         canvas,
         rev,
         key,
@@ -1219,9 +1228,7 @@ export class Documents {
     }
     const { kept, every } = this.#deps.trim ?? { kept: REVISIONS_KEPT, every: TRIM_EVERY };
     if (rev % every === 0) {
-      store
-        .prepare('DELETE FROM revision WHERE canvas_id = ? AND rev <= ?')
-        .run(canvas, rev - kept);
+      store.run('DELETE FROM revision WHERE canvas_id = ? AND rev <= ?', canvas, rev - kept);
     }
   }
 
@@ -1243,9 +1250,8 @@ export class Documents {
         return;
       case 'node': {
         const node = row as NodeRow;
-        store
-          .prepare(
-            `INSERT INTO node (canvas_id, id, kind, parent_id, place, label, x, y, color, adapter,
+        store.run(
+          `INSERT INTO node (canvas_id, id, kind, parent_id, place, label, x, y, color, adapter,
                connection, settings, fallback, handoff, role, created_by, rev, by_party)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (canvas_id, id) DO UPDATE SET kind = excluded.kind,
@@ -1255,73 +1261,65 @@ export class Documents {
                fallback = excluded.fallback, handoff = excluded.handoff,
                role = excluded.role, created_by = excluded.created_by, rev = excluded.rev,
                by_party = excluded.by_party`,
-          )
-          .run(
-            canvas,
-            node.id,
-            node.kind,
-            node.parent ?? null,
-            node.place,
-            node.label,
-            node.x,
-            node.y,
-            node.color ?? null,
-            node.adapter ?? null,
-            node.connection ?? null,
-            node.settings === undefined ? null : JSON.stringify(node.settings),
-            node.fallback === undefined ? null : JSON.stringify(node.fallback),
-            node.handoff === undefined ? null : JSON.stringify(node.handoff),
-            node.role ?? null,
-            creators.get(node.id) ?? null,
-            rev,
-            by,
-          );
+          canvas,
+          node.id,
+          node.kind,
+          node.parent ?? null,
+          node.place,
+          node.label,
+          node.x,
+          node.y,
+          node.color ?? null,
+          node.adapter ?? null,
+          node.connection ?? null,
+          node.settings === undefined ? null : JSON.stringify(node.settings),
+          node.fallback === undefined ? null : JSON.stringify(node.fallback),
+          node.handoff === undefined ? null : JSON.stringify(node.handoff),
+          node.role ?? null,
+          creators.get(node.id) ?? null,
+          rev,
+          by,
+        );
         return;
       }
       case 'link': {
         const link = row as LinkRow;
-        store
-          .prepare(
-            `INSERT INTO link (canvas_id, a, b, source, dots, place, rev, by_party)
+        store.run(
+          `INSERT INTO link (canvas_id, a, b, source, dots, place, rev, by_party)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (canvas_id, a, b) DO UPDATE SET source = excluded.source,
                dots = excluded.dots, place = excluded.place, rev = excluded.rev,
                by_party = excluded.by_party`,
-          )
-          .run(
-            canvas,
-            link.a,
-            link.b,
-            link.source,
-            link.dots === undefined ? null : JSON.stringify(link.dots),
-            link.place,
-            rev,
-            by,
-          );
+          canvas,
+          link.a,
+          link.b,
+          link.source,
+          link.dots === undefined ? null : JSON.stringify(link.dots),
+          link.place,
+          rev,
+          by,
+        );
         return;
       }
       case 'item': {
         const item = row as ItemRow;
-        store
-          .prepare(
-            `INSERT INTO queue_item (canvas_id, agent_id, id, container, place, kind, body, rev,
+        store.run(
+          `INSERT INTO queue_item (canvas_id, agent_id, id, container, place, kind, body, rev,
                by_party)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (canvas_id, agent_id, id) DO UPDATE SET container = excluded.container,
                place = excluded.place, kind = excluded.kind, body = excluded.body,
                rev = excluded.rev, by_party = excluded.by_party`,
-          )
-          .run(
-            canvas,
-            item.agent,
-            item.id,
-            item.container ?? null,
-            item.place,
-            item.kind,
-            JSON.stringify(item.body),
-            rev,
-            by,
-          );
+          canvas,
+          item.agent,
+          item.id,
+          item.container ?? null,
+          item.place,
+          item.kind,
+          JSON.stringify(item.body),
+          rev,
+          by,
+        );
       }
     }
   }
@@ -1332,19 +1330,25 @@ export class Documents {
     const entity = entityOf(key);
     if (entity === 'node') {
       const { id, place } = row as NodeRow;
-      store
-        .prepare('UPDATE node SET place = ? WHERE canvas_id = ? AND id = ?')
-        .run(place, canvas, id);
+      store.run('UPDATE node SET place = ? WHERE canvas_id = ? AND id = ?', place, canvas, id);
     } else if (entity === 'link') {
       const { a, b, place } = row as LinkRow;
-      store
-        .prepare('UPDATE link SET place = ? WHERE canvas_id = ? AND a = ? AND b = ?')
-        .run(place, canvas, a, b);
+      store.run(
+        'UPDATE link SET place = ? WHERE canvas_id = ? AND a = ? AND b = ?',
+        place,
+        canvas,
+        a,
+        b,
+      );
     } else if (entity === 'item') {
       const { agent, id, place } = row as ItemRow;
-      store
-        .prepare('UPDATE queue_item SET place = ? WHERE canvas_id = ? AND agent_id = ? AND id = ?')
-        .run(place, canvas, agent, id);
+      store.run(
+        'UPDATE queue_item SET place = ? WHERE canvas_id = ? AND agent_id = ? AND id = ?',
+        place,
+        canvas,
+        agent,
+        id,
+      );
     }
   }
 
@@ -1353,17 +1357,18 @@ export class Documents {
     const { store } = this.#deps;
     const entity = entityOf(key);
     if (entity === 'node') {
-      store
-        .prepare('DELETE FROM node WHERE canvas_id = ? AND id = ?')
-        .run(canvas, (row as NodeRow).id);
+      store.run('DELETE FROM node WHERE canvas_id = ? AND id = ?', canvas, (row as NodeRow).id);
     } else if (entity === 'link') {
       const { a, b } = row as LinkRow;
-      store.prepare('DELETE FROM link WHERE canvas_id = ? AND a = ? AND b = ?').run(canvas, a, b);
+      store.run('DELETE FROM link WHERE canvas_id = ? AND a = ? AND b = ?', canvas, a, b);
     } else if (entity === 'item') {
       const { agent, id } = row as ItemRow;
-      store
-        .prepare('DELETE FROM queue_item WHERE canvas_id = ? AND agent_id = ? AND id = ?')
-        .run(canvas, agent, id);
+      store.run(
+        'DELETE FROM queue_item WHERE canvas_id = ? AND agent_id = ? AND id = ?',
+        canvas,
+        agent,
+        id,
+      );
     }
   }
 
@@ -1377,25 +1382,27 @@ export class Documents {
     const { store, memory } = this.#deps;
     const canvas = live.document.id;
     memory.ensure(canvas);
-    if (store.prepare('SELECT 1 FROM document WHERE canvas_id = ?').get(canvas) !== undefined) {
-      return;
-    }
-    store
-      .prepare(
-        `INSERT INTO document (canvas_id, rev, arrange, saved_hash, file_hash, created_by, by_party,
+    // Its rows are there if they were written under the canvas's row as it is: read nothing.
+    const generation = memory.generation(canvas);
+    if (live.generation === generation) return;
+    const before = live.generation;
+    live.generation = generation;
+    store.undo(() => {
+      live.generation = before;
+    });
+    store.run(
+      `INSERT INTO document (canvas_id, rev, arrange, saved_hash, file_hash, created_by, by_party,
            changed_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        canvas,
-        live.rev,
-        live.document.arrange ? 1 : 0,
-        live.savedHash ?? null,
-        live.fileHash ?? null,
-        live.createdBy ?? null,
-        by,
-        this.#now(),
-      );
+      canvas,
+      live.rev,
+      live.document.arrange ? 1 : 0,
+      live.savedHash ?? null,
+      live.fileHash ?? null,
+      live.createdBy ?? null,
+      by,
+      this.#now(),
+    );
     for (const [key, row] of Object.entries(live.rows)) {
       this.#upsert(canvas, key, row, live.revs.get(key) ?? live.rev, 'corrallm', live.creators);
     }
@@ -1469,6 +1476,7 @@ function emptyLive(canvas: CanvasId): Live {
     savedHash: undefined,
     fileHash: undefined,
     writingHash: undefined,
+    generation: undefined,
   };
 }
 

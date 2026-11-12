@@ -78,6 +78,12 @@ const NOTHING: Remembered = { conversations: {} };
  * how many drafts besides.
  */
 const LIMIT = 200;
+/**
+ * When a canvas used now was used, in a statement (so that a write reads nothing): the time it is
+ * given, unless another was used at or after it (in the same millisecond, or by a clock set back
+ * since), then just after that one.
+ */
+const NEXT_USE = 'max(?, coalesce((SELECT max(used_at) FROM canvas) + 1, 0))';
 /** A canvas kept with a file, folder or conversations: not a draft, which has its run at most. */
 const KEPT = `(file IS NOT NULL OR project IS NOT NULL
   OR EXISTS (SELECT 1 FROM conversation WHERE conversation.canvas_id = canvas.id))`;
@@ -140,21 +146,49 @@ export class CanvasMemory {
   readonly #listeners = new Set<(canvas: CanvasId | undefined) => void>();
   /** The canvases the change being applied changed. */
   #touched: CanvasId[] = [];
+  /** The canvases that have a row, as committed and as the writes planned since will leave it. */
+  readonly #rows = new Set<CanvasId>();
+  /** Why canvas membership could not be loaded, rather than treating unread rows as absent. */
+  readonly #rowsError: Error | undefined;
+  /** How many times it deleted a canvas's row, by canvas (none: 0). */
+  readonly #generations = new Map<CanvasId, number>();
+  /** Called within the write that deletes a canvas's row, for what a cascade reaches elsewhere. */
+  readonly #forgotten: (canvas: CanvasId) => void;
 
   /**
    * `spare`: whether a canvas has what forgetting it would lose (its document's edits not saved),
-   * asked within a write of only the canvases it would forget otherwise.
+   * asked within a write of only the canvases it would forget otherwise. `forgotten`: called within
+   * the write that deletes a canvas's row, for whatever the deletion cascades to elsewhere.
    */
   constructor(
     store: Database,
     limit = LIMIT,
     spare: (canvas: CanvasId) => boolean = () => false,
     conversationId: (adapter: string, id: string) => boolean = () => true,
+    forgotten: (canvas: CanvasId) => void = () => undefined,
   ) {
     this.#store = store;
     this.#limit = limit;
     this.#spare = spare;
     this.#conversationId = conversationId;
+    this.#forgotten = forgotten;
+    try {
+      for (const { id } of store.prepare('SELECT id FROM canvas').all()) {
+        if (isCanvasId(id)) this.#rows.add(id);
+      }
+    } catch (error) {
+      this.#rowsError = error instanceof Error ? error : new Error(String(error));
+      // A store that couldn't be opened writes nothing, and a row it does not know is made again
+      // by a statement that changes nothing where it exists.
+    }
+  }
+
+  /**
+   * How many times it deleted the canvas's row (forgotten by use, or asked to): what a store that
+   * wrote its own rows under the canvas's earlier row compares, to write them again.
+   */
+  generation(canvas: CanvasId): number {
+    return this.#generations.get(canvas) ?? 0;
   }
 
   /** Its file association now, including changes in the write currently being applied. */
@@ -208,10 +242,9 @@ export class CanvasMemory {
 
   /** Whether it keeps `canvas`, with every change asked for so far. */
   keeps(canvas: CanvasId): boolean {
-    return (
-      this.#unwritten.has(canvas) ||
-      this.#store.prepare('SELECT 1 AS kept FROM canvas WHERE id = ?').get(canvas) !== undefined
-    );
+    if (this.#unwritten.has(canvas)) return true;
+    if (this.#rowsError !== undefined) throw this.#rowsError;
+    return this.#rows.has(canvas);
   }
 
   /**
@@ -259,13 +292,40 @@ export class CanvasMemory {
    * else the database keeps of it (a draft's run) to refer to. One that has a row keeps it as it is.
    */
   ensure(canvas: CanvasId): void {
-    const made = this.#store
-      .prepare('INSERT INTO canvas (id, used_at) VALUES (?, ?) ON CONFLICT (id) DO NOTHING')
-      .run(canvas, this.#nextUse());
-    if (made.changes > 0) {
-      this.#forgetOldest();
-      this.#tell(undefined);
-    }
+    if (this.#rows.has(canvas)) return;
+    this.#store.run(
+      `INSERT INTO canvas (id, used_at) VALUES (?, ${NEXT_USE}) ON CONFLICT (id) DO NOTHING`,
+      canvas,
+      Date.now(),
+    );
+    this.#add(canvas);
+    this.#tell(undefined);
+    // Right after this write, in its commit: the canvases used least recently forgotten.
+    this.#store.followUp(() => {
+      this.#forgetOldest(canvas);
+    });
+  }
+
+  /** Within a write: it has a row for `canvas` now; as before if the write fails. */
+  #add(canvas: CanvasId): void {
+    if (this.#rows.has(canvas)) return;
+    this.#rows.add(canvas);
+    this.#store.undo(() => {
+      this.#rows.delete(canvas);
+    });
+  }
+
+  /** Within a write: it has no row for `canvas` now (its generation moves on); as before if the write fails. */
+  #remove(canvas: CanvasId): void {
+    if (!this.#rows.has(canvas)) return;
+    this.#store.undo(() => {
+      this.#generations.set(canvas, this.generation(canvas) - 1);
+      if (this.generation(canvas) === 0) this.#generations.delete(canvas);
+      this.#rows.add(canvas);
+    });
+    this.#rows.delete(canvas);
+    this.#generations.set(canvas, this.generation(canvas) + 1);
+    this.#forgotten(canvas);
   }
 
   /**
@@ -280,7 +340,8 @@ export class CanvasMemory {
       () => {
         if (this.#ownsWorkspace(canvas)) return;
         this.#unwritten.delete(canvas);
-        this.#store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+        this.#store.run('DELETE FROM canvas WHERE id = ?', canvas);
+        this.#remove(canvas);
         forgot = true;
         this.#tell(undefined);
       },
@@ -328,9 +389,8 @@ export class CanvasMemory {
         this.#notifications = previous;
       }
     };
-    const attempt = this.#atomic
-      ? this.#atomic.then(() => this.#store.write(run))
-      : this.#store.write(run);
+    const write = () => this.#store.writeBlocking(run);
+    const attempt = this.#atomic ? this.#atomic.then(write) : write();
     const writing = attempt
       .then(
         () => {
@@ -485,6 +545,7 @@ export class CanvasMemory {
            file = excluded.file, project = excluded.project, used_at = excluded.used_at`,
       )
       .run(canvas, file ?? null, project ?? null, this.#nextUse());
+    this.#add(canvas);
     const kept = this.#store
       .prepare('SELECT workspace_key, adapter, agent_id FROM conversation WHERE canvas_id = ?')
       .all(canvas);
@@ -530,23 +591,27 @@ export class CanvasMemory {
    * Forgets every canvas kept with a file, folder or conversations but the LIMIT used most
    * recently, and every draft but the LIMIT used most recently, with all the database keeps of
    * them: never one open, nor one that owns a workspace record, nor one with edits not saved
-   * (`spare`).
+   * (`spare`). `fresh`: a canvas this write just gave its row, which counts as it did before the
+   * write opened it (a row to refer to is made before anything else of the write is).
    */
-  #forgetOldest(): void {
+  #forgetOldest(fresh?: CanvasId): void {
     let forgot = 0;
     const forget = this.#store.prepare('DELETE FROM canvas WHERE id = ?');
     for (const kind of [KEPT, `NOT ${KEPT}`]) {
       const old = this.#store
         .prepare(
           `SELECT id FROM canvas WHERE ${kind}
-             AND NOT EXISTS (SELECT 1 FROM open_canvas WHERE open_canvas.canvas_id = canvas.id)
+             AND NOT EXISTS (SELECT 1 FROM open_canvas
+               WHERE open_canvas.canvas_id = canvas.id AND canvas.id IS NOT ?)
              AND NOT ${OWNS_WORKSPACE}
            ORDER BY used_at DESC LIMIT -1 OFFSET ?`,
         )
-        .all(this.#limit);
+        .all(fresh ?? null, this.#limit);
       for (const { id } of old) {
         if (isCanvasId(id) && this.#spare(id)) continue;
-        forgot += Number(forget.run(id ?? null).changes);
+        const changes = Number(forget.run(id ?? null).changes);
+        if (changes > 0 && isCanvasId(id)) this.#remove(id);
+        forgot += changes;
       }
     }
     if (forgot > 0) this.#tell(undefined);

@@ -227,7 +227,7 @@ export class Proposals {
       cleanup = trees.length === 0 ? undefined : { trees };
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
-    const { proposal, made } = await this.#deps.store.write(() => {
+    const { proposal, made } = await this.#deps.store.writeBlocking(() => {
       const rows = this.#deps.store
         .prepare(
           `SELECT id, op, args, by_party, touched, lost, raised_at FROM proposal
@@ -309,13 +309,13 @@ export class Proposals {
       },
       within: () => {
         const at = this.#now();
-        const { changes } = this.#deps.store
-          .prepare(
-            `UPDATE proposal SET outcome = ?, settled_by = ?, settled_at = ?
+        this.#deps.store.runExpecting(
+          `UPDATE proposal SET outcome = ?, settled_by = ?, settled_at = ?
              WHERE id = ? AND outcome IS NULL`,
-          )
-          .run(outcome, by, at, proposal.id.slice('proposal/'.length));
-        if (Number(changes) !== 1) throw new Error(`${proposal.id} was settled already.`);
+          [outcome, by, at, proposal.id.slice('proposal/'.length)],
+          1,
+          `${proposal.id} was settled already.`,
+        );
         const staged = messages.stageWithin({
           from: 'corrallm',
           to: proposal.by,

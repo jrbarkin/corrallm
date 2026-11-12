@@ -60,7 +60,7 @@ export interface LeadStoreDeps {
    * Canvas memory: a canvas's row, which its leads refer to, and what it forgets, with which its
    * leads go (ON DELETE CASCADE).
    */
-  memory: Pick<CanvasMemory, 'ensure' | 'subscribe'>;
+  memory: Pick<CanvasMemory, 'ensure' | 'keeps' | 'subscribe'>;
   /** What an agent's endpoint is read against. */
   catalog: Catalog;
   /** A canvas's document as the core has it now: none while it isn't loaded. */
@@ -203,7 +203,7 @@ export class LeadStore {
   ): Promise<void> {
     const { store, memory } = this.#deps;
     const at = this.#now();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       if (lead === null) {
         store.prepare('DELETE FROM lead WHERE canvas_id = ? AND agent_id = ?').run(canvas, agent);
         return;
@@ -254,7 +254,7 @@ export class LeadStore {
     if (this.isGranted(canvas, name) === approvals) return false;
     const { store, memory } = this.#deps;
     const at = this.#now();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       if (!approvals) {
         store
           .prepare('DELETE FROM outside_grant WHERE canvas_id = ? AND name = ?')
@@ -301,7 +301,7 @@ export class LeadStore {
   async loaded(canvas: CanvasId, document: CanvasDocument): Promise<void> {
     const decided = this.#decide(canvas, document);
     if (decided === undefined) return;
-    await this.#deps.store.write(() => {
+    await this.#deps.store.writeBlocking(() => {
       this.#apply(canvas, decided);
     });
     this.#take(canvas, decided);
@@ -319,8 +319,7 @@ export class LeadStore {
     ]);
     if (canvases.size === 0) return;
     try {
-      const exists = this.#deps.store.prepare('SELECT 1 AS kept FROM canvas WHERE id = ?');
-      for (const canvas of canvases) if (exists.get(canvas) === undefined) this.#drop(canvas);
+      for (const canvas of canvases) if (!this.#deps.memory.keeps(canvas)) this.#drop(canvas);
     } catch {
       for (const canvas of canvases) this.#drop(canvas);
     }
@@ -359,12 +358,17 @@ export class LeadStore {
   /** Within a write: what was decided, written. */
   #apply(canvas: CanvasId, { gone, held }: { gone: string[]; held: [string, HeldReason][] }): void {
     const { store } = this.#deps;
-    const remove = store.prepare('DELETE FROM lead WHERE canvas_id = ? AND agent_id = ?');
-    for (const agent of gone) remove.run(canvas, agent);
-    const hold = store.prepare(
-      'UPDATE lead SET held = ? WHERE canvas_id = ? AND agent_id = ? AND held IS NULL',
-    );
-    for (const [agent, reason] of held) hold.run(reason, canvas, agent);
+    for (const agent of gone) {
+      store.run('DELETE FROM lead WHERE canvas_id = ? AND agent_id = ?', canvas, agent);
+    }
+    for (const [agent, reason] of held) {
+      store.run(
+        'UPDATE lead SET held = ? WHERE canvas_id = ? AND agent_id = ? AND held IS NULL',
+        reason,
+        canvas,
+        agent,
+      );
+    }
   }
 
   /** Once it is on disk: what was decided, in memory, and said. */

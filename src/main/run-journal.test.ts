@@ -230,7 +230,7 @@ describe('RunJournal', () => {
     await runs.open(background, false);
     const token = (await runs.get(background)).token;
     const messages = await messagesOf(background);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       runs.keep(background, token, null, messages);
     });
     expect(await runs.last()).toBe(shown);
@@ -350,7 +350,7 @@ describe('RunJournal', () => {
 
     // Forgotten with its canvas, as canvas memory forgets the canvases used least recently: its run
     // is written whole again, and its canvas kept again.
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await memory.forget(canvas);
     await runs.save(canvas, token, { ...edited, updatedAt: 458 });
     expect(ran(canvas)).toMatchObject({
       state: expect.stringContaining('two') as string,
@@ -419,7 +419,7 @@ describe('RunJournal', () => {
     expect(await runs.reads(canvas)).toEqual({});
     let seen: unknown;
     await store
-      .write(() => {
+      .writeBlocking(() => {
         runs.moveRead(canvas, 'outside:orchestrator', 7);
       })
       .then(() => {
@@ -440,13 +440,13 @@ describe('RunJournal', () => {
     // Moved on by the next write that moves one, and never back, writes at once included.
     await Promise.all([
       runs.save(canvas, token, checkpoint),
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.moveRead(canvas, 'outside:other', 2);
       }),
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.moveRead(canvas, 'outside:orchestrator', 9);
       }),
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.moveRead(canvas, 'outside:orchestrator', 8);
       }),
     ]);
@@ -462,7 +462,7 @@ describe('RunJournal', () => {
     const runs = journal();
     const { token } = await runs.get(canvas);
     const messages = await messagesOf(canvas);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       runs.keep(canvas, token, checkpoint, messages);
       runs.moveRead(canvas, 'outside:orchestrator', 3);
     });
@@ -471,7 +471,7 @@ describe('RunJournal', () => {
 
     // What it was written with failed: neither lands.
     await expect(
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.keep(canvas, token, { ...checkpoint, updatedAt: 456 }, messages);
         runs.moveRead(canvas, 'outside:orchestrator', 4);
         throw new Error('The message can’t be written');
@@ -483,7 +483,7 @@ describe('RunJournal', () => {
     // An earlier canvas's token writes nothing, failing the write it is in.
     await runs.opened(canvas);
     await expect(
-      store.write(() => {
+      store.writeBlocking(() => {
         runs.keep(canvas, token, { ...checkpoint, updatedAt: 789 }, messages);
       }),
     ).rejects.toThrow(/earlier canvas/);
@@ -768,6 +768,35 @@ describe('RunJournal', () => {
     expect((await runs.get(other)).warning).toBe(
       `${said.join(' ')} team.corral is a copy of a canvas saved as other.corral.`,
     );
+  });
+
+  it('writes a save, an open and a close as planned writes, which read nothing', async () => {
+    const [canvas] = await named('team.corral');
+    const runs = journal();
+    const blocking = vi.spyOn(store, 'writeBlocking');
+    await runs.opened(canvas);
+    await runs.save(canvas, (await runs.get(canvas)).token, checkpoint);
+    await runs.saved(canvas);
+    await runs.close(canvas);
+    expect(blocking).not.toHaveBeenCalled();
+    expect(ran(canvas)).toMatchObject({ updated_at: 123 });
+    expect(open()).toEqual([]);
+  });
+
+  it('opens a canvas after every other open, whatever the clock says', async () => {
+    const [canvas] = await named('team.corral');
+    const [other] = await named('other.corral');
+    const runs = journal();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(5_000_000_000_000);
+    await runs.opened(canvas);
+    // The clock is set back: the next is still opened after the newest.
+    clock.mockReturnValue(10);
+    await runs.opened(other);
+    expect(open()).toEqual([other, canvas]);
+    await runs.saved(canvas);
+    expect(open()).toEqual([canvas, other]);
+    await runs.open(other, false);
+    expect(open()).toEqual([canvas, other]);
   });
 
   it('fails every read and write, saying why, when the database couldn’t be opened', async () => {

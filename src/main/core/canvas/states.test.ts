@@ -216,7 +216,7 @@ describe('a canvas’s entities', () => {
     await documents.load(canvas);
     // Its queue's places as close as numbers come: nothing lies between them.
     await memory.flush();
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare(`UPDATE queue_item SET place = ? WHERE canvas_id = ? AND id = 'two'`)
         .run(1 + Number.EPSILON, canvas);
@@ -357,12 +357,12 @@ describe('the list of canvases', () => {
     const journal = new RunJournal({ store, memory, messages: messagesIn(store, memory) });
     await journal.opened(empty);
     await memory.update(hidden, (remembered) => remembered);
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store.prepare('DELETE FROM open_canvas').run();
     });
     shown.set(empty, [7]);
     // The saved one's run, running as last journaled.
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare('INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)')
         .run(saved, JSON.stringify({ format: 3, run: { version: 2, run: { running: true } } }), 1);

@@ -44,7 +44,7 @@ beforeEach(async () => {
     ],
     links: [],
   };
-  await store.write(() => {
+  await store.writeBlocking(() => {
     memory.ensure(canvas);
   });
   await workspaces.write((w) => {

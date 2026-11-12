@@ -181,9 +181,8 @@ export class MessageTable {
    * written with its row and never after.
    */
   keep({ seq, message, origin, display, told, withdrawal, about }: Kept): void {
-    this.#store
-      .prepare(
-        `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
+    this.#store.run(
+      `INSERT INTO message (seq, id, canvas_id, from_party, to_party, kind, origin, body, display,
            reply_to, resend_of, task, turn, state, delivery, by_party, sent_at, told, withdrawal,
            settled, ask, verdict, purpose, about)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -192,38 +191,36 @@ export class MessageTable {
            task = excluded.task, turn = excluded.turn, state = excluded.state,
            delivery = excluded.delivery, by_party = excluded.by_party, told = excluded.told,
            withdrawal = excluded.withdrawal, settled = coalesce(message.settled, excluded.settled)`,
-      )
-      .run(
-        seq,
-        message.id,
-        message.canvas,
-        message.from,
-        message.to,
-        message.kind,
-        origin,
-        message.body,
-        json(display),
-        message.replyTo ?? null,
-        message.resendOf ?? null,
-        json(message.task),
-        json(message.turn),
-        message.state,
-        json(message.delivery),
-        message.by ?? null,
-        message.at,
-        told ?? null,
-        json(withdrawal),
-        json(message.settled),
-        json(message.ask),
-        json(message.verdict),
-        json(message.purpose),
-        json(about),
-      );
+      seq,
+      message.id,
+      message.canvas,
+      message.from,
+      message.to,
+      message.kind,
+      origin,
+      message.body,
+      json(display),
+      message.replyTo ?? null,
+      message.resendOf ?? null,
+      json(message.task),
+      json(message.turn),
+      message.state,
+      json(message.delivery),
+      message.by ?? null,
+      message.at,
+      told ?? null,
+      json(withdrawal),
+      json(message.settled),
+      json(message.ask),
+      json(message.verdict),
+      json(message.purpose),
+      json(about),
+    );
   }
 
   /** Within a write: deletes a message's row. */
   forget(id: string): void {
-    this.#store.prepare('DELETE FROM message WHERE id = ?').run(id);
+    this.#store.run('DELETE FROM message WHERE id = ?', id);
   }
 }
 

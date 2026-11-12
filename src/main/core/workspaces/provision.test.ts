@@ -85,7 +85,7 @@ beforeEach(async () => {
   mkdirSync(profile);
   store = await openTestStore(profile);
   const memory = new CanvasMemory(store);
-  await store.write(() => {
+  await store.writeBlocking(() => {
     memory.ensure(CANVAS);
   });
   workspaces = new WorkspaceStore({ store });

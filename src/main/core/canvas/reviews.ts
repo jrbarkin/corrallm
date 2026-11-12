@@ -78,7 +78,7 @@ export type Told = () => void;
 
 export interface FileReviewsDeps {
   /** The profile's database, which keeps them. */
-  store: Pick<Database, 'prepare'>;
+  store: Pick<Database, 'prepare' | 'run' | 'runExpecting' | 'runReturning'>;
   /** Hears what waits on a canvas change: a review raised or settled, and by whom. */
   changed?: (canvas: CanvasId, by: PartyId) => void;
   now?: () => number;
@@ -177,12 +177,16 @@ export class FileReviews {
   raiseWithin(canvas: CanvasId, hash: string, summary: ReviewSummary): Told {
     this.#supersede(canvas);
     const uuid = this.#newId();
-    this.#deps.store
-      .prepare(
-        `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
+    this.#deps.store.run(
+      `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
          VALUES (?, ?, ?, (SELECT file_generation FROM document WHERE canvas_id = ?), ?, ?)`,
-      )
-      .run(uuid, canvas, hash, canvas, JSON.stringify(summary), this.#now());
+      uuid,
+      canvas,
+      hash,
+      canvas,
+      JSON.stringify(summary),
+      this.#now(),
+    );
     return () => {
       this.#deps.changed?.(canvas, 'corrallm');
     };
@@ -193,13 +197,13 @@ export class FileReviews {
    * disk. Throws if it was settled already.
    */
   settleWithin(review: FileReview, outcome: ReviewOutcome, by: PartyId): Told {
-    const { changes } = this.#deps.store
-      .prepare(
-        `UPDATE file_review SET outcome = ?, settled_by = ?, settled_at = ?
+    this.#deps.store.runExpecting(
+      `UPDATE file_review SET outcome = ?, settled_by = ?, settled_at = ?
          WHERE id = ? AND outcome IS NULL`,
-      )
-      .run(outcome, by, this.#now(), review.id.slice(PREFIX.length));
-    if (Number(changes) !== 1) throw new Error(`${review.id} was settled already.`);
+      [outcome, by, this.#now(), review.id.slice(PREFIX.length)],
+      1,
+      `${review.id} was settled already.`,
+    );
     return () => {
       this.#deps.changed?.(review.canvas, by);
     };
@@ -209,22 +213,28 @@ export class FileReviews {
    * Within a write: the review open on the canvas, if one is, settled superseded by corrallm (the
    * file is as the core has it again, or another); what tells of it once the write is on disk.
    */
-  supersedeWithin(canvas: CanvasId): Told | undefined {
-    if (!this.#supersede(canvas)) return undefined;
+  supersedeWithin(canvas: CanvasId): Told {
+    const superseded = this.#supersede(canvas);
     return () => {
-      this.#deps.changed?.(canvas, 'corrallm');
+      if (superseded.is) this.#deps.changed?.(canvas, 'corrallm');
     };
   }
 
-  /** Within a write: the review open on the canvas settled superseded; whether one was. */
-  #supersede(canvas: CanvasId): boolean {
-    const { changes } = this.#deps.store
-      .prepare(
-        `UPDATE file_review SET outcome = 'superseded', settled_by = 'corrallm', settled_at = ?
-         WHERE canvas_id = ? AND outcome IS NULL`,
-      )
-      .run(this.#now(), canvas);
-    return Number(changes) > 0;
+  /**
+   * Within a write: the review open on the canvas settled superseded; whether one was, once the
+   * write's statement has run (which a plan can't know as it gives it).
+   */
+  #supersede(canvas: CanvasId): { readonly is: boolean } {
+    const superseded = { is: false };
+    this.#deps.store.runReturning(
+      `UPDATE file_review SET outcome = 'superseded', settled_by = 'corrallm', settled_at = ?
+         WHERE canvas_id = ? AND outcome IS NULL RETURNING id`,
+      [this.#now(), canvas],
+      (rows) => {
+        superseded.is = rows.length > 0;
+      },
+    );
+    return superseded;
   }
 }
 

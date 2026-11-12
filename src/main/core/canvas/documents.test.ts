@@ -126,6 +126,19 @@ async function restart(deps?: StoreDeps): Promise<void> {
   memory = new CanvasMemory(store);
   documents = documentsOf();
 }
+/**
+ * Canvas memory forgets `canvas` (its row, with everything under it) while the document is still
+ * loaded: as it forgets the canvases used least recently, before the document hears of it.
+ */
+async function forgetWhileLoaded(canvas: CanvasId): Promise<void> {
+  const keeps = vi.spyOn(memory, 'keeps').mockReturnValue(true);
+  try {
+    await memory.forget(canvas);
+    await memory.flush();
+  } finally {
+    keeps.mockRestore();
+  }
+}
 /** A canvas kept in a file of its own, `bytes` its file's (its text as toFile writes it). */
 async function filed(document: CanvasDocument, bytes = toFile(document)): Promise<string> {
   const file = path.join(profile, `${document.id}.corral`);
@@ -565,12 +578,12 @@ describe('a canvas’s document', () => {
     const file = await filed(canvasOf(canvas));
     const { document } = await documents.load(canvas);
     // Forgotten as canvas memory forgets the canvases used least recently, with all of it.
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await forgetWhileLoaded(canvas);
     await commit(canvas, renamed(document, 'lead', 'Head'));
     await restart();
     expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
 
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await forgetWhileLoaded(canvas);
     await documents.save(canvas, mintTrustedPath(file));
     await restart();
     expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
@@ -680,7 +693,7 @@ describe('a canvas’s document', () => {
     const canvas = newCanvasId();
     await made(canvas, canvasOf(canvas));
     const [refused, sent] = await Promise.allSettled([
-      store.write(() =>
+      store.writeBlocking(() =>
         store
           .prepare(
             `INSERT INTO queue_item (canvas_id, agent_id, id, place, kind, body, rev, by_party)
@@ -688,7 +701,7 @@ describe('a canvas’s document', () => {
           )
           .run(canvas),
       ),
-      store.write(() =>
+      store.writeBlocking(() =>
         store
           .prepare(
             `INSERT INTO message (id, canvas_id, from_party, to_party, kind, origin, body, state,
@@ -830,7 +843,7 @@ describe('the agents a party created', () => {
     ];
     expect(creators(canvas)).toEqual(kept);
     // Forgotten with its canvas while it was loaded, written whole again: with who created each.
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(canvas);
+    await forgetWhileLoaded(canvas);
     await commit(canvas, renamed(documents.live(canvas).document, 'lead', 'Head'));
     await restart();
     await documents.load(canvas);
@@ -925,7 +938,7 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
     // loaded), after a restart too.
     await restart();
     await documents.load(filled);
-    store.prepare('DELETE FROM canvas WHERE id = ?').run(filled);
+    await forgetWhileLoaded(filled);
     await commit(filled, renamed(documents.live(filled).document, 'lead', 'Head'));
     expect(createdBy(filled)).toBe(ORCHESTRATOR);
     expect(documents.createdBy(ORCHESTRATOR).sort()).toEqual([empty, filled].sort());
@@ -993,7 +1006,7 @@ describe('a canvas made, closed or discarded (B9 Design §1, §2, §5)', () => {
   it('keeps a draft discarded whose agents’ work a workspace holds, all of it', async () => {
     const draft = newCanvasId();
     await made(draft, canvasOf(draft));
-    await store.write(() => {
+    await store.writeBlocking(() => {
       store
         .prepare(
           `INSERT INTO repository (id, picked_root, real_root, common_dir, identity, root_kind,
@@ -1034,4 +1047,30 @@ it('keeps the only copy of a canvas after Save As displaces its file, across evi
   await restart();
   expect((await documents.load(a)).document.nodes).toHaveLength(3);
   expect(documents.unsaved(a)).toBe(true);
+});
+
+describe('its writes', () => {
+  it('commit in a planned write, which reads nothing', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    const blocking = vi.spyOn(store, 'writeBlocking');
+    await commit(canvas, renamed(document, 'lead', 'Head'));
+    expect(blocking).not.toHaveBeenCalled();
+    expect(documents.live(canvas).document).toEqual(renamed(document, 'lead', 'Head'));
+  });
+
+  it('write every row again once canvas memory forgot the canvas, reading none', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    const { document } = await documents.load(canvas);
+    await forgetWhileLoaded(canvas);
+    expect(documentRow(canvas)).toBeUndefined();
+    const blocking = vi.spyOn(store, 'writeBlocking');
+    await commit(canvas, renamed(document, 'lead', 'Head'));
+    expect(blocking).not.toHaveBeenCalled();
+    expect(documentRow(canvas)).toBeDefined();
+    await restart();
+    expect((await documents.load(canvas)).document).toEqual(renamed(document, 'lead', 'Head'));
+  });
 });

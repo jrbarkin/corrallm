@@ -119,7 +119,7 @@ it('skips vacuum when a write queued during its checkpoint', async () => {
   });
   const freed = free();
   idle?.();
-  const written = store.write(() => {
+  const written = store.writeBlocking(() => {
     store.exec('UPDATE canvas SET used_at = used_at + 1');
   });
   release();
@@ -146,7 +146,7 @@ it('commits a write arriving during one vacuum pass before another pass', async 
     order.push('vacuum');
     const pass = original.call(this);
     written = store
-      .write(() => {
+      .writeBlocking(() => {
         order.push('write');
         store.exec('UPDATE canvas SET used_at = used_at + 1');
       })

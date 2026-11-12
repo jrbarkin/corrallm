@@ -20,12 +20,12 @@ import type { Database } from '../store/store';
  *
  * Every write is synchronous and runs within a write: one of its own (`write`), or another store's
  * (a document's commit, the run journal's), so that what it records commits with what it goes with,
- * or neither does. It reads the database itself, keeping nothing in memory, so a write that fails
- * leaves nothing of it to undo. It checks what it is given (ids, absolute paths, refs, hashes and
- * codes of the shapes the core makes) and reads back only what it can read as it wrote it: a record
- * it can't fails its read, saying which, rather than being taken for something safe. It does
- * nothing to a repository or a file and mints no path: a path it reads back is a record, to check
- * again before it is used.
+ * or neither does. It keeps every record in memory, read as it is made, so that a planned write
+ * reads no SQL and a read is never SQL; a write that fails puts memory back (`undo`). It checks what
+ * it is given (ids, absolute paths, refs, hashes and codes of the shapes the core makes) and reads
+ * back only what it can read as it wrote it: a record it can't fails its read, saying which, rather
+ * than being taken for something safe. It does nothing to a repository or a file and mints no path:
+ * a path it reads back is a record, to check again before it is used.
  */
 
 /** Where a repository's workspaces' checkouts are made: inside the picked checkout, or the profile. */
@@ -266,62 +266,273 @@ export interface WorkspaceStoreDeps {
 
 type Row = Record<string, unknown>;
 
+/** The tables the store keeps in memory, each by the key of its rows. */
+const TABLES = {
+  repository: (row: Row) => String(row.id),
+  canvas_repository: (row: Row) => String(row.canvas_id),
+  worktree: (row: Row) => String(row.id),
+  agent_worktree: (row: Row) => agentKey(String(row.canvas_id), String(row.agent_id)),
+  worktree_job: (row: Row) => String(row.id),
+  worktree_setup: (row: Row) => String(row.workspace_id),
+  project_setup: (row: Row) => String(row.repository_id),
+} as const;
+type Table = keyof typeof TABLES;
+
+/** Secondary keys keep scoped reads within the records they could return. */
+const INDEXES: Partial<Record<Table, Record<string, (row: Row) => string | undefined>>> = {
+  repository: { found: (row) => tuple(row.real_root, row.identity) },
+  worktree: {
+    canvas: (row) => String(row.canvas_id),
+    repository: (row) => String(row.repository_id),
+    state: (row) => String(row.state),
+    fork: (row) => (typeof row.forked_from === 'string' ? row.forked_from : undefined),
+    owner: (row) =>
+      row.state === 'retained' || row.state === 'removing'
+        ? undefined
+        : tuple(row.canvas_id, row.repository_id, row.owner_key),
+  },
+  agent_worktree: {
+    canvas: (row) => String(row.canvas_id),
+    workspace: (row) => tuple(row.canvas_id, row.workspace_id),
+  },
+  worktree_job: {
+    workspace: (row) => String(row.workspace_id),
+    open: (row) => (row.outcome === null ? tuple(row.workspace_id, row.kind) : undefined),
+    unfinished: (row) => (row.outcome === null ? 'yes' : undefined),
+  },
+  worktree_setup: { state: (row) => String(row.state) },
+};
+
+function tuple(...values: unknown[]): string {
+  return JSON.stringify(values);
+}
+
+function agentKey(canvas: string, agent: string): string {
+  return JSON.stringify([canvas, agent]);
+}
+
+/** Orders values as SQLite's default collation does: numbers by value, text by its bytes. */
+function compare(a: unknown, b: unknown): number {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return Buffer.compare(Buffer.from(String(a)), Buffer.from(String(b)));
+}
+
+/** The rows ordered by `columns`, in turn. */
+function ordered(rows: Row[], ...columns: string[]): Row[] {
+  return rows.sort((a, b) => {
+    for (const column of columns) {
+      const order = compare(a[column], b[column]);
+      if (order !== 0) return order;
+    }
+    return 0;
+  });
+}
+
+/**
+ * The workspaces' records, every table of them kept in memory, as the rows the database holds
+ * them (a row read as it is made, changed as each write changes it). A write checks and changes
+ * memory, gives its statements, and registers what puts memory back if the write fails; so a read
+ * is never SQL, and a write is a plan that reads none. A record is checked as it is read, not as it
+ * is kept: a row that can't be read as it was written fails exactly the reads that would return it.
+ * The database enforces its constraints (unique indexes, references, checks) as the statements run:
+ * one that fails rejects the write, and memory is put back before the next write is planned.
+ * Deleting a canvas deletes its project link (`canvasForgotten`, told within that write by canvas
+ * memory): the only deletion that cascades into these tables from outside them.
+ */
 export class WorkspaceStore {
   readonly #store: Database;
   readonly #now: () => number;
+  readonly #tables: Record<Table, Map<string, Row>> = {
+    repository: new Map(),
+    canvas_repository: new Map(),
+    worktree: new Map(),
+    agent_worktree: new Map(),
+    worktree_job: new Map(),
+    worktree_setup: new Map(),
+    project_setup: new Map(),
+  };
+  readonly #indexes = new Map<string, Map<string, Set<string>>>();
+  /** The last generation numbered (`meta.workspace_generation`). */
+  #generation: unknown;
+  /** Why the records couldn't be read as the store was made, if they couldn't: every read fails. */
+  #unread: Error | undefined;
 
   constructor({ store, now = () => Date.now() }: WorkspaceStoreDeps) {
     this.#store = store;
     this.#now = now;
+    try {
+      for (const table of Object.keys(TABLES) as Table[]) {
+        for (const row of this.#load(`SELECT * FROM ${table}`)) {
+          this.#replace(table, TABLES[table](row), { ...row });
+        }
+      }
+      this.#generation = this.#load('SELECT workspace_generation FROM meta WHERE id = 1')[0]
+        ?.workspace_generation;
+    } catch (error) {
+      this.#unread = error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
    * Runs `run` in a write of its own: on disk once it resolves, with what it returned; rejects,
-   * keeping nothing of it, if it threw or couldn't be written.
+   * keeping nothing of it, if it threw or couldn't be written. A planned write: it reads memory.
    */
   write<T>(run: (workspaces: this) => T): Promise<T> {
     return this.#store.write(() => run(this));
   }
 
+  // The records in memory.
+
+  /** Keeps unreadable integers on their own row instead of failing the entire initial read. */
+  #load(sql: string): Row[] {
+    const statement = this.#store.prepare(sql);
+    statement.setReadBigInts(true);
+    try {
+      return statement
+        .all()
+        .map((row) =>
+          Object.fromEntries(
+            Object.entries(row).map(([key, value]) => [
+              key,
+              typeof value === 'bigint' &&
+              value >= BigInt(Number.MIN_SAFE_INTEGER) &&
+              value <= BigInt(Number.MAX_SAFE_INTEGER)
+                ? Number(value)
+                : value,
+            ]),
+          ),
+        );
+    } finally {
+      statement.setReadBigInts(false);
+    }
+  }
+
+  /** The rows of `table`, in no order. */
+  #rows(table: Table): Row[] {
+    if (this.#unread !== undefined) throw this.#unread;
+    return [...this.#tables[table].values()];
+  }
+
+  #row(table: Table, key: string): Row | undefined {
+    if (this.#unread !== undefined) throw this.#unread;
+    return this.#tables[table].get(key);
+  }
+
+  #indexed(table: Table, index: string, key: string): Row[] {
+    if (this.#unread !== undefined) throw this.#unread;
+    const rows: Row[] = [];
+    for (const id of this.#indexes.get(`${table}/${index}`)?.get(key) ?? []) {
+      const row = this.#tables[table].get(id);
+      if (row !== undefined) rows.push(row);
+    }
+    return rows;
+  }
+
+  /** Sets a row and its secondary keys together, including when an undo restores it. */
+  #replace(table: Table, key: string, row: Row | undefined): void {
+    const rows = this.#tables[table];
+    const before = rows.get(key);
+    for (const [name, group] of Object.entries(INDEXES[table] ?? {})) {
+      const was = before === undefined ? undefined : group(before);
+      const now = row === undefined ? undefined : group(row);
+      if (was === now) continue;
+      const label = `${table}/${name}`;
+      const index = this.#indexes.get(label) ?? new Map<string, Set<string>>();
+      if (was !== undefined) {
+        const ids = index.get(was);
+        ids?.delete(key);
+        if (ids?.size === 0) index.delete(was);
+      }
+      if (now !== undefined) {
+        const ids = index.get(now) ?? new Set<string>();
+        ids.add(key);
+        index.set(now, ids);
+      }
+      if (index.size === 0) this.#indexes.delete(label);
+      else this.#indexes.set(label, index);
+    }
+    if (row === undefined) rows.delete(key);
+    else rows.set(key, row);
+  }
+
+  /** Within a write: keeps `row`, as it is now; as it was if the write fails. */
+  #keep(table: Table, row: Row): void {
+    const rows = this.#tables[table];
+    const key = TABLES[table](row);
+    const before = rows.get(key);
+    this.#store.undo(() => {
+      this.#replace(table, key, before);
+    });
+    this.#replace(table, key, row);
+  }
+
+  /** Within a write: keeps the row at `key` changed by `changes`. */
+  #change(table: Table, key: string, changes: Row): void {
+    const row = this.#tables[table].get(key);
+    if (row === undefined) return;
+    this.#keep(table, { ...row, ...changes });
+  }
+
+  /** Within a write: forgets the row at `key`; as it was if the write fails. */
+  #drop(table: Table, key: string): void {
+    const rows = this.#tables[table];
+    const before = rows.get(key);
+    if (before === undefined) return;
+    this.#store.undo(() => {
+      this.#replace(table, key, before);
+    });
+    this.#replace(table, key, undefined);
+  }
+
+  /** Within a write: `canvas` was forgotten, and its project link with it. */
+  canvasForgotten(canvas: CanvasId): void {
+    this.#drop('canvas_repository', canvas);
+  }
+
   // Repositories.
 
   repository(id: string): RepositoryRecord | undefined {
-    const row = this.#store.prepare('SELECT * FROM repository WHERE id = ?').get(id);
+    const row = this.#row('repository', id);
     return row === undefined ? undefined : repositoryOf(row);
   }
 
   /** Every repository kept, by id. */
   repositories(): RepositoryRecord[] {
-    return this.#store.prepare('SELECT * FROM repository ORDER BY id').all().map(repositoryOf);
+    return ordered(this.#rows('repository'), 'id').map(repositoryOf);
   }
 
   /** The repository found at `realRoot` with `identity`, if it is kept. */
   repositoryAt(realRoot: string, identity: string): RepositoryRecord | undefined {
-    const row = this.#store
-      .prepare('SELECT * FROM repository WHERE real_root = ? AND identity = ?')
-      .get(realRoot, identity);
+    const row = this.#indexed('repository', 'found', tuple(realRoot, identity))[0];
     return row === undefined ? undefined : repositoryOf(row);
   }
 
   /** Within a write: keeps a repository found, at generation 0. */
   addRepository(repository: NewRepository): RepositoryRecord {
     const kept = { ...checkRepository(repository), generation: 0 };
-    this.#store
-      .prepare(
-        `INSERT INTO repository
+    this.#keep('repository', {
+      id: kept.id,
+      picked_root: kept.pickedRoot,
+      real_root: kept.realRoot,
+      common_dir: kept.commonDir,
+      identity: kept.identity,
+      root_kind: kept.rootKind,
+      owned_root: kept.ownedRoot,
+      generation: kept.generation,
+    });
+    this.#store.run(
+      `INSERT INTO repository
            (id, picked_root, real_root, common_dir, identity, root_kind, owned_root, generation)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        kept.id,
-        kept.pickedRoot,
-        kept.realRoot,
-        kept.commonDir,
-        kept.identity,
-        kept.rootKind,
-        kept.ownedRoot,
-        kept.generation,
-      );
+      kept.id,
+      kept.pickedRoot,
+      kept.realRoot,
+      kept.commonDir,
+      kept.identity,
+      kept.rootKind,
+      kept.ownedRoot,
+      kept.generation,
+    );
     return kept;
   }
 
@@ -338,22 +549,28 @@ export class WorkspaceStore {
     );
     if (same) return kept;
     const found = { ...next, generation: kept.generation + 1 };
-    this.#store
-      .prepare(
-        `UPDATE repository SET picked_root = ?, real_root = ?, common_dir = ?, identity = ?,
+    this.#change('repository', id, {
+      picked_root: found.pickedRoot,
+      real_root: found.realRoot,
+      common_dir: found.commonDir,
+      identity: found.identity,
+      root_kind: found.rootKind,
+      owned_root: found.ownedRoot,
+      generation: found.generation,
+    });
+    this.#store.run(
+      `UPDATE repository SET picked_root = ?, real_root = ?, common_dir = ?, identity = ?,
            root_kind = ?, owned_root = ?, generation = ?
          WHERE id = ?`,
-      )
-      .run(
-        found.pickedRoot,
-        found.realRoot,
-        found.commonDir,
-        found.identity,
-        found.rootKind,
-        found.ownedRoot,
-        found.generation,
-        id,
-      );
+      found.pickedRoot,
+      found.realRoot,
+      found.commonDir,
+      found.identity,
+      found.rootKind,
+      found.ownedRoot,
+      found.generation,
+      id,
+    );
     return found;
   }
 
@@ -369,22 +586,28 @@ export class WorkspaceStore {
       throw new WorkspaceStoreError('stale', `The repository ${id} isn’t kept by that identity.`);
     }
     const found = this.rediscovered(id, { identity: to });
-    this.#store
-      .prepare(
-        `UPDATE worktree_job SET expected_identity = ?
+    for (const tree of this.#indexed('worktree', 'repository', id)) {
+      for (const job of this.#indexed('worktree_job', 'workspace', String(tree.id))) {
+        if (job.expected_identity === from) {
+          this.#change('worktree_job', String(job.id), { expected_identity: to });
+        }
+      }
+    }
+    this.#store.run(
+      `UPDATE worktree_job SET expected_identity = ?
          WHERE expected_identity = ?
            AND workspace_id IN (SELECT id FROM worktree WHERE repository_id = ?)`,
-      )
-      .run(to, from, id);
+      to,
+      from,
+      id,
+    );
     return found;
   }
 
   // Canvases' repositories.
 
   canvasRepository(canvas: CanvasId): CanvasRepository | undefined {
-    const row = this.#store
-      .prepare('SELECT * FROM canvas_repository WHERE canvas_id = ?')
-      .get(canvas);
+    const row = this.#row('canvas_repository', canvas);
     return row === undefined ? undefined : canvasRepositoryOf(row);
   }
 
@@ -396,42 +619,44 @@ export class WorkspaceStore {
     checkCanvas(canvas);
     if (repository !== null) checkUuid(repository, 'repository');
     const generation = (this.canvasRepository(canvas)?.generation ?? 0) + 1;
-    this.#store
-      .prepare(
-        `INSERT INTO canvas_repository (canvas_id, repository_id, generation) VALUES (?, ?, ?)
+    this.#keep('canvas_repository', {
+      ...this.#row('canvas_repository', canvas),
+      canvas_id: canvas,
+      repository_id: repository,
+      generation,
+    });
+    this.#store.run(
+      `INSERT INTO canvas_repository (canvas_id, repository_id, generation) VALUES (?, ?, ?)
          ON CONFLICT (canvas_id) DO UPDATE SET
            repository_id = excluded.repository_id, generation = excluded.generation`,
-      )
-      .run(canvas, repository, generation);
+      canvas,
+      repository,
+      generation,
+    );
     return { canvas, repository, generation };
   }
 
   // Workspaces.
 
   worktree(id: string): WorktreeRecord | undefined {
-    const row = this.#store.prepare('SELECT * FROM worktree WHERE id = ?').get(id);
+    const row = this.#row('worktree', id);
     return row === undefined ? undefined : worktreeOf(row);
   }
 
   /** Every workspace of the canvas, in any state, as they were made. */
   worktreesOf(canvas: CanvasId): WorktreeRecord[] {
-    return this.#store
-      .prepare('SELECT * FROM worktree WHERE canvas_id = ? ORDER BY created_at, id')
-      .all(canvas)
-      .map(worktreeOf);
+    return ordered(this.#indexed('worktree', 'canvas', canvas), 'created_at', 'id').map(worktreeOf);
   }
 
   /** Every canvas's workspaces in one of `states`, as they were made: what a restart checks. */
   worktreesIn(states: readonly WorktreeState[]): WorktreeRecord[] {
     const asked = states.filter((state) => STATES.includes(state));
     if (asked.length === 0) return [];
-    return this.#store
-      .prepare(
-        `SELECT * FROM worktree WHERE state IN (${asked.map(() => '?').join(', ')})
-         ORDER BY created_at, id`,
-      )
-      .all(...asked)
-      .map(worktreeOf);
+    return ordered(
+      [...new Set(asked)].flatMap((state) => this.#indexed('worktree', 'state', state)),
+      'created_at',
+      'id',
+    ).map(worktreeOf);
   }
 
   /** The workspace in use for `owner` of the canvas's repository, if there is one. */
@@ -440,13 +665,7 @@ export class WorkspaceStore {
     repository: string,
     owner: WorkspaceOwnerKey,
   ): WorktreeRecord | undefined {
-    const row = this.#store
-      .prepare(
-        `SELECT * FROM worktree
-         WHERE canvas_id = ? AND repository_id = ? AND owner_key = ?
-           AND state NOT IN ('retained', 'removing')`,
-      )
-      .get(canvas, repository, owner);
+    const row = this.#indexed('worktree', 'owner', tuple(canvas, repository, owner))[0];
     return row === undefined ? undefined : worktreeOf(row);
   }
 
@@ -462,29 +681,42 @@ export class WorkspaceStore {
       createdAt: this.#now(),
       errorCode: null,
     };
-    this.#store
-      .prepare(
-        `INSERT INTO worktree (id, canvas_id, repository_id, owner_key, path, branch_ref,
+    this.#keep('worktree', {
+      id: made.id,
+      canvas_id: made.canvas,
+      repository_id: made.repository,
+      owner_key: made.owner,
+      path: made.path,
+      branch_ref: made.branchRef,
+      base_checkout: made.baseCheckout,
+      base_ref: made.baseRef,
+      base_oid: made.baseOid,
+      forked_from: made.forkedFrom,
+      state: made.state,
+      generation: made.generation,
+      created_at: made.createdAt,
+      error_code: made.errorCode,
+    });
+    this.#store.run(
+      `INSERT INTO worktree (id, canvas_id, repository_id, owner_key, path, branch_ref,
            base_checkout, base_ref, base_oid, forked_from, state, generation, created_at,
            error_code)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        made.id,
-        made.canvas,
-        made.repository,
-        made.owner,
-        made.path,
-        made.branchRef,
-        made.baseCheckout,
-        made.baseRef,
-        made.baseOid,
-        made.forkedFrom,
-        made.state,
-        made.generation,
-        made.createdAt,
-        made.errorCode,
-      );
+      made.id,
+      made.canvas,
+      made.repository,
+      made.owner,
+      made.path,
+      made.branchRef,
+      made.baseCheckout,
+      made.baseRef,
+      made.baseOid,
+      made.forkedFrom,
+      made.state,
+      made.generation,
+      made.createdAt,
+      made.errorCode,
+    );
     return made;
   }
 
@@ -511,9 +743,8 @@ export class WorkspaceStore {
       throw new WorkspaceStoreError('refused', `A workspace ${kept.state} can’t become ${to}.`);
     }
     const why = SAYS_WHY.includes(to) || to === 'removing' ? (errorCode ?? null) : null;
-    this.#store
-      .prepare('UPDATE worktree SET state = ?, error_code = ? WHERE id = ?')
-      .run(to, why, id);
+    this.#change('worktree', id, { state: to, error_code: why });
+    this.#store.run('UPDATE worktree SET state = ?, error_code = ? WHERE id = ?', to, why, id);
     return { ...kept, state: to, errorCode: why };
   }
 
@@ -538,7 +769,8 @@ export class WorkspaceStore {
     if (!ACTIVE_STATES.includes(kept.state)) {
       throw new WorkspaceStoreError('refused', `A workspace ${kept.state} is no one’s any more.`);
     }
-    this.#store.prepare('UPDATE worktree SET owner_key = ? WHERE id = ?').run(owner, id);
+    this.#change('worktree', id, { owner_key: owner });
+    this.#store.run('UPDATE worktree SET owner_key = ? WHERE id = ?', owner, id);
     return { ...kept, owner };
   }
 
@@ -550,22 +782,29 @@ export class WorkspaceStore {
     const kept = this.worktree(id);
     if (kept === undefined) throw notFound('workspace', id);
     const generation = kept.generation + 1;
-    this.#store.prepare('UPDATE worktree SET generation = ? WHERE id = ?').run(generation, id);
-    const move = this.#store.prepare(
-      'UPDATE agent_worktree SET generation = ? WHERE canvas_id = ? AND agent_id = ?',
-    );
+    this.#change('worktree', id, { generation });
+    this.#store.run('UPDATE worktree SET generation = ? WHERE id = ?', generation, id);
     for (const binding of this.bindingsTo(kept.canvas, id)) {
+      const key = agentKey(binding.canvas, binding.agent);
       // A change waiting moves past it too: it is no longer the plan as it was reviewed.
       const next = this.#next(Math.max(binding.generation, binding.desired?.generation ?? 0));
       if (binding.desired !== null) {
         const desired = this.#next(next);
-        this.#store
-          .prepare(
-            'UPDATE agent_worktree SET desired_generation = ? WHERE canvas_id = ? AND agent_id = ?',
-          )
-          .run(desired, binding.canvas, binding.agent);
+        this.#change('agent_worktree', key, { desired_generation: desired });
+        this.#store.run(
+          'UPDATE agent_worktree SET desired_generation = ? WHERE canvas_id = ? AND agent_id = ?',
+          desired,
+          binding.canvas,
+          binding.agent,
+        );
       }
-      move.run(next, binding.canvas, binding.agent);
+      this.#change('agent_worktree', key, { generation: next });
+      this.#store.run(
+        'UPDATE agent_worktree SET generation = ? WHERE canvas_id = ? AND agent_id = ?',
+        next,
+        binding.canvas,
+        binding.agent,
+      );
     }
     return { ...kept, generation };
   }
@@ -590,34 +829,34 @@ export class WorkspaceStore {
     if (this.jobsOf(id).some((job) => job.outcome === null)) {
       throw new WorkspaceStoreError('refused', `A job of the workspace ${id} still goes on.`);
     }
-    this.#store.prepare('DELETE FROM worktree WHERE id = ?').run(id);
+    // What the database's references do with it: its jobs and setup go, a fork of it forks from none.
+    this.#drop('worktree', id);
+    for (const job of this.#indexed('worktree_job', 'workspace', id))
+      this.#drop('worktree_job', String(job.id));
+    this.#drop('worktree_setup', id);
+    for (const fork of this.#indexed('worktree', 'fork', id))
+      this.#change('worktree', String(fork.id), { forked_from: null });
+    this.#store.run('DELETE FROM worktree WHERE id = ?', id);
   }
 
   // Agents' bindings.
 
   binding(canvas: CanvasId, agent: string): AgentBinding | undefined {
-    const row = this.#store
-      .prepare('SELECT * FROM agent_worktree WHERE canvas_id = ? AND agent_id = ?')
-      .get(canvas, agent);
+    const row = this.#row('agent_worktree', agentKey(canvas, agent));
     return row === undefined ? undefined : bindingOf(row);
   }
 
   /** Every agent's binding on the canvas, by agent. */
   bindingsOf(canvas: CanvasId): AgentBinding[] {
-    return this.#store
-      .prepare('SELECT * FROM agent_worktree WHERE canvas_id = ? ORDER BY agent_id')
-      .all(canvas)
-      .map(bindingOf);
+    return ordered(this.#indexed('agent_worktree', 'canvas', canvas), 'agent_id').map(bindingOf);
   }
 
   /** The bindings to a workspace of the canvas, by agent. */
   bindingsTo(canvas: CanvasId, workspace: string): AgentBinding[] {
-    return this.#store
-      .prepare(
-        'SELECT * FROM agent_worktree WHERE canvas_id = ? AND workspace_id = ? ORDER BY agent_id',
-      )
-      .all(canvas, workspace)
-      .map(bindingOf);
+    return ordered(
+      this.#indexed('agent_worktree', 'workspace', tuple(canvas, workspace)),
+      'agent_id',
+    ).map(bindingOf);
   }
 
   /**
@@ -634,14 +873,25 @@ export class WorkspaceStore {
     }
     const kept = this.binding(canvas, agent);
     const generation = kept?.desired?.generation ?? this.#next(kept?.generation ?? 0);
-    this.#store
-      .prepare(
-        `INSERT INTO agent_worktree (canvas_id, agent_id, workspace_id, generation)
+    this.#keep('agent_worktree', {
+      ...this.#row('agent_worktree', agentKey(canvas, agent)),
+      canvas_id: canvas,
+      agent_id: agent,
+      workspace_id: workspace,
+      generation,
+      desired_generation: null,
+      desired_owner_key: null,
+    });
+    this.#store.run(
+      `INSERT INTO agent_worktree (canvas_id, agent_id, workspace_id, generation)
          VALUES (?, ?, ?, ?)
          ON CONFLICT (canvas_id, agent_id) DO UPDATE SET workspace_id = excluded.workspace_id,
            generation = excluded.generation, desired_generation = NULL, desired_owner_key = NULL`,
-      )
-      .run(canvas, agent, workspace, generation);
+      canvas,
+      agent,
+      workspace,
+      generation,
+    );
     return { canvas, agent, workspace, generation, desired: null };
   }
 
@@ -658,12 +908,18 @@ export class WorkspaceStore {
       generation: this.#next(Math.max(kept.generation, kept.desired?.generation ?? 0)),
       owner,
     };
-    this.#store
-      .prepare(
-        `UPDATE agent_worktree SET desired_generation = ?, desired_owner_key = ?
+    this.#change('agent_worktree', agentKey(canvas, agent), {
+      desired_generation: desired.generation,
+      desired_owner_key: desired.owner,
+    });
+    this.#store.run(
+      `UPDATE agent_worktree SET desired_generation = ?, desired_owner_key = ?
          WHERE canvas_id = ? AND agent_id = ?`,
-      )
-      .run(desired.generation, desired.owner, canvas, agent);
+      desired.generation,
+      desired.owner,
+      canvas,
+      agent,
+    );
     return { ...kept, desired };
   }
 
@@ -671,20 +927,27 @@ export class WorkspaceStore {
   clearPlan(canvas: CanvasId, agent: string): AgentBinding {
     const kept = this.binding(canvas, agent);
     if (kept === undefined) throw notFound('binding', `${canvas}/${agent}`);
-    this.#store
-      .prepare(
-        `UPDATE agent_worktree SET desired_generation = NULL, desired_owner_key = NULL
+    this.#change('agent_worktree', agentKey(canvas, agent), {
+      desired_generation: null,
+      desired_owner_key: null,
+    });
+    this.#store.run(
+      `UPDATE agent_worktree SET desired_generation = NULL, desired_owner_key = NULL
          WHERE canvas_id = ? AND agent_id = ?`,
-      )
-      .run(canvas, agent);
+      canvas,
+      agent,
+    );
     return { ...kept, desired: null };
   }
 
   /** Within a write: the agent is bound to no workspace any more (none if it was bound to none). */
   unbind(canvas: CanvasId, agent: string): void {
-    this.#store
-      .prepare('DELETE FROM agent_worktree WHERE canvas_id = ? AND agent_id = ?')
-      .run(canvas, agent);
+    this.#drop('agent_worktree', agentKey(canvas, agent));
+    this.#store.run(
+      'DELETE FROM agent_worktree WHERE canvas_id = ? AND agent_id = ?',
+      canvas,
+      agent,
+    );
   }
 
   /**
@@ -693,45 +956,44 @@ export class WorkspaceStore {
    * never takes one an older session of it was started at.
    */
   #next(after: number): number {
-    const last = this.#store
-      .prepare('SELECT workspace_generation FROM meta WHERE id = 1')
-      .get()?.workspace_generation;
+    if (this.#unread !== undefined) throw this.#unread;
+    const last = this.#generation;
     checkGeneration(last);
     const next = Math.max(Math.trunc(this.#now()), after + 1, last + 1);
     checkGeneration(next);
-    this.#store.prepare('UPDATE meta SET workspace_generation = ? WHERE id = 1').run(next);
+    this.#store.undo(() => {
+      this.#generation = last;
+    });
+    this.#generation = next;
+    this.#store.run('UPDATE meta SET workspace_generation = ? WHERE id = 1', next);
     return next;
   }
 
   // Jobs.
 
   job(id: string): JobRecord | undefined {
-    const row = this.#store.prepare('SELECT * FROM worktree_job WHERE id = ?').get(id);
+    const row = this.#row('worktree_job', id);
     return row === undefined ? undefined : jobOf(row);
   }
 
   /** The job of `kind` going on for the workspace, if one does. */
   openJob(workspace: string, kind: JobKind): JobRecord | undefined {
-    const row = this.#store
-      .prepare('SELECT * FROM worktree_job WHERE workspace_id = ? AND kind = ? AND outcome IS NULL')
-      .get(workspace, kind);
+    const row = this.#indexed('worktree_job', 'open', tuple(workspace, kind))[0];
     return row === undefined ? undefined : jobOf(row);
   }
 
   /** Every job going on, of every canvas, oldest first: what a restart finishes. */
   openJobs(): JobRecord[] {
-    return this.#store
-      .prepare('SELECT * FROM worktree_job WHERE outcome IS NULL ORDER BY created_at, id')
-      .all()
-      .map(jobOf);
+    return ordered(this.#indexed('worktree_job', 'unfinished', 'yes'), 'created_at', 'id').map(
+      jobOf,
+    );
   }
 
   /** Every job of the workspace, oldest first. */
   jobsOf(workspace: string): JobRecord[] {
-    return this.#store
-      .prepare('SELECT * FROM worktree_job WHERE workspace_id = ? ORDER BY created_at, id')
-      .all(workspace)
-      .map(jobOf);
+    return ordered(this.#indexed('worktree_job', 'workspace', workspace), 'created_at', 'id').map(
+      jobOf,
+    );
   }
 
   /**
@@ -748,8 +1010,7 @@ export class WorkspaceStore {
         kept.kind === asked.kind &&
         kept.generation === asked.generation &&
         kept.expectedIdentity === asked.expectedIdentity &&
-        this.#store.prepare('SELECT intent_hash FROM worktree_job WHERE id = ?').get(asked.id)
-          ?.intent_hash === intentHash(asked.payload);
+        this.#row('worktree_job', asked.id)?.intent_hash === intentHash(asked.payload);
       if (same) return kept;
       throw new WorkspaceStoreError('refused', `The job ${asked.id} was recorded as another.`);
     }
@@ -761,24 +1022,34 @@ export class WorkspaceStore {
     }
     const at = this.#now();
     const recorded: JobRecord = { ...asked, outcome: null, createdAt: at, updatedAt: at };
-    this.#store
-      .prepare(
-        `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, expected_identity,
+    this.#keep('worktree_job', {
+      id: recorded.id,
+      workspace_id: recorded.workspace,
+      kind: recorded.kind,
+      phase: recorded.phase,
+      generation: recorded.generation,
+      expected_identity: recorded.expectedIdentity,
+      payload: JSON.stringify(recorded.payload),
+      intent_hash: intentHash(recorded.payload),
+      outcome: null,
+      created_at: at,
+      updated_at: at,
+    });
+    this.#store.run(
+      `INSERT INTO worktree_job (id, workspace_id, kind, phase, generation, expected_identity,
            payload, intent_hash, outcome, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-      )
-      .run(
-        recorded.id,
-        recorded.workspace,
-        recorded.kind,
-        recorded.phase,
-        recorded.generation,
-        recorded.expectedIdentity,
-        JSON.stringify(recorded.payload),
-        intentHash(recorded.payload),
-        at,
-        at,
-      );
+      recorded.id,
+      recorded.workspace,
+      recorded.kind,
+      recorded.phase,
+      recorded.generation,
+      recorded.expectedIdentity,
+      JSON.stringify(recorded.payload),
+      intentHash(recorded.payload),
+      at,
+      at,
+    );
     return recorded;
   }
 
@@ -801,9 +1072,18 @@ export class WorkspaceStore {
       ...(payload === undefined ? {} : { payload: checkPayload(payload) }),
       updatedAt: this.#now(),
     };
-    this.#store
-      .prepare('UPDATE worktree_job SET phase = ?, payload = ?, updated_at = ? WHERE id = ?')
-      .run(next.phase, JSON.stringify(next.payload), next.updatedAt, id);
+    this.#change('worktree_job', id, {
+      phase: next.phase,
+      payload: JSON.stringify(next.payload),
+      updated_at: next.updatedAt,
+    });
+    this.#store.run(
+      'UPDATE worktree_job SET phase = ?, payload = ?, updated_at = ? WHERE id = ?',
+      next.phase,
+      JSON.stringify(next.payload),
+      next.updatedAt,
+      id,
+    );
     return next;
   }
 
@@ -812,9 +1092,13 @@ export class WorkspaceStore {
     if (!OUTCOMES.includes(outcome)) throw invalid(`${outcome} isn’t how a job ends.`);
     const kept = this.#openJob(id);
     const next: JobRecord = { ...kept, outcome, updatedAt: this.#now() };
-    this.#store
-      .prepare('UPDATE worktree_job SET outcome = ?, updated_at = ? WHERE id = ?')
-      .run(outcome, next.updatedAt, id);
+    this.#change('worktree_job', id, { outcome, updated_at: next.updatedAt });
+    this.#store.run(
+      'UPDATE worktree_job SET outcome = ?, updated_at = ? WHERE id = ?',
+      outcome,
+      next.updatedAt,
+      id,
+    );
     return next;
   }
 
@@ -830,9 +1114,7 @@ export class WorkspaceStore {
   // Setups.
 
   setup(workspace: string): SetupRecord | undefined {
-    const row = this.#store
-      .prepare('SELECT * FROM worktree_setup WHERE workspace_id = ?')
-      .get(workspace);
+    const row = this.#row('worktree_setup', workspace);
     return row === undefined ? undefined : setupOf(row);
   }
 
@@ -856,9 +1138,22 @@ export class WorkspaceStore {
       logKey: null,
       exitCode: null,
     };
-    this.#store
-      .prepare(
-        `INSERT INTO worktree_setup (workspace_id, generation, command_snapshot, source, spec_hash,
+    this.#keep('worktree_setup', {
+      ...this.#row('worktree_setup', workspace),
+      workspace_id: workspace,
+      generation: offered.generation,
+      command_snapshot: offered.command,
+      source: offered.source,
+      spec_hash: offered.specHash,
+      copy_manifest_hash: offered.copyManifestHash,
+      state: 'pending',
+      approved_by: null,
+      approved_at: null,
+      log_key: null,
+      exit_code: null,
+    });
+    this.#store.run(
+      `INSERT INTO worktree_setup (workspace_id, generation, command_snapshot, source, spec_hash,
            copy_manifest_hash, state, approved_by, approved_at, log_key, exit_code)
          VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL)
          ON CONFLICT (workspace_id) DO UPDATE SET generation = excluded.generation,
@@ -866,15 +1161,13 @@ export class WorkspaceStore {
            spec_hash = excluded.spec_hash, copy_manifest_hash = excluded.copy_manifest_hash,
            state = 'pending', approved_by = NULL, approved_at = NULL, log_key = NULL,
            exit_code = NULL`,
-      )
-      .run(
-        workspace,
-        offered.generation,
-        offered.command,
-        offered.source,
-        offered.specHash,
-        offered.copyManifestHash,
-      );
+      workspace,
+      offered.generation,
+      offered.command,
+      offered.source,
+      offered.specHash,
+      offered.copyManifestHash,
+    );
     return offered;
   }
 
@@ -901,22 +1194,33 @@ export class WorkspaceStore {
       logKey,
       exitCode: null,
     };
-    this.#store
-      .prepare(
-        `UPDATE worktree_setup SET state = 'running', approved_by = ?, approved_at = ?, log_key = ?,
+    this.#change('worktree_setup', workspace, {
+      state: 'running',
+      approved_by: by,
+      approved_at: next.approvedAt,
+      log_key: logKey,
+      exit_code: null,
+    });
+    this.#store.run(
+      `UPDATE worktree_setup SET state = 'running', approved_by = ?, approved_at = ?, log_key = ?,
            exit_code = NULL
          WHERE workspace_id = ?`,
-      )
-      .run(by, next.approvedAt, logKey, workspace);
+      by,
+      next.approvedAt,
+      logKey,
+      workspace,
+    );
     return next;
   }
 
   /** Within a write: the workspace's setup at `generation` is skipped (stale as for startSetup). */
   skipSetup(workspace: string, generation: number): SetupRecord {
     const kept = this.#decidable(workspace, generation);
-    this.#store
-      .prepare("UPDATE worktree_setup SET state = 'skipped' WHERE workspace_id = ?")
-      .run(workspace);
+    this.#change('worktree_setup', workspace, { state: 'skipped' });
+    this.#store.run(
+      "UPDATE worktree_setup SET state = 'skipped' WHERE workspace_id = ?",
+      workspace,
+    );
     return { ...kept, state: 'skipped' };
   }
 
@@ -936,9 +1240,13 @@ export class WorkspaceStore {
       );
     }
     const state: SetupState = exitCode === 0 ? 'done' : 'failed';
-    this.#store
-      .prepare('UPDATE worktree_setup SET state = ?, exit_code = ? WHERE workspace_id = ?')
-      .run(state, exitCode, workspace);
+    this.#change('worktree_setup', workspace, { state, exit_code: exitCode });
+    this.#store.run(
+      'UPDATE worktree_setup SET state = ?, exit_code = ? WHERE workspace_id = ?',
+      state,
+      exitCode,
+      workspace,
+    );
     return { ...kept, state, exitCode };
   }
 
@@ -955,9 +1263,11 @@ export class WorkspaceStore {
         `The workspace ${workspace}’s setup at ${String(generation)} isn’t running.`,
       );
     }
-    this.#store
-      .prepare("UPDATE worktree_setup SET state = 'interrupted' WHERE workspace_id = ?")
-      .run(workspace);
+    this.#change('worktree_setup', workspace, { state: 'interrupted' });
+    this.#store.run(
+      "UPDATE worktree_setup SET state = 'interrupted' WHERE workspace_id = ?",
+      workspace,
+    );
     return { ...kept, state: 'interrupted' };
   }
 
@@ -966,13 +1276,11 @@ export class WorkspaceStore {
    * it did what it does is unknown, and so is never run again by itself. Returns their workspaces.
    */
   interruptSetups(): string[] {
-    return this.#store
-      .prepare(
-        "UPDATE worktree_setup SET state = 'interrupted' WHERE state = 'running' RETURNING workspace_id",
-      )
-      .all()
-      .map(({ workspace_id: workspace }) => String(workspace))
-      .sort();
+    const running = this.#indexed('worktree_setup', 'state', 'running');
+    for (const row of running)
+      this.#change('worktree_setup', String(row.workspace_id), { state: 'interrupted' });
+    this.#store.run("UPDATE worktree_setup SET state = 'interrupted' WHERE state = 'running'");
+    return running.map(({ workspace_id: workspace }) => String(workspace)).sort();
   }
 
   #decidable(workspace: string, generation: number): SetupRecord {
@@ -990,9 +1298,7 @@ export class WorkspaceStore {
   // Repositories' setup.
 
   projectSetup(repository: string): ProjectSetup | undefined {
-    const row = this.#store
-      .prepare('SELECT * FROM project_setup WHERE repository_id = ?')
-      .get(repository);
+    const row = this.#row('project_setup', repository);
     return row === undefined ? undefined : projectSetupOf(row);
   }
 
@@ -1037,16 +1343,27 @@ export class WorkspaceStore {
   }
 
   #keepProjectSetup(setup: ProjectSetup): ProjectSetup {
-    this.#store
-      .prepare(
-        `INSERT INTO project_setup (repository_id, command, shell_kind, always_spec_hash,
+    this.#keep('project_setup', {
+      ...this.#row('project_setup', setup.repository),
+      repository_id: setup.repository,
+      command: setup.command,
+      shell_kind: setup.shellKind,
+      always_spec_hash: setup.alwaysSpecHash,
+      changed_at: setup.changedAt,
+    });
+    this.#store.run(
+      `INSERT INTO project_setup (repository_id, command, shell_kind, always_spec_hash,
            changed_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (repository_id) DO UPDATE SET command = excluded.command,
            shell_kind = excluded.shell_kind, always_spec_hash = excluded.always_spec_hash,
            changed_at = excluded.changed_at`,
-      )
-      .run(setup.repository, setup.command, setup.shellKind, setup.alwaysSpecHash, setup.changedAt);
+      setup.repository,
+      setup.command,
+      setup.shellKind,
+      setup.alwaysSpecHash,
+      setup.changedAt,
+    );
     return setup;
   }
 }
