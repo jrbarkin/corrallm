@@ -16,7 +16,7 @@ import { fakeConnector } from '../sessions/test-fake';
 import type { Caller, OutsideCaller } from './caller';
 import type { WatchFolder } from './canvas/watch';
 import { FileWatch } from './canvas/watch';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { mintTrustedPath } from './host';
 import type { HostServices } from './host';
@@ -375,11 +375,11 @@ describe('a file review', () => {
     const review = await reviewOf(TEAM);
 
     // A write that fails keeps nothing of it: the canvas as it was, the review open.
-    const release = refuseWrites(profile, 'file_review', 'The disk is full.');
+    const release = await refuseWrites(databaseOf(core), 'file_review', 'The disk is full.');
     try {
       expect(await answer(TEAM, review.id, 'apply')).toMatchObject({ ok: false });
     } finally {
-      release();
+      await release();
     }
     expect(await labelsOf(TEAM)).toEqual(['Lead', 'Builder']);
     expect((await reviewOf(TEAM)).id).toBe(review.id);

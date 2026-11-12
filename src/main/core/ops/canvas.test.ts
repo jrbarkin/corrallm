@@ -7,6 +7,7 @@ import type { ApiServer } from '../../api/mcp';
 import type { TokenCaller } from '../caller';
 import type { Core } from '../core';
 import { readOnDisk, refuseWrites } from '../store/test-store';
+import { databaseOf } from '../store/test-core';
 import { CALLERS, CANVAS } from '../test-registry';
 import { startWorld } from '../test-world';
 
@@ -140,7 +141,7 @@ describe('canvas.rename', () => {
   });
 
   it('changes nothing when its commit fails, and runs a repeated request again', async () => {
-    const allow = refuseWrites(world.profile, 'node', 'The disk is full');
+    const allow = await refuseWrites(databaseOf(world.core), 'node', 'The disk is full');
     const args = { node: 'helper', label: 'Assistant', request: REQUEST };
     expect(await world.core.call('canvas.rename', args, ORCHESTRATOR)).toEqual({
       ok: false,
@@ -151,7 +152,7 @@ describe('canvas.rename', () => {
     });
     expect(labelOf('helper')).toBe('Helper');
     expect(revisions()).toEqual([]);
-    allow();
+    await allow();
     expect(await world.core.call('canvas.rename', args, ORCHESTRATOR)).toEqual({
       ok: true,
       value: { revs: { [KEY]: 2 } },

@@ -214,6 +214,7 @@ export class Store {
   #scheduled = false;
   /** The write whose function is running, if one is. */
   #current: WriteContext | undefined;
+  #returning = false;
   /** Cancels the checkpoint due, if one is. */
   #cancelCheckpoint: (() => void) | undefined;
   /** When the first commit the log holds unchecked came, if one did. */
@@ -273,6 +274,7 @@ export class Store {
    * themselves, or each would be kept apart.
    */
   prepare(sql: string): Statement {
+    this.#sqlAllowed();
     if (this.#failed !== undefined) throw this.#failed;
     if (this.#current?.planned === true) {
       throw new Error(
@@ -288,12 +290,12 @@ export class Store {
    */
   #statement(sql: string): Statement {
     const writer = this.#writer;
-    if (writer === undefined) return this.#prepare(sql);
-    if (this.#current === undefined) this.#prepare(sql);
+    if (writer === undefined || this.#current === undefined) this.#prepare(sql);
     const kept = this.#facades.get(sql);
     if (kept !== undefined) return kept;
     let readBigInts = false;
     const inside = (): boolean => {
+      this.#sqlAllowed();
       if (this.#failed !== undefined) throw this.#failed;
       if (this.#current?.planned === true) throw new Error('A planned write reads no SQL.');
       return this.#current !== undefined;
@@ -305,15 +307,15 @@ export class Store {
     };
     const statement = {
       get: (...params: SqlValue[]) =>
-        inside()
+        inside() && writer !== undefined
           ? writer.sync({ op: 'get', sql, params, readBigInts }).row
           : reading().get(...params),
       all: (...params: SqlValue[]) =>
-        inside()
+        inside() && writer !== undefined
           ? (writer.sync({ op: 'all', sql, params, readBigInts }).rows ?? [])
           : reading().all(...params),
       run: (...params: SqlValue[]) => {
-        if (!inside()) return reading().run(...params);
+        if (!inside() || writer === undefined) return reading().run(...params);
         const result = writer.sync({ op: 'run', sql, params, readBigInts });
         return { changes: result.changes ?? 0, lastInsertRowid: result.lastInsertRowid ?? 0 };
       },
@@ -336,6 +338,7 @@ export class Store {
 
   /** Runs SQL without parameters (statements separated by semicolons). */
   exec(sql: string): void {
+    this.#sqlAllowed();
     if (this.#failed !== undefined) throw this.#failed;
     if (this.#current?.planned === true)
       throw new Error('A planned write runs no SQL but its own.');
@@ -353,9 +356,11 @@ export class Store {
    * Runs `run` in a transaction, committed once it returns, and returns what it returned; within
    * one, as a savepoint (transaction.ts). Synchronous: what it did is on disk once it returns, its
    * log flushed on the loop (a flush that fails failing the store closed). Refused once the store
-   * is closing, but within a write it commits, and once it failed closed.
+   * is closing, but within a write it commits, and once it failed closed. Test callers must be
+   * quiescent; live work uses write or writeBlocking, which wait their turn in the lane.
    */
   tx<T>(run: () => T): T {
+    this.#sqlAllowed();
     if (this.#failed !== undefined) throw this.#failed;
     const writer = this.#writer;
     const outermost =
@@ -376,7 +381,7 @@ export class Store {
       this.#draining !== undefined
     ) {
       throw new Error(
-        'A synchronous transaction cannot overlap the store’s write lane or checkpoint.',
+        'A synchronous transaction cannot overlap the store’s write lane or checkpoint. Queue it with writeBlocking instead.',
       );
     }
     if (this.#shut) throw closed();
@@ -517,7 +522,8 @@ export class Store {
   /**
    * Within a write: as `run`, giving `then` the rows the statement returned (RETURNING), on the
    * loop, once the write's statements have run: in a planned write before the next write is
-   * planned and before this one resolves.
+   * planned and before this one resolves. A result callback reads memory and its rows only;
+   * prepare (including cached statements), exec, tx and statement methods are refused in it.
    */
   runReturning(sql: string, params: readonly SqlValue[], then: (rows: Row[]) => void): void {
     this.#step({ sql, params, then });
@@ -546,11 +552,29 @@ export class Store {
   }
 
   #step(step: Step): void {
+    this.#sqlAllowed();
     const context = this.#context('A statement');
     if (context.planned) {
       context.steps.push(step);
     } else {
-      execute(this.#statement(step.sql), step)?.();
+      const result = execute(this.#statement(step.sql), step);
+      if (result !== undefined) this.#result(result);
+    }
+  }
+
+  #sqlAllowed(): void {
+    if (this.#returning)
+      throw new Error('A result callback reads memory and returned rows only, and runs no SQL.');
+  }
+
+  /** Result callbacks have no SQL connection: both executors expose only memory and their rows. */
+  #result(run: () => void): void {
+    const outer = this.#returning;
+    this.#returning = true;
+    try {
+      run();
+    } finally {
+      this.#returning = outer;
     }
   }
 
@@ -581,7 +605,7 @@ export class Store {
         const deliver = execute(this.#prepare(step.sql), step);
         if (deliver !== undefined) delivered.push(deliver);
       }
-      for (const deliver of delivered) deliver();
+      for (const deliver of delivered) this.#result(deliver);
       return value;
     });
   }
@@ -925,7 +949,9 @@ export class Store {
         } else {
           let refused: { error: unknown } | undefined;
           try {
-            deliver(context, outcome.rows);
+            this.#result(() => {
+              deliver(context, outcome.rows);
+            });
           } catch (error) {
             refused = { error };
           }
@@ -1126,6 +1152,7 @@ export class Store {
    * the checkpointer's connection is closed: nothing else in the process keeps the log's index.
    */
   async #forget(first: { frames: number; commit: number } | undefined): Promise<void> {
+    if (this.#writer?.lost !== undefined) await this.#writer.stop();
     while (this.#flushing !== undefined || this.#draining !== undefined) {
       await (this.#flushing ?? this.#draining);
     }
@@ -1134,6 +1161,7 @@ export class Store {
     if (this.#writer !== undefined && this.#writer.lost === undefined) {
       await this.#writer.rollback().catch(() => undefined);
     }
+    if (this.#writer?.lost !== undefined) await this.#writer.stop();
     if (first !== undefined) {
       const unsafe = this.#taken
         .filter(({ commits }) => commits >= first.commit)
@@ -1143,6 +1171,8 @@ export class Store {
       } catch (error) {
         console.error('Could not remove snapshots of what the core’s database lost:', error);
       }
+      // Removing snapshots yields too: a loss heard meanwhile must finish before the WAL cut.
+      if (this.#writer?.lost !== undefined) await this.#writer.stop();
       try {
         const page = this.#prepare('PRAGMA page_size').get()?.page_size as number;
         const log = this.#logFile();

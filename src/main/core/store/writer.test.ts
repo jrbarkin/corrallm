@@ -1,4 +1,6 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { ftruncateSync } from 'node:fs';
+import type * as Fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MessagePort } from 'node:worker_threads';
@@ -13,9 +15,16 @@ import { checkStore } from '../selftest';
 import { Checkpointer } from './checkpointer';
 import { OPEN_DEFAULTS, openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
+import * as Snapshots from './snapshots';
 import { SYSTEM_DEPS } from './store';
 import type { Store, StoreDeps } from './store';
+import { refuseWrites } from './test-store';
 import { Writer } from './writer';
+
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof Fs>();
+  return { ...actual, ftruncateSync: vi.fn(actual.ftruncateSync) };
+});
 
 let profile: string;
 const stores: Store[] = [];
@@ -47,6 +56,9 @@ afterEach(async () => {
   for (const store of stores.splice(0)) await store.close();
   for (const writer of writers.splice(0)) await writer.close();
   vi.restoreAllMocks();
+  vi.mocked(ftruncateSync).mockImplementation(
+    (await vi.importActual<typeof Fs>('node:fs')).ftruncateSync,
+  );
   await rm(profile, { recursive: true, force: true });
 });
 
@@ -171,6 +183,263 @@ describe('the writer thread', () => {
 });
 
 describe('the store with its writer', () => {
+  it('releases an acknowledged transaction before taking later queued work', async () => {
+    const gate = hold();
+    const store = await open(true, { ...SYSTEM_DEPS, hold: gate });
+    store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
+    await store.write(() => {
+      store.run(INSERT, 'acknowledged');
+    });
+    const other = connect(store.file, { timeout: 0 });
+    try {
+      // No later work: acknowledgement leaves no writer transaction holding the lock.
+      expect(other.prepare('SELECT text FROM note').all()).toEqual([{ text: 'acknowledged' }]);
+      other.exec('BEGIN IMMEDIATE; ROLLBACK');
+      Atomics.store(gate, 0, 1);
+      const later = store.write(() => {
+        store.run(INSERT, 'later');
+      });
+      await vi.waitFor(() => {
+        expect(Atomics.load(gate, 1)).toBe(1);
+      });
+      expect(() => {
+        other.exec('BEGIN IMMEDIATE');
+      }).toThrow(/locked/);
+      expect(() => refuseWrites(profile, 'note', 'Raw fault')).toThrow(/locked/);
+      let installed = false;
+      const installing = Promise.resolve(refuseWrites(store, 'note', 'Not this write')).then(
+        (allow) => {
+          installed = true;
+          return allow;
+        },
+      );
+      await turn();
+      expect(installed).toBe(false);
+      Atomics.store(gate, 0, 0);
+      Atomics.notify(gate, 0);
+      await later;
+      const allow = await installing;
+      await expect(
+        store.write(() => {
+          store.run(INSERT, 'refused');
+        }),
+      ).rejects.toThrow('Not this write');
+      await allow();
+      await store.write(() => {
+        store.run(INSERT, 'allowed');
+      });
+      expect(rows(store)).toEqual([
+        { text: 'acknowledged' },
+        { text: 'later' },
+        { text: 'allowed' },
+      ]);
+    } finally {
+      other.close();
+    }
+  });
+
+  it.each(['quiet', 'errored'])(
+    'waits for a %s writer to exit before taking back its log',
+    async (loss) => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const actual = await vi.importActual<typeof Fs>('node:fs');
+      let worker: Worker | undefined;
+      const store = await open(true, {
+        ...SYSTEM_DEPS,
+        writerStarted: (started) => {
+          worker = started;
+        },
+      });
+      store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
+      await store.write(() => {
+        store.run(INSERT, 'durable');
+      });
+      if (worker === undefined) throw new Error('No writer');
+      let exited = false;
+      worker.once('exit', () => {
+        exited = true;
+      });
+      const stopping = Promise.withResolvers<undefined>();
+      const stopped = Promise.withResolvers<undefined>();
+      releases.push(() => {
+        stopped.resolve(undefined);
+      });
+      const terminate = worker.terminate.bind(worker);
+      vi.spyOn(worker, 'terminate').mockImplementationOnce(async () => {
+        stopping.resolve(undefined);
+        await stopped.promise;
+        return terminate();
+      });
+      const cuts: boolean[] = [];
+      vi.mocked(ftruncateSync).mockImplementation((...args) => {
+        cuts.push(exited);
+        actual.ftruncateSync(...args);
+      });
+      const preceding = store.write(() => {
+        store.run(INSERT, 'not acknowledged');
+      });
+      const writing = store.writeBlocking(() => {
+        if (loss === 'errored') {
+          worker?.emit('error', new Error('Test writer fault'));
+        } else {
+          vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out');
+          store
+            .prepare(
+              'WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) SELECT sum(i) FROM n',
+            )
+            .get();
+        }
+      });
+      const outcome = Promise.allSettled([preceding, writing]);
+      await stopping.promise;
+      expect(cuts).toEqual([]);
+      stopped.resolve(undefined);
+      await outcome;
+      await store.close();
+      expect(exited).toBe(true);
+      expect(cuts).toEqual([true]);
+      expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+    },
+  );
+
+  it('directs synchronous tools to the queued lane while a drain is in flight', async () => {
+    const gate = hold();
+    const store = await open(true, { ...SYSTEM_DEPS, hold: gate });
+    store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
+    Atomics.store(gate, 0, 1);
+    const writing = store.write(() => {
+      store.run(INSERT, 'first');
+    });
+    await vi.waitFor(() => {
+      expect(Atomics.load(gate, 1)).toBe(1);
+    });
+    expect(() => {
+      store.tx(() => {
+        store.run(INSERT, 'tx');
+      });
+    }).toThrow(/writeBlocking/);
+    expect(() => {
+      store.exec("INSERT INTO note VALUES ('exec')");
+    }).toThrow(/writeBlocking/);
+    const queued = store.writeBlocking(() => {
+      store.exec("INSERT INTO note VALUES ('queued')");
+    });
+    Atomics.store(gate, 0, 0);
+    Atomics.notify(gate, 0);
+    await Promise.all([writing, queued]);
+    expect(rows(store)).toEqual([{ text: 'first' }, { text: 'queued' }]);
+  });
+
+  it('waits for a writer lost during snapshot cleanup before cutting the log', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const actual = await vi.importActual<typeof Fs>('node:fs');
+    let worker: Worker | undefined;
+    let failFlush = false;
+    const store = await open(true, {
+      ...SYSTEM_DEPS,
+      writerStarted: (started) => {
+        worker = started;
+      },
+      flush: async (fd) => {
+        if (failFlush) throw new Error('Test flush fault');
+        await SYSTEM_DEPS.flush(fd);
+      },
+    });
+    store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
+    await store.write(() => {
+      store.run(INSERT, 'durable');
+    });
+    if (worker === undefined) throw new Error('No writer');
+    let exited = false;
+    worker.once('exit', () => {
+      exited = true;
+    });
+    const stopping = Promise.withResolvers<undefined>();
+    const stopped = Promise.withResolvers<undefined>();
+    releases.push(() => {
+      stopped.resolve(undefined);
+    });
+    const terminate = worker.terminate.bind(worker);
+    vi.spyOn(worker, 'terminate').mockImplementationOnce(async () => {
+      stopping.resolve(undefined);
+      await stopped.promise;
+      return terminate();
+    });
+    const removing = Promise.withResolvers<undefined>();
+    const remove = Promise.withResolvers<undefined>();
+    const removed = Promise.withResolvers<undefined>();
+    releases.push(() => {
+      remove.resolve(undefined);
+    });
+    const discard = Snapshots.discardSnapshots;
+    vi.spyOn(Snapshots, 'discardSnapshots').mockImplementationOnce(async (...args) => {
+      removing.resolve(undefined);
+      await remove.promise;
+      await discard(...args);
+      removed.resolve(undefined);
+    });
+    const cuts: boolean[] = [];
+    vi.mocked(ftruncateSync).mockImplementation((...args) => {
+      cuts.push(exited);
+      actual.ftruncateSync(...args);
+    });
+    failFlush = true;
+    const writing = Promise.allSettled([
+      store.write(() => {
+        store.run(INSERT, 'not acknowledged');
+      }),
+    ]);
+    await removing.promise;
+    worker.emit('error', new Error('Test writer fault'));
+    await stopping.promise;
+    remove.resolve(undefined);
+    await removed.promise;
+    await turn();
+    expect(cuts).toEqual([]);
+    stopped.resolve(undefined);
+    expect(await writing).toMatchObject([
+      {
+        status: 'rejected',
+        reason: { message: expect.stringMatching(/could not be written/) as string },
+      },
+    ]);
+    await store.close();
+    expect(cuts).toEqual([true]);
+    expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+  });
+
+  it.each(
+    [false, true].flatMap((writer) =>
+      (['planned', 'blocking', 'tx'] as const).map((kind) => ({ writer, kind })),
+    ),
+  )(
+    'a $kind result callback reads memory and returned rows only, writer $writer',
+    async ({ writer, kind }) => {
+      const store = await open(writer);
+      store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
+      const cached = store.prepare('SELECT text FROM note');
+      const returning = () => {
+        store.runReturning(`${INSERT} RETURNING text`, ['returned'], (returned) => {
+          expect(returned).toEqual([{ text: 'returned' }]);
+          expect(() => store.prepare('SELECT text FROM note').all()).toThrow(/result callback/);
+          expect(() => cached.all()).toThrow(/result callback/);
+          expect(() => {
+            store.exec('SELECT 1');
+          }).toThrow(/result callback/);
+          expect(() => {
+            store.tx(() => undefined);
+          }).toThrow(/result callback/);
+          expect(() => {
+            store.run(INSERT, 'extra');
+          }).toThrow(/result callback/);
+        });
+      };
+      if (kind === 'tx') store.tx(returning);
+      else await (kind === 'blocking' ? store.writeBlocking(returning) : store.write(returning));
+      expect(rows(store)).toEqual([{ text: 'returned' }]);
+    },
+  );
+
   it('checks the writing connection’s pragmas in the native store check', async () => {
     await expect(checkStore(await open())).resolves.toMatch(/synchronous NORMAL/);
   });

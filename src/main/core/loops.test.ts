@@ -12,7 +12,7 @@ import type { NeedsItem } from '../../shared/model/needs';
 import { fakeConnector } from '../sessions/test-fake';
 import type { FakeConnector } from '../sessions/fake';
 import type { AgentCaller, Caller, OutsideCaller } from './caller';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import { SYSTEM_DEPS } from './store/store';
 import type { StoreDeps } from './store/store';
 import type { Core } from './core';
@@ -562,12 +562,12 @@ describe('the counts and the hold across a restart and a failed write', () => {
   it('are written with the turn they count: a turn whose journal is refused is never sent, nor counted', async () => {
     await keepCanvas();
     await start();
-    const release = refuseWrites(profile, 'loop_pair', 'The disk is full.');
+    const release = await refuseWrites(databaseOf(core), 'loop_pair', 'The disk is full.');
     const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Hello' }, PLANNER);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(sent()).toEqual([]);
     expect(await find(id)).toMatchObject({ state: 'pending' });
-    release();
+    await release();
     // It is tried again, and counted once however many times it was tried: itself and its reply.
     await vi.waitFor(
       async () => {
@@ -676,12 +676,12 @@ describe('the counts and the hold across a restart and a failed write', () => {
     await start();
     const open = core?.engines.canvas(CANVAS);
     if (open === undefined) throw new Error('The canvas is not open.');
-    const release = refuseWrites(profile, 'loop_pair', 'The disk is full.');
+    const release = await refuseWrites(databaseOf(core), 'loop_pair', 'The disk is full.');
     const { id } = await ok<{ id: string }>('message', { to: 'builder', body: 'Hello' }, PLANNER);
     // Its sender takes it back while its delivering record is still on its way to the disk.
     expect(open.messages.get(id)?.state).toBe('delivering');
     await open.delivery.withdraw(id, 'agent:planner').catch(() => undefined);
-    release();
+    await release();
     await open.messages.durable();
     expect(open.messages.get(id)?.state).toBe('withdrawn');
     expect(sent()).toEqual([]);

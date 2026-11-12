@@ -343,6 +343,7 @@ export class Writer {
   #next = 0;
   #lost: Error | undefined;
   #closing = false;
+  #stopping: Promise<void> | undefined;
 
   private constructor(worker: Worker, port: MessagePort, flag: Int32Array) {
     this.worker = worker;
@@ -400,7 +401,7 @@ export class Writer {
       await ready;
     } catch (error) {
       const stopped = ready.catch(() => undefined);
-      await worker.terminate();
+      await writer.stop();
       await stopped;
       port1.close();
       throw error;
@@ -432,6 +433,8 @@ export class Writer {
     for (const asked of [...this.#asked.values()]) asked.reject(error);
     this.#asked.clear();
     this.#port.unref();
+    // A quiet or errored thread may still be inside SQLite. Stop it before recovery touches WAL.
+    void this.stop().catch(() => undefined);
     if (!this.#closing) for (const listener of this.#listeners) listener(error);
   }
 
@@ -545,8 +548,15 @@ export class Writer {
         // Gone already.
       }
     }
-    await this.worker.terminate();
-    this.#port.close();
+    await this.stop();
+  }
+
+  /** Ends the thread and waits for its exit, including when it was lost while still running SQL. */
+  stop(): Promise<void> {
+    this.#stopping ??= this.worker.terminate().then(() => {
+      this.#port.close();
+    });
+    return this.#stopping;
   }
 
   /**

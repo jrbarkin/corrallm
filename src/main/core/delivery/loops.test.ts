@@ -171,11 +171,11 @@ describe('counts staged with the mailbox', () => {
   it('retains both changes when the companion SQL fails, and retries them together', async () => {
     const { loops, deliver, write } = await mailbox();
     const message = deliver();
-    const release = refuseWrites(profile, 'loop_pair', 'The count could not be written.');
+    const release = await refuseWrites(database, 'loop_pair', 'The count could not be written.');
     try {
       await expect(write()).rejects.toThrow('could not be written');
     } finally {
-      release();
+      await release();
     }
     expect(rows()).toEqual([]);
     expect(readOnDisk(profile, (disk) => disk.prepare('SELECT id FROM message').all())).toEqual([]);
@@ -328,9 +328,9 @@ describe('the counts kept', () => {
   it('stay in memory where their write fails, and go with the next', async () => {
     const store = loaded();
     store.count('a', 'b');
-    const release = refuseWrites(profile, 'loop_pair', 'The disk is full.');
+    const release = await refuseWrites(database, 'loop_pair', 'The disk is full.');
     await expect(store.durable()).rejects.toThrow('The disk is full.');
-    release();
+    await release();
     expect(store.turns('a', 'b')).toBe(1);
     expect(store.pending()).toBe(true);
     await store.durable();

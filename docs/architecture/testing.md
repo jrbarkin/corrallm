@@ -4,6 +4,8 @@
 
 The store-writer matrix is part of `pnpm test`: `main` uses the local production default, and `main-writer` runs the core/store/delivery suites and canvas-memory/run-journal fixtures with the optional thread. The writer project follows the ordinary projects, before the serial store-performance project, so their disk and scheduling contention do not decide its results. Run either with `pnpm exec vitest run --project main-writer src/main/core/store/`. Raw SQL setup uses `tx`, or a queued blocking write when it follows a rejected write; reads outside a write use the read-only connection. `StoreDeps.hold` gates planned statements with shared Int32s, and `writerStarted` permits deterministic worker-loss tests. No real agent CLI is involved.
 
+Fault triggers for a live store use `refuseWrites(store, ...)` from `src/main/core/store/test-store.ts`; await both installation and removal, which queue through its own lane. The profile-only overload writes through another connection and is for quiescent disk setup. Acknowledgement means the write's transaction and flush finished, but does not exclude later queued work or maintenance holding the write lock. A rejected write's own changes are undone before it rejects, but its batch may still be draining. A synchronous `tx` or bare `exec` cannot wait on a drain without blocking the loop it needs: use a queued write for work on a live store.
+
 ## `e2e/`
 
 Playwright Electron tests (*.e2e.ts) and their global setup.

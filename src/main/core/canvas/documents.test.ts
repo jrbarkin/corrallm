@@ -402,7 +402,7 @@ describe('a canvas’s document', () => {
     await filed(canvasOf(canvas));
     const before = await documents.load(canvas);
     const next = renamed(before.document, 'worker', 'Builder');
-    const allow = refuseWrites(profile, 'node', 'The disk is full');
+    const allow = await refuseWrites(store, 'node', 'The disk is full');
 
     const failed = commit(canvas, next);
     await expect(failed).rejects.toBeInstanceOf(CommitFailed);
@@ -410,7 +410,7 @@ describe('a canvas’s document', () => {
     expect(documents.live(canvas)).toMatchObject({ document: before.document, rev: 1 });
     expect(count('revision', canvas)).toBe(1);
 
-    allow();
+    await allow();
     await expect(commit(canvas, next)).resolves.toBe(2);
     await restart();
     expect((await documents.load(canvas)).document).toEqual(next);

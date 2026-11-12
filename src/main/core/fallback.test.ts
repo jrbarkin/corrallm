@@ -675,11 +675,11 @@ describe('a fault at every await of the switch (C4), and what a restart decides'
   it('committing: a write that fails switches nothing, said; a restart switches it', async () => {
     const at = await world(canvasOf(worker()));
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const allow = refuseWrites(profile, 'revision', 'The disk is full', CANVAS);
+    const allow = await refuseWrites(store, 'revision', 'The disk is full', CANVAS);
     try {
       await limited(at);
     } finally {
-      allow();
+      await allow();
       errors.mockRestore();
     }
     expect(at.data()).toMatchObject(CODEX);

@@ -110,9 +110,9 @@ describe('a handoff accepted', () => {
   it('stays in memory where its write fails, and goes with the next', async () => {
     const store = loaded();
     store.accept('worker', HANDOFF);
-    const release = refuseWrites(profile, 'handoff', 'The disk is full.');
+    const release = await refuseWrites(database, 'handoff', 'The disk is full.');
     await expect(store.durable()).rejects.toThrow('The disk is full.');
-    release();
+    await release();
     expect(store.of('worker')).toEqual({ handoff: HANDOFF });
     await store.durable();
     expect(loaded().of('worker')).toEqual({ handoff: HANDOFF });

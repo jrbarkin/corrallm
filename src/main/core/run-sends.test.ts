@@ -16,7 +16,7 @@ import type { Connector } from '../sessions/connector';
 import { fakeConnector } from '../sessions/test-fake';
 import type { OpContext } from './call';
 import type { OutsideCaller } from './caller';
-import { createCore } from './core';
+import { createCore, databaseOf } from './store/test-core';
 import type { Core } from './core';
 import { asHuman } from './gui';
 import { STORE_FILE } from './store/open';
@@ -234,7 +234,7 @@ describe('the run’s own sends', () => {
     const id = sent[0]?.id ?? '';
     await core.flush();
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full', CANVAS);
     try {
       end([id]);
       await vi.waitFor(() => {
@@ -245,7 +245,7 @@ describe('the run’s own sends', () => {
       expect(rowsOnDisk()).toEqual([expect.objectContaining({ id, state: 'delivered' })]);
       expect(attemptsOnDisk()).toEqual([expect.objectContaining({ status: 'running' })]);
     } finally {
-      allow();
+      await allow();
       errors.mockRestore();
     }
     await core.engines.canvas(CANVAS)?.journal();
@@ -258,14 +258,14 @@ describe('the run’s own sends', () => {
     const core = await start(codex);
     const engine = await core.engines.open(CANVAS);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full', CANVAS);
     try {
       engine.run.start();
       await vi.waitFor(() => {
         expect(engine.run.snapshot().agents.worker?.problem?.text).toMatch(/could not be saved/);
       });
     } finally {
-      allow();
+      await allow();
       errors.mockRestore();
     }
     expect(codex.started).toEqual([]);
@@ -646,7 +646,7 @@ describe('the run’s own sends on the runtime topics', () => {
     });
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     // Nothing of the run reaches the disk: the journal never says it runs.
-    const allow = refuseWrites(profile, 'message', 'The disk is full', CANVAS);
+    const allow = await refuseWrites(databaseOf(core), 'message', 'The disk is full', CANVAS);
     try {
       engine.run.start();
       await vi.waitFor(() => {
@@ -663,7 +663,7 @@ describe('the run’s own sends on the runtime topics', () => {
         expect(heard.at(-1)).toBe(false);
       });
     } finally {
-      allow();
+      await allow();
       errors.mockRestore();
       stop();
     }
