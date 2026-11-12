@@ -441,10 +441,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       workspaceStore.canvasForgotten(canvas);
     },
   );
-  // The reviews of canvas files changed on disk (B9 Design §5): what waits on a canvas is read
-  // again as one is raised or settled.
+  // File reviews are read before work starts; raises and settlements maintain their Needs index.
   const reviews = new FileReviews({
     store,
+    memory,
     changed: (canvas, by) => {
       topics.changed(`needs:${canvas}`, by);
       engines.needsChanged(canvas);

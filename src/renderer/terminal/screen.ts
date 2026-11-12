@@ -148,18 +148,29 @@ export const createScreen: ScreenFactory = (element) => {
   terminal.loadAddon(new WebLinksAddon(open));
   /** Whether the terminal is drawn: not once disposed of, nor without WebGL2 to draw it with. */
   let drawn = true;
+  const disposeTerminal = () => {
+    // xterm's WebGL canvas is unclassed; its named overlay layers are 2D. Retain this view's
+    // context before xterm removes its canvas, then release after it removes its loss listeners.
+    const canvases = terminal.element?.querySelectorAll<HTMLCanvasElement>(
+      '.xterm-screen > canvas:not([class])',
+    );
+    const contexts = [...(canvases ?? [])].map((canvas) => canvas.getContext('webgl2'));
+    terminal.dispose();
+    for (const gl of contexts) gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  };
   /** What says, in its place, that it needs WebGL2. */
   let notice: HTMLElement | undefined;
   /** Never xterm.js's DOM renderer: the terminal goes, and the view says why. */
   const undraw = () => {
     drawn = false;
-    terminal.dispose();
+    disposeTerminal();
     notice = needsWebGL2();
     element.append(notice);
   };
   const webgl = (): WebglAddon => {
     const addon = new WebglAddon();
     addon.onContextLoss(() => {
+      if (!drawn) return;
       addon.dispose();
       try {
         terminal.loadAddon(webgl());
@@ -245,7 +256,7 @@ export const createScreen: ScreenFactory = (element) => {
       notice?.remove();
       if (!drawn) return;
       drawn = false;
-      terminal.dispose();
+      disposeTerminal();
     },
   };
 };

@@ -1,8 +1,8 @@
 # AGENTS.md
 
-corrallm is an Electron desktop app and a headless core for orchestrating agents on a canvas.
-Agents run native CLIs through adapter connections; the core owns documents, messages and durable state.
-The renderer projects the core's topics and sends gestures through the operation registry.
+corrallm orchestrates native CLIs on a canvas through adapter connections.
+Its Electron app and headless core share documents, messages and durable state.
+The renderer projects topics and sends gestures through the registry.
 
 Canonical instructions for every agent. Before changing an area, read its architecture doc; a behaviour change updates that doc in the same commit. Instructions live here, detail in the docs; CLAUDE.md only imports this file.
 
@@ -102,7 +102,7 @@ Read [security mechanisms](docs/architecture/security.md) first. CLI-specific ar
 - Keep TypeScript `~6.0.3` (typescript-eslint lacks 7), node-pty `1.2.0-beta.14`, and the Node/pnpm pins above. pnpm workspace settings/build approvals live in `pnpm-workspace.yaml`; retain strict `minimumReleaseAge: 1440`, wait for too-new packages; exclusions are a red flag. Keep the electron-winstaller peer dep.
 - Only unbundled native modules go in dependencies; Vite-bundled packages in devDependencies. [Native modules](docs/architecture/native-modules.md) covers externals, packing, rebuilds, install approvals; self-test each (packaged/main/core/CLI). Keep Windows ConPTY settings and close every pty before quit.
 - Releases are made only by `scripts/release.sh`, from a clean clone of a commit on main that CI passed, signed and checked byte for byte; it drafts; only you publish.
-- SQLite is reached only through `sqlite.ts`; writes acknowledge only after the log flush. A failed flush fails the store closed. The checkpointer is the only other writing connection.
+- SQLite only through `sqlite.ts`. Only the writer thread writes; main only reads. A write resolves after log flush. Flush failure or writer loss fails closed. The checkpointer may also write. Planned writes read no SQL; `writeBlocking` sites are pinned.
 
 ## Adding things
 

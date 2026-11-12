@@ -113,6 +113,64 @@ function make(): { element: HTMLElement; screen: Screen } {
 
 const NEEDS_WEBGL2 = /needs WebGL2/;
 
+it('releases a closed view’s WebGL contexts after disposing its terminal, once only', () => {
+  const { element, screen } = make();
+  const canvas = document.createElement('canvas');
+  element.querySelector('.xterm-screen')?.append(canvas);
+  const overlay = document.createElement('canvas');
+  overlay.className = 'xterm-link-layer';
+  const readOverlay = vi.fn(() => {
+    throw new Error('A 2D overlay must not be asked for another context kind');
+  });
+  Object.defineProperty(overlay, 'getContext', { value: readOverlay });
+  element.querySelector('.xterm-screen')?.append(overlay);
+  const release = vi.fn(() => {
+    // A release may report context loss later: xterm must have detached first.
+    expect(element.querySelector('.xterm')).toBeNull();
+    loseContext();
+  });
+  const extension = vi.fn((name: string) =>
+    name === 'WEBGL_lose_context' ? { loseContext: release } : null,
+  );
+  Object.defineProperty(canvas, 'getContext', {
+    value: () => ({ getExtension: extension }),
+  });
+  screen.dispose();
+  expect(extension).toHaveBeenCalledWith('WEBGL_lose_context');
+  expect(release).toHaveBeenCalledOnce();
+  expect(readOverlay).not.toHaveBeenCalled();
+  expect(gpu.lost).toHaveLength(0);
+  screen.dispose();
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it('ignores a queued context-loss notification after the screen has been disposed', () => {
+  const { element, screen } = make();
+  screen.dispose();
+  loseContext();
+  expect(gpu.lost).toHaveLength(0);
+  expect(element.querySelector('.xterm')).toBeNull();
+  expect(within(element).queryByRole('alert')).toBeNull();
+});
+
+it('releases only the closing terminal’s contexts, leaving another view drawn', () => {
+  const first = make();
+  const second = make();
+  const releases = [vi.fn(), vi.fn()];
+  for (const [index, { element }] of [first, second].entries()) {
+    const canvas = document.createElement('canvas');
+    element.querySelector('.xterm-screen')?.append(canvas);
+    Object.defineProperty(canvas, 'getContext', {
+      value: () => ({ getExtension: () => ({ loseContext: releases[index] }) }),
+    });
+  }
+  first.screen.dispose();
+  expect(releases[0]).toHaveBeenCalledOnce();
+  expect(releases[1]).not.toHaveBeenCalled();
+  expect(second.element.querySelector('.xterm')).not.toBeNull();
+  expect(within(second.element).queryByRole('alert')).toBeNull();
+});
+
 it('draws the terminal where the page has WebGL2, and again with a new context when the GPU loses its own', () => {
   const { element } = make();
   expect(element.querySelector('.xterm')).not.toBeNull();

@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import type { NeedId } from '../../../shared/api/ids';
 import type { CanvasId } from '../../../shared/canvas';
+import { isCanvasId } from '../../../shared/canvas';
 import type { CanvasDocument } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
 import type { NeedsItem } from '../../../shared/model/needs';
 import { diffRows, entityOf, META, nodeKey } from '../../../shared/model/rows';
 import type { ItemRow, NodeRow, Rows } from '../../../shared/model/rows';
 import { andList } from '../../../shared/model/words';
+import type { CanvasMemory } from '../../memory';
 import { nameOf } from '../parties';
 import type { Database } from '../store/store';
 
@@ -73,12 +75,13 @@ export interface FileReview {
   at: number;
 }
 
-/** What tells of a write's change to the reviews once it is on disk. */
+/** Publishes a write's review index and notification once it is on disk. Never call on failure. */
 export type Told = () => void;
 
 export interface FileReviewsDeps {
   /** The profile's database, which keeps them. */
-  store: Pick<Database, 'prepare' | 'run' | 'runExpecting' | 'runReturning'>;
+  store: Pick<Database, 'prepare' | 'run' | 'runExpecting' | 'runReturning' | 'undo'>;
+  memory: Pick<CanvasMemory, 'whenForgotten' | 'generation'>;
   /** Hears what waits on a canvas change: a review raised or settled, and by whom. */
   changed?: (canvas: CanvasId, by: PartyId) => void;
   now?: () => number;
@@ -99,27 +102,43 @@ export class FileReviews {
   readonly #deps: FileReviewsDeps;
   readonly #now: () => number;
   readonly #newId: () => string;
+  readonly #open = new Map<CanvasId, FileReview>();
+  /** The latest acknowledged publication per canvas; a delayed older callback never replaces it. */
+  readonly #published = new Map<CanvasId, number>();
+  #changes = 0;
 
   constructor(deps: FileReviewsDeps) {
     this.#deps = deps;
     this.#now = deps.now ?? (() => Date.now());
     this.#newId = deps.newId ?? randomUUID;
-  }
-
-  /** The review open on a canvas, if one is (none if they can't be read). */
-  open(canvas: CanvasId): FileReview | undefined {
     try {
-      const row = this.#deps.store
-        .prepare(
-          `SELECT id, file_hash, summary, raised_at FROM file_review
-           WHERE canvas_id = ? AND outcome IS NULL`,
-        )
-        .get(canvas);
-      return row === undefined ? undefined : reviewOf(row, canvas);
+      const statement = deps.store.prepare(
+        `SELECT canvas_id, id, file_hash, summary, raised_at FROM file_review
+         WHERE outcome IS NULL`,
+      );
+      // One unsafe timestamp must not make the open reviews on other canvases unreadable.
+      statement.setReadBigInts(true);
+      const rows = statement.all();
+      for (const row of rows) {
+        if (!isCanvasId(row.canvas_id)) continue;
+        const at = Number(row.raised_at);
+        const review = reviewOf(
+          { ...row, raised_at: Number.isSafeInteger(at) ? at : undefined },
+          row.canvas_id,
+        );
+        if (review !== undefined) this.#open.set(row.canvas_id, review);
+      }
     } catch (error) {
       console.error('Could not read the canvas’s file reviews:', error);
-      return undefined;
     }
+    deps.memory.whenForgotten((canvas) => {
+      this.#forgetWithin(canvas);
+    });
+  }
+
+  /** The review open on a canvas, from memory (none if its row couldn't be read at startup). */
+  open(canvas: CanvasId): FileReview | undefined {
+    return this.#open.get(canvas);
   }
 
   /** The review open on a canvas, by its id. */
@@ -177,6 +196,8 @@ export class FileReviews {
   raiseWithin(canvas: CanvasId, hash: string, summary: ReviewSummary): Told {
     this.#supersede(canvas);
     const uuid = this.#newId();
+    const at = this.#now();
+    const json = JSON.stringify(summary);
     this.#deps.store.run(
       `INSERT INTO file_review (id, canvas_id, file_hash, file_generation, summary, raised_at)
          VALUES (?, ?, ?, (SELECT file_generation FROM document WHERE canvas_id = ?), ?, ?)`,
@@ -184,11 +205,15 @@ export class FileReviews {
       canvas,
       hash,
       canvas,
-      JSON.stringify(summary),
-      this.#now(),
+      json,
+      at,
+    );
+    const publish = this.#publication(
+      canvas,
+      reviewOf({ id: uuid, file_hash: hash, summary: json, raised_at: at }, canvas),
     );
     return () => {
-      this.#deps.changed?.(canvas, 'corrallm');
+      if (publish()) this.#deps.changed?.(canvas, 'corrallm');
     };
   }
 
@@ -204,8 +229,9 @@ export class FileReviews {
       1,
       `${review.id} was settled already.`,
     );
+    const publish = this.#publication(review.canvas, undefined);
     return () => {
-      this.#deps.changed?.(review.canvas, by);
+      if (publish()) this.#deps.changed?.(review.canvas, by);
     };
   }
 
@@ -215,8 +241,9 @@ export class FileReviews {
    */
   supersedeWithin(canvas: CanvasId): Told {
     const superseded = this.#supersede(canvas);
+    const publish = this.#publication(canvas, undefined);
     return () => {
-      if (superseded.is) this.#deps.changed?.(canvas, 'corrallm');
+      if (publish() && superseded.is) this.#deps.changed?.(canvas, 'corrallm');
     };
   }
 
@@ -235,6 +262,38 @@ export class FileReviews {
       },
     );
     return superseded;
+  }
+
+  /** Captures the planned state, but readers keep the acknowledged state until its caller publishes. */
+  #publication(canvas: CanvasId, review: FileReview | undefined): () => boolean {
+    const change = ++this.#changes;
+    const generation = this.#deps.memory.generation(canvas);
+    return () => {
+      if (
+        this.#deps.memory.generation(canvas) !== generation ||
+        (this.#published.get(canvas) ?? 0) >= change
+      )
+        return false;
+      this.#published.set(canvas, change);
+      if (review === undefined) this.#open.delete(canvas);
+      else this.#open.set(canvas, review);
+      return true;
+    };
+  }
+
+  /** Within the deleting write: discard both indexes, restoring them if deletion fails. */
+  #forgetWithin(canvas: CanvasId): void {
+    const before = this.#open.get(canvas);
+    const published = this.#published.get(canvas);
+    if (before === undefined && published === undefined) return;
+    this.#deps.store.undo(() => {
+      if (before === undefined) this.#open.delete(canvas);
+      else this.#open.set(canvas, before);
+      if (published === undefined) this.#published.delete(canvas);
+      else this.#published.set(canvas, published);
+    });
+    this.#open.delete(canvas);
+    this.#published.delete(canvas);
   }
 }
 

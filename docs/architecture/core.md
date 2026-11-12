@@ -4,7 +4,7 @@
 
 ## `src/main/`
 
-The canvas-file watcher reconciles open files after the journal's queued writes finish, coalescing any notifications received while it waits. A plan-time notification therefore cannot leave a closed canvas watched when SQLite executes on the optional writer thread.
+The canvas-file watcher reconciles open files after the journal's queued writes finish, coalescing any notifications received while it waits. A plan-time notification therefore cannot leave a closed canvas watched when SQLite executes on the writer thread.
 
 Main's entry is index.ts; security.ts, app-protocol.ts, csp.ts and url-policy.ts hold the security baseline. ipc.ts checks the preload's core:connect handshake; main owns windows and native UI, and hosts the core process.
 
@@ -60,7 +60,7 @@ Each owner prompt change counts as watchdog activity immediately, so silence sta
 
 Who leads (B24 C1) is the lead store (`src/main/core/leads.ts`, `LeadStore`, composed once in createCore over the core's database and canvas memory, and read once as it opens): each agent you made a lead (`agent.setLead`) with its grants and its fingerprint (its role's SHA-256, its adapter and connection as `agentEndpoint` resolves them), and each outside orchestrator's name you let answer approvals (`outside.setGrant`), in memory and in `lead` and `outside_grant` (see [Store](store.md)), each change on disk before it resolves. It is canvas/documents.ts' participant in every commit, whatever made it: within the commit's write, the row of a lead whose agent it removes is deleted, and one whose agent's adapter, connection or role it changes is held (`held`, naming which), taken in memory once the write is on disk and before the commit's listeners hear it; and as a canvas's document loads, the rows of agents it lacks go and those changed since are held, in a write of their own. createCore's `isLead`, which the dispatcher, the reach resolvers, `canvas.get`'s view and the runtime topics read on every call, is the store's (`CoreConfig.leads` only for tests): a row, not held, whose fingerprint is its agent's in the document now, worked out once for each node's data, never hashing a role per call. When a canvas's leads or grants change, the store tells createCore, which reads `leads:<c>` and `needs:<c>` again and has the runtime topics check their copies' authority again; that is where B24 C2 routes the canvas's prompts again. A token made, renewed or revoked reads `leads:<c>` again for the canvases the core runs or a window shows (`TokenStore.subscribe`; `live` lists what each live token was made for, never a hash or value).
 
-File reviews (`canvas/reviews.ts`, `file_review`) are yours alone, in `needs:<c>`: Apply re-reads the file, checks cancellation and marks its write irreversible (`ctx.noReturn`), then commits the file's document, hashes, writing_hash cleared and settlement together.
+File reviews (`canvas/reviews.ts`, `file_review`) are yours alone, in `needs:<c>`. Their memory index publishes through the write's acknowledgement callback before Needs is notified, keeping the previous review visible while its replacement waits on the worker or WAL flush. Apply re-reads the file, checks cancellation and marks its write irreversible (`ctx.noReturn`), then commits the file's document, hashes, writing_hash cleared and settlement together.
 
 Discard clears an abandoned writing hash too.
 

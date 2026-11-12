@@ -22,22 +22,22 @@ it('captures every CI run in its own output folder and keeps local capture opt-i
   ).toBe('/private/cpu');
 });
 
-it('states the observed writer mode even when it has no work in the measured window', () => {
+it('reports the required production writer and distinguishes missing or legacy observations', () => {
   const activity = {
     marks: [saved.startTime, saved.startTime + 1, saved.startTime + 2, saved.endTime],
     dropped: 0,
     events: [],
   };
-  expect(formatEvidence('local', saved, { ...activity, writerThreadsStarted: 0 })).toContain(
-    'G2-ACTIVITY writer: off (local executor)',
+  expect(formatEvidence('missing', saved, { ...activity, writerThreadsStarted: 0 })).toContain(
+    'G2-ACTIVITY writer: not observed (production requires a writer thread)',
   );
   expect(formatEvidence('thread', saved, { ...activity, writerThreadsStarted: 1 })).toContain(
-    'G2-ACTIVITY writer: on (1 thread started)',
+    'G2-ACTIVITY writer: on (1 thread started; the only production executor)',
   );
   expect(formatEvidence('legacy', saved, activity)).toContain(
     'G2-ACTIVITY writer: unknown (capture has no mode metadata)',
   );
-  expect(formatEvidence('local', saved, { ...activity, writerThreadsStarted: 0 })).toMatch(
+  expect(formatEvidence('missing', saved, { ...activity, writerThreadsStarted: 0 })).toMatch(
     /G2-GAP \d+ sample gaps over 50 ms/,
   );
 });

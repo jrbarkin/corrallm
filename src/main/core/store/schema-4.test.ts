@@ -260,7 +260,7 @@ async function readThrough(store: Store) {
       window: (await documents.load(WINDOW)).document.nodes.map(({ id }) => id),
     },
     proposals: proposals.open(SERVED).map(({ op, by }) => ({ op, by })),
-    review: new FileReviews({ store }).open(SERVED)?.summary,
+    review: new FileReviews({ store, memory }).open(SERVED)?.summary,
     worktrees: workspaces.worktreesOf(SERVED).map(({ id, state }) => ({ id, state })),
     bindings: workspaces.bindingsOf(SERVED).map(({ agent, workspace }) => ({ agent, workspace })),
   };
