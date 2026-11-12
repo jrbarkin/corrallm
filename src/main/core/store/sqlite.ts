@@ -17,7 +17,6 @@ export type ConnectOptions = Sqlite.DatabaseSyncOptions;
 
 /** SQLite's primary result codes the store tells apart (sqlite.org/rescode.html). */
 export const SQLITE_BUSY = 5;
-export const SQLITE_READONLY = 8;
 export const SQLITE_CORRUPT = 11;
 export const SQLITE_FULL = 13;
 export const SQLITE_NOTADB = 26;
