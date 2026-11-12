@@ -13,7 +13,7 @@ import { CanvasMemory } from '../../memory';
 import { MessageStore, MessageTable } from '../delivery/messages';
 import { checkStore } from '../selftest';
 import { Checkpointer } from './checkpointer';
-import { OPEN_DEFAULTS, openStore } from './open';
+import { openStore } from './open';
 import { connect, resultCode, SQLITE_FULL } from './sqlite';
 import * as Snapshots from './snapshots';
 import { SYSTEM_DEPS } from './store';
@@ -62,14 +62,14 @@ afterEach(async () => {
   await rm(profile, { recursive: true, force: true });
 });
 
-async function open(writer = true, deps: StoreDeps = SYSTEM_DEPS): Promise<Store> {
-  const opened = await openStore(profile, deps, { writer });
+async function open(deps: StoreDeps = SYSTEM_DEPS): Promise<Store> {
+  const opened = await openStore(profile, deps);
   if (opened.store === undefined) throw new Error(opened.said.join(' '));
   stores.push(opened.store);
   return opened.store;
 }
 async function thread(): Promise<Writer> {
-  const seed = await open(false);
+  const seed = await open();
   seed.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
   await seed.close();
   const writer = await Writer.start(seed.file, {});
@@ -89,8 +89,8 @@ const INSERT = 'INSERT INTO note VALUES (?)';
 const rows = (store: Store) => store.prepare('SELECT text FROM note ORDER BY rowid').all();
 
 describe('the writer thread', () => {
-  it('uses the project’s executor for a store opened in beforeAll', () => {
-    expect(fixtureWriter).toBe(OPEN_DEFAULTS.writer);
+  it('opens every store with its writer thread, including a beforeAll fixture', () => {
+    expect(fixtureWriter).toBe(true);
   });
 
   it('refuses a blocking request before posting when the writer has marked its exit', async () => {
@@ -213,7 +213,7 @@ describe('the writer thread', () => {
 describe('the store with its writer', () => {
   it('releases an acknowledged transaction before taking later queued work', async () => {
     const gate = hold();
-    const store = await open(true, { ...SYSTEM_DEPS, hold: gate });
+    const store = await open({ ...SYSTEM_DEPS, hold: gate });
     store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
     await store.write(() => {
       store.run(INSERT, 'acknowledged');
@@ -272,7 +272,7 @@ describe('the store with its writer', () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const actual = await vi.importActual<typeof Fs>('node:fs');
       let worker: Worker | undefined;
-      const store = await open(true, {
+      const store = await open({
         ...SYSTEM_DEPS,
         writerStarted: (started) => {
           worker = started;
@@ -326,13 +326,13 @@ describe('the store with its writer', () => {
       await store.close();
       expect(exited).toBe(true);
       expect(cuts).toEqual([true]);
-      expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+      expect(rows(await open())).toEqual([{ text: 'durable' }]);
     },
   );
 
   it('directs synchronous tools to the queued lane while a drain is in flight', async () => {
     const gate = hold();
-    const store = await open(true, { ...SYSTEM_DEPS, hold: gate });
+    const store = await open({ ...SYSTEM_DEPS, hold: gate });
     store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
     Atomics.store(gate, 0, 1);
     const writing = store.write(() => {
@@ -363,7 +363,7 @@ describe('the store with its writer', () => {
     const actual = await vi.importActual<typeof Fs>('node:fs');
     let worker: Worker | undefined;
     let failFlush = false;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       writerStarted: (started) => {
         worker = started;
@@ -433,17 +433,13 @@ describe('the store with its writer', () => {
     ]);
     await store.close();
     expect(cuts).toEqual([true]);
-    expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+    expect(rows(await open())).toEqual([{ text: 'durable' }]);
   });
 
-  it.each(
-    [false, true].flatMap((writer) =>
-      (['planned', 'blocking', 'tx'] as const).map((kind) => ({ writer, kind })),
-    ),
-  )(
-    'a $kind result callback reads memory and returned rows only, writer $writer',
-    async ({ writer, kind }) => {
-      const store = await open(writer);
+  it.each(['planned', 'blocking', 'tx'] as const)(
+    'a %s result callback reads memory and returned rows only',
+    async (kind) => {
+      const store = await open();
       store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
       const cached = store.prepare('SELECT text FROM note');
       const returning = () => {
@@ -492,7 +488,7 @@ describe('the store with its writer', () => {
       flushed.resolve(undefined);
     });
     let stopFlush = false;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       hold: gate,
       flush: async (fd) => {
@@ -566,7 +562,7 @@ describe('the store with its writer', () => {
 
   it('waits for an open batch and its flush before checkpointing, then drains at close', async () => {
     const gate = hold();
-    const store = await open(true, { ...SYSTEM_DEPS, hold: gate });
+    const store = await open({ ...SYSTEM_DEPS, hold: gate });
     store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
     const checkpoint = vi.spyOn(Checkpointer.prototype, 'checkpoint');
     Atomics.store(gate, 0, 1);
@@ -588,7 +584,7 @@ describe('the store with its writer', () => {
     });
     await store.close();
     await last;
-    const again = await open(false);
+    const again = await open();
     expect(rows(again)).toEqual([{ text: 'held' }, { text: 'last' }]);
   });
 
@@ -611,7 +607,7 @@ describe('the store with its writer', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const gate = hold();
     let worker: Worker | undefined;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       hold: gate,
       writerStarted: (started) => {
@@ -650,13 +646,13 @@ describe('the store with its writer', () => {
     await expect(store.write(() => undefined)).rejects.toThrow(/could not be written/);
     expect(() => store.prepare('SELECT 1')).toThrow(/could not be written/);
     await store.close();
-    expect(rows(await open(false))).toEqual([]);
+    expect(rows(await open())).toEqual([]);
   });
 
   it('takes back an unacknowledged commit when the writer ends before replying', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let worker: Worker | undefined;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       writerStarted: (started) => {
         worker = started;
@@ -677,13 +673,13 @@ describe('the store with its writer', () => {
       }),
     ).rejects.toThrow(/could not be written/);
     await store.close();
-    expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+    expect(rows(await open())).toEqual([{ text: 'durable' }]);
   });
 
   it('removes a snapshot containing a commit whose reply was still in flight when the writer ended', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let worker: Worker | undefined;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       writerStarted: (started) => {
         worker = started;
@@ -730,7 +726,7 @@ describe('the store with its writer', () => {
     });
     let blocked = false;
     let worker: Worker | undefined;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       writerStarted: (started) => {
         worker = started;
@@ -759,13 +755,13 @@ describe('the store with its writer', () => {
     release.resolve(undefined);
     await rejected;
     await store.close();
-    expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+    expect(rows(await open())).toEqual([{ text: 'durable' }]);
   });
 
   it('keeps an acknowledged commit when an idle writer ends', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let worker: Worker | undefined;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       writerStarted: (started) => {
         worker = started;
@@ -778,12 +774,12 @@ describe('the store with its writer', () => {
     await worker?.terminate();
     await expect(store.write(() => undefined)).rejects.toThrow(/could not be written/);
     await store.close();
-    expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+    expect(rows(await open())).toEqual([{ text: 'durable' }]);
   });
 
   it('waits for a held write at close and refuses any later write', async () => {
     const gate = hold();
-    const store = await open(true, { ...SYSTEM_DEPS, hold: gate });
+    const store = await open({ ...SYSTEM_DEPS, hold: gate });
     store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
     Atomics.store(gate, 0, 1);
     const writing = store.write(() => {
@@ -802,13 +798,13 @@ describe('the store with its writer', () => {
     Atomics.store(gate, 0, 0);
     Atomics.notify(gate, 0);
     await Promise.all([writing, closing]);
-    expect(rows(await open(false))).toEqual([{ text: 'held' }]);
+    expect(rows(await open())).toEqual([{ text: 'held' }]);
   });
 
   it('joins failed-store cleanup when the writer ends during the closing snapshot', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     let worker: Worker | undefined;
-    const store = await open(true, {
+    const store = await open({
       ...SYSTEM_DEPS,
       writerStarted: (started) => {
         worker = started;
@@ -840,11 +836,11 @@ describe('the store with its writer', () => {
     const ended = vi.spyOn(Writer.prototype, 'close');
     await store.close();
     expect(ended).toHaveBeenCalledOnce();
-    expect(rows(await open(false))).toEqual([{ text: 'durable' }]);
+    expect(rows(await open())).toEqual([{ text: 'durable' }]);
   });
 
-  it.each([false, true])('a result callback rejects only its write, writer %s', async (writer) => {
-    const store = await open(writer);
+  it('a result callback rejects only its write', async () => {
+    const store = await open();
     store.exec('CREATE TABLE note (text TEXT NOT NULL) STRICT');
     const results = await Promise.allSettled([
       store.write(() => {

@@ -5,6 +5,9 @@ import { Worker } from 'node:worker_threads';
 
 import { afterEach, expect, it, vi } from 'vitest';
 
+import { formatEvidence } from '../../e2e/g2-profile.ts';
+import type { CpuProfile } from '../../e2e/g2-profile.ts';
+
 const folders: string[] = [];
 const workers: Worker[] = [];
 
@@ -15,8 +18,9 @@ afterEach(async () => {
   );
 });
 
+// The empty capture is a telemetry control, not an alternative store executor.
 it.each([true, false])(
-  'keeps a requested G2 CPU profile and ordered spans across a slow result publication (writer %s)',
+  'keeps a requested G2 CPU profile and ordered spans across a slow result publication (worker observed %s)',
   async (writer) => {
     const folder = await mkdtemp(path.join(tmpdir(), 'corrallm-load-profile-'));
     folders.push(folder);
@@ -135,12 +139,7 @@ it.each([true, false])(
       const loop = JSON.parse(await readFile(delay, 'utf8')) as { spans: unknown[] };
       expect(loop.spans).toHaveLength(3);
     });
-    const cpu = JSON.parse(await readFile(profile, 'utf8')) as {
-      nodes: unknown[];
-      samples: number[];
-      startTime: number;
-      endTime: number;
-    };
+    const cpu = JSON.parse(await readFile(profile, 'utf8')) as CpuProfile;
     expect(cpu.nodes.length).toBeGreaterThan(0);
     expect(cpu.samples.length).toBeGreaterThan(0);
     expect(cpu.endTime).toBeGreaterThan(cpu.startTime);
@@ -150,10 +149,18 @@ it.each([true, false])(
       marks: number[];
       clockUncertaintyUs: number;
       writerThreadsStarted: number;
+      dropped: number;
       events: { lane: string; op: string; start: number; end: number }[];
     };
     expect(activity.marks).toHaveLength(4);
     expect(activity.writerThreadsStarted).toBe(writer ? 1 : 0);
+    const evidence = formatEvidence('probe', cpu, activity);
+    expect(evidence).toContain(
+      writer
+        ? 'G2-ACTIVITY writer: on (1 thread started; the only production executor)'
+        : 'G2-ACTIVITY writer: not observed (production requires a writer thread)',
+    );
+    expect(evidence).not.toContain('local executor');
     expect(activity.marks[0]).toBeGreaterThanOrEqual(
       cpu.startTime - activity.clockUncertaintyUs - 1000,
     );

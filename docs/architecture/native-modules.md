@@ -4,7 +4,7 @@
 
 ## `src/main/native-selftest.ts`
 
-The database check reads per-connection pragmas inside its existing blocking write, checking the writing connection under either executor. Store-writer unit tests also run `checkStore` with the optional thread. The worker remains a bundled string using `CONNECT_IN_WORKER`, adding no native module or worker entry; the utility-process and shipped-command checks still use the production executor until step 6b.
+The database check always opens the production writer thread. Its blocking write reads that connection's pragmas and writes a row; its planned write changes that row. Main's read-only connection reads both back and refuses an attempted write with SQLITE_READONLY, reported as “main’s connection read-only”. The success line names “its other writer pragmas as set” and “a blocking write and a planned write through the writer flushed and read back by main”; unit and e2e assertions match the entire SQLite line, with fullfsync required on macOS and 0600 file modes required except on Windows. The check also verifies the flushed rows through a separate reader, checkpoints, snapshots and private file modes. The worker remains a bundled string using `CONNECT_IN_WORKER`, adding no native module or worker entry; the utility-process, plain-Node CLI and shipped-command checks exercise this same path.
 
 The native self-test in the app: main's checks, then the core process's, then the shipped command's under its own Node on macOS and Linux (see Commands). The command is invoked with an empty PATH and a deliberately failing `NODE_OPTIONS` preload, which its launcher must remove; its pty round trip proves that the external node-pty copy loads under plain Node. Windows shipping is held; its main/core checks remain.
 

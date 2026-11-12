@@ -63,20 +63,19 @@ afterEach(async () => {
 
 it('keeps writer work and its measurement responsive across warmup and slow result publication', async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-writer-loop-'));
-  const opened = await openStore(
-    profile,
-    {
-      ...SYSTEM_DEPS,
-      later: () => () => undefined,
-      flush: async (fd) => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        await SYSTEM_DEPS.flush(fd);
-      },
+  const started = vi.fn();
+  const opened = await openStore(profile, {
+    ...SYSTEM_DEPS,
+    writerStarted: started,
+    later: () => () => undefined,
+    flush: async (fd) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await SYSTEM_DEPS.flush(fd);
     },
-    { writer: true },
-  );
+  });
   store = opened.store;
   if (store === undefined) throw new Error(opened.said.join(' '));
+  expect(started).toHaveBeenCalledOnce();
   const database = store;
   const canvas = '11111111-1111-4111-8111-111111111111' as CanvasId;
   const memory = new CanvasMemory(database);

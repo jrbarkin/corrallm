@@ -113,7 +113,7 @@ export function formatEvidence(label: string, profile: CpuProfile, activity: Act
     `G2-DIAG worker clock alignment uncertainty ±${ms(uncertainty)} ms`,
     'G2-DIAG times are elapsed sample weights, not proof of CPU usage; a descheduled process or syscall can enlarge a sample.',
     'G2-DIAG worker execution is timed inside its handler; wait/fsync durations include main-loop callback scheduling.',
-    `G2-ACTIVITY writer: ${activity.writerThreadsStarted === undefined ? 'unknown (capture has no mode metadata)' : activity.writerThreadsStarted === 0 ? 'off (local executor)' : `on (${String(activity.writerThreadsStarted)} thread started)`}`,
+    `G2-ACTIVITY writer: ${activity.writerThreadsStarted === undefined ? 'unknown (capture has no mode metadata)' : activity.writerThreadsStarted === 0 ? 'not observed (production requires a writer thread)' : `on (${String(activity.writerThreadsStarted)} thread started; the only production executor)`}`,
   ];
   const overlaps = (start: number, end: number) =>
     activity.events.filter((event) => event.start < end && event.end > start);

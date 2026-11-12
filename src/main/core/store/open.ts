@@ -68,22 +68,6 @@ const BUSY_TIMEOUT_MS = 0;
  */
 const SIDECARS = ['-wal', '-shm', '-journal'];
 
-/** How the store is opened beyond its profile and clock. */
-export interface OpenOptions {
-  /**
-   * Hand writing to a thread of its own once the database is open and migrated (Store Writer, step
-   * 6a): the store's connection then only reads. Not yet how the core opens it.
-   */
-  writer?: boolean;
-}
-
-/**
- * What `openStore` does unless told otherwise. Production never changes it (the core opens the
- * store as it always has); the writer matrix (test-writer-matrix.ts) sets it for a test run.
- * Step 6b deletes it, with the local executor.
- */
-export const OPEN_DEFAULTS: Required<OpenOptions> = { writer: false };
-
 /** What opening the store found: the store, or none, and what to say. */
 export interface Opened {
   /** None if it couldn't be opened: `said` says why. */
@@ -93,11 +77,7 @@ export interface Opened {
 }
 
 /** Opens the profile's database, as the core opens it once it holds core.lock. Never rejects. */
-export async function openStore(
-  profile: string,
-  deps: StoreDeps = SYSTEM_DEPS,
-  options: OpenOptions = {},
-): Promise<Opened> {
+export async function openStore(profile: string, deps: StoreDeps = SYSTEM_DEPS): Promise<Opened> {
   const file = path.join(profile, STORE_FILE);
   const said: string[] = [];
   try {
@@ -120,9 +100,6 @@ export async function openStore(
     beginLog(connection);
     const [newest] = await snapshots(profile).catch(() => []);
     const snapshotAt = newest === undefined ? undefined : snapshotTime(path.basename(newest));
-    if (!(options.writer ?? OPEN_DEFAULTS.writer)) {
-      return { store: new Store(connection, { profile, file, deps, snapshotAt }), said };
-    }
     const handedOver = await handOver(connection, file, deps);
     return {
       store: new Store(handedOver.reader, {
