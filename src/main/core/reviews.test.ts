@@ -21,6 +21,8 @@ import type { Core } from './core';
 import { mintTrustedPath } from './host';
 import type { HostServices } from './host';
 import { keepCanvases, readOnDisk, refuseWrites } from './store/test-store';
+import { SYSTEM_DEPS } from './store/store';
+import { Writer } from './store/writer';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 
 /*
@@ -91,8 +93,8 @@ const host: HostServices = {
   },
 };
 
-/** The core on the profile: its folders' watch fs.watch's (`'fs'`), or none. */
-async function start(watch: 'fs' | 'none' = 'none'): Promise<Core> {
+/** The core on the profile: its folders' real watch, a test watch, or none. */
+async function start(watch: 'fs' | 'none' | WatchFolder = 'none'): Promise<Core> {
   return createCore(
     {
       profile,
@@ -104,7 +106,7 @@ async function start(watch: 'fs' | 'none' = 'none'): Promise<Core> {
         let now = 0;
         return () => (now += 1000);
       })(),
-      ...(watch === 'fs' ? {} : { watchFolder: NO_WATCH }),
+      ...(watch === 'fs' ? {} : { watchFolder: watch === 'none' ? NO_WATCH : watch }),
       sessions: {
         connectors: { 'codex.app-server': fakeConnector({ adapter: 'codex' }) },
         environment: () => Promise.resolve({}),
@@ -114,7 +116,7 @@ async function start(watch: 'fs' | 'none' = 'none'): Promise<Core> {
   );
 }
 /** The core stopped and started again, as a restart does. */
-async function restart(watch?: 'fs' | 'none'): Promise<void> {
+async function restart(watch?: 'fs' | 'none' | WatchFolder): Promise<void> {
   await core.close();
   core = await start(watch);
 }
@@ -541,6 +543,76 @@ describe('a file review', () => {
 });
 
 describe('a canvas file’s folder, watched while the canvas is open', () => {
+  it('keeps the previous review visible until its watched replacement is acknowledged', async () => {
+    const watching = Promise.withResolvers<(name: string | null) => void>();
+    await restart((_folder, changed) => {
+      watching.resolve(changed);
+      return { close: () => undefined };
+    });
+    await show(TEAM);
+    const changed = await watching.promise;
+    await writeFile(files.team, JSON.stringify(team(agent('tester', 800))));
+    await core.focused(1);
+    const first = await reviewOf(TEAM);
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const flushing = Promise.withResolvers<undefined>();
+    const flushed = Promise.withResolvers<undefined>();
+    let holding = true;
+    let holdFlush = false;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- The wrapper reapplies the writer receiver below.
+    const savepoint = Writer.prototype.savepoint;
+    const writing = vi.spyOn(Writer.prototype, 'savepoint').mockImplementation(async function (
+      this: Writer,
+      ...args
+    ) {
+      if (holding && args[1].some(({ sql }) => sql.includes('INSERT INTO file_review'))) {
+        holding = false;
+        entered.resolve(undefined);
+        await release.promise;
+      }
+      return savepoint.apply(this, args);
+    });
+    const flush = SYSTEM_DEPS.flush;
+    const syncing = vi.spyOn(SYSTEM_DEPS, 'flush').mockImplementation(async (fd) => {
+      if (holdFlush) {
+        flushing.resolve(undefined);
+        await flushed.promise;
+      }
+      await flush(fd);
+    });
+    try {
+      await writeFile(files.team, JSON.stringify(team(agent('scout', 800))));
+      changed(path.basename(files.team));
+      await entered.promise;
+      // The replacement is planned, but the worker has not settled the previous row yet.
+      expect(rowOf(first.id)).toMatchObject({ outcome: null });
+      expect((await reviewOf(TEAM)).id).toBe(first.id);
+      holdFlush = true;
+      release.resolve(undefined);
+      await flushing.promise;
+      // Even COMMIT alone isn't an acknowledgement: the replacement still waits for its flush.
+      expect(rowOf(first.id)).toMatchObject({ outcome: 'superseded' });
+      expect((await reviewOf(TEAM)).id).toBe(first.id);
+    } finally {
+      holding = false;
+      holdFlush = false;
+      release.resolve(undefined);
+      flushed.resolve(undefined);
+      try {
+        await core.focused(1);
+      } finally {
+        writing.mockRestore();
+        syncing.mockRestore();
+      }
+    }
+    const next = await reviewOf(TEAM);
+    expect(next.id).not.toBe(first.id);
+    expect(next.detail).toMatch(/Scout/);
+    expect(rowOf(first.id)).toMatchObject({ outcome: 'superseded' });
+    expect(rowOf(next.id)).toMatchObject({ outcome: null });
+  });
+
   it('watches only canvases whose journaled open state has finished writing', async () => {
     const following = vi.spyOn(FileWatch.prototype, 'follow');
     await core.engines.open(TEAM);

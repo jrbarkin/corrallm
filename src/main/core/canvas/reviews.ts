@@ -75,13 +75,13 @@ export interface FileReview {
   at: number;
 }
 
-/** What tells of a write's change to the reviews once it is on disk. */
+/** Publishes a write's review index and notification once it is on disk. Never call on failure. */
 export type Told = () => void;
 
 export interface FileReviewsDeps {
   /** The profile's database, which keeps them. */
   store: Pick<Database, 'prepare' | 'run' | 'runExpecting' | 'runReturning' | 'undo'>;
-  memory: Pick<CanvasMemory, 'whenForgotten'>;
+  memory: Pick<CanvasMemory, 'whenForgotten' | 'generation'>;
   /** Hears what waits on a canvas change: a review raised or settled, and by whom. */
   changed?: (canvas: CanvasId, by: PartyId) => void;
   now?: () => number;
@@ -103,6 +103,9 @@ export class FileReviews {
   readonly #now: () => number;
   readonly #newId: () => string;
   readonly #open = new Map<CanvasId, FileReview>();
+  /** The latest acknowledged publication per canvas; a delayed older callback never replaces it. */
+  readonly #published = new Map<CanvasId, number>();
+  #changes = 0;
 
   constructor(deps: FileReviewsDeps) {
     this.#deps = deps;
@@ -129,7 +132,7 @@ export class FileReviews {
       console.error('Could not read the canvas’s file reviews:', error);
     }
     deps.memory.whenForgotten((canvas) => {
-      this.#setOpen(canvas, undefined);
+      this.#forgetWithin(canvas);
     });
   }
 
@@ -205,12 +208,12 @@ export class FileReviews {
       json,
       at,
     );
-    this.#setOpen(
+    const publish = this.#publication(
       canvas,
       reviewOf({ id: uuid, file_hash: hash, summary: json, raised_at: at }, canvas),
     );
     return () => {
-      this.#deps.changed?.(canvas, 'corrallm');
+      if (publish()) this.#deps.changed?.(canvas, 'corrallm');
     };
   }
 
@@ -226,9 +229,9 @@ export class FileReviews {
       1,
       `${review.id} was settled already.`,
     );
-    if (this.#open.get(review.canvas)?.id === review.id) this.#setOpen(review.canvas, undefined);
+    const publish = this.#publication(review.canvas, undefined);
     return () => {
-      this.#deps.changed?.(review.canvas, by);
+      if (publish()) this.#deps.changed?.(review.canvas, by);
     };
   }
 
@@ -238,8 +241,9 @@ export class FileReviews {
    */
   supersedeWithin(canvas: CanvasId): Told {
     const superseded = this.#supersede(canvas);
+    const publish = this.#publication(canvas, undefined);
     return () => {
-      if (superseded.is) this.#deps.changed?.(canvas, 'corrallm');
+      if (publish() && superseded.is) this.#deps.changed?.(canvas, 'corrallm');
     };
   }
 
@@ -257,20 +261,39 @@ export class FileReviews {
         superseded.is = rows.length > 0;
       },
     );
-    this.#setOpen(canvas, undefined);
     return superseded;
   }
 
-  /** Within a write: the index follows the row; rollback restores it, newest change first. */
-  #setOpen(canvas: CanvasId, review: FileReview | undefined): void {
+  /** Captures the planned state, but readers keep the acknowledged state until its caller publishes. */
+  #publication(canvas: CanvasId, review: FileReview | undefined): () => boolean {
+    const change = ++this.#changes;
+    const generation = this.#deps.memory.generation(canvas);
+    return () => {
+      if (
+        this.#deps.memory.generation(canvas) !== generation ||
+        (this.#published.get(canvas) ?? 0) >= change
+      )
+        return false;
+      this.#published.set(canvas, change);
+      if (review === undefined) this.#open.delete(canvas);
+      else this.#open.set(canvas, review);
+      return true;
+    };
+  }
+
+  /** Within the deleting write: discard both indexes, restoring them if deletion fails. */
+  #forgetWithin(canvas: CanvasId): void {
     const before = this.#open.get(canvas);
-    if (before === review) return;
+    const published = this.#published.get(canvas);
+    if (before === undefined && published === undefined) return;
     this.#deps.store.undo(() => {
       if (before === undefined) this.#open.delete(canvas);
       else this.#open.set(canvas, before);
+      if (published === undefined) this.#published.delete(canvas);
+      else this.#published.set(canvas, published);
     });
-    if (review === undefined) this.#open.delete(canvas);
-    else this.#open.set(canvas, review);
+    this.#open.delete(canvas);
+    this.#published.delete(canvas);
   }
 }
 

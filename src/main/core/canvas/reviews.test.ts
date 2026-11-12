@@ -20,6 +20,7 @@ import type { Store } from '../store/store';
 import { onDisk, openTestStore } from '../store/test-store';
 import { Documents } from './documents';
 import { FileReviews, itemOf, summarize } from './reviews';
+import type { Told } from './reviews';
 
 /*
  * File reviews in the canvas's document (B9 Design §5): what the core's own saves leave on disk is
@@ -342,9 +343,14 @@ describe('its writes', () => {
     return canvas;
   }
 
+  async function written(within: () => Told): Promise<void> {
+    const publish = await store.write(within);
+    publish();
+  }
+
   it('reads open reviews from memory, including an empty canvas, after recovery', async () => {
     const canvas = await loaded();
-    await store.write(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
+    await written(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
     await restart();
     const reads = vi.spyOn(store, 'prepare');
     for (let i = 0; i < 10; i++) {
@@ -371,7 +377,7 @@ describe('its writes', () => {
   it('keeps the serialized review when its caller later changes the summary', async () => {
     const canvas = await loaded();
     const summary = { ...SUMMARY };
-    await store.write(() => reviews.raiseWithin(canvas, 'f'.repeat(64), summary));
+    await written(() => reviews.raiseWithin(canvas, 'f'.repeat(64), summary));
     summary.groups = 8;
     expect(reviews.open(canvas)?.summary).toEqual(SUMMARY);
     await restart();
@@ -380,7 +386,7 @@ describe('its writes', () => {
 
   it('restores open reviews on rollback and removes them with their canvas', async () => {
     const canvas = await loaded();
-    await store.write(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
+    await written(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
     const review = reviews.open(canvas);
     if (review === undefined) throw new Error('No review.');
     for (const change of [
@@ -412,14 +418,10 @@ describe('its writes', () => {
 
   it('settle a review in a planned write, failing only the write that settles it again', async () => {
     const canvas = await loaded();
-    await store.write(() => {
-      reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY);
-    });
+    await written(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
     const review = reviews.open(canvas);
     if (review === undefined) throw new Error('No review.');
-    await store.write(() => {
-      reviews.settleWithin(review, 'kept', 'you');
-    });
+    await written(() => reviews.settleWithin(review, 'kept', 'you'));
     const [again, neighbour] = await Promise.allSettled([
       store.write(() => {
         reviews.settleWithin(review, 'applied', 'you');
@@ -444,9 +446,8 @@ describe('its writes', () => {
     });
     none?.();
     expect(told).toEqual([]);
-    await store.write(() => {
-      reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY);
-    });
+    await written(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
+    told = [];
     let some: (() => void) | undefined;
     await store.write(() => {
       some = reviews.supersedeWithin(canvas);
@@ -455,5 +456,25 @@ describe('its writes', () => {
     some?.();
     expect(told).toEqual([[canvas, 'corrallm']]);
     expect(reviews.open(canvas)).toBeUndefined();
+  });
+
+  it('keeps the latest acknowledged publication when callbacks arrive late or a canvas was forgotten', async () => {
+    const canvas = await loaded();
+    await written(() => reviews.raiseWithin(canvas, 'f'.repeat(64), SUMMARY));
+    const older = await store.write(() => reviews.raiseWithin(canvas, 'a'.repeat(64), SUMMARY));
+    expect(reviews.open(canvas)?.hash).toBe('f'.repeat(64));
+    const newer = await store.write(() => reviews.raiseWithin(canvas, 'b'.repeat(64), SUMMARY));
+    newer();
+    older();
+    newer();
+    expect(reviews.open(canvas)?.hash).toBe('b'.repeat(64));
+    expect(told).toEqual([
+      [canvas, 'corrallm'],
+      [canvas, 'corrallm'],
+    ]);
+    const forgotten = await store.write(() => reviews.raiseWithin(canvas, 'c'.repeat(64), SUMMARY));
+    await memory.forget(canvas);
+    forgotten();
+    expect(reviews.items(canvas)).toEqual([]);
   });
 });

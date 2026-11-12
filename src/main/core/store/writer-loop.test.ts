@@ -97,9 +97,10 @@ it('keeps Needs, authentication and canvas metadata responsive during a slow WAL
   documents.create(canvas, 'outside:load');
   await documents.keep(canvas);
   await memory.setFile(canvas, mintTrustedPath('/work/load.corral'));
-  await database.write(() => {
-    reviews.raiseWithin(canvas, 'f'.repeat(64), { file: 'load.corral', from: null });
-  });
+  const raised = await database.write(() =>
+    reviews.raiseWithin(canvas, 'f'.repeat(64), { file: 'load.corral', from: null }),
+  );
+  raised();
   let reads = 0;
   const prepare = database.prepare.bind(database);
   vi.spyOn(database, 'prepare').mockImplementation((sql) => {
