@@ -32,7 +32,6 @@ let memory: CanvasMemory;
 let documents: Documents;
 /** What is on disk, read through a connection of its own. */
 let disk: Connection;
-let releaseWriter: (() => void) | undefined;
 
 const REQUEST = '2c3d4e5f-6071-4829-9bac-1d2e3f4a5b01';
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -165,8 +164,6 @@ beforeEach(async () => {
   disk = onDisk(profile);
 });
 afterEach(async () => {
-  releaseWriter?.();
-  releaseWriter = undefined;
   vi.restoreAllMocks();
   disk.close();
   await memory.flush();
@@ -812,39 +809,6 @@ describe('the agents a party created', () => {
       .prepare(`SELECT id, created_by FROM node WHERE canvas_id = ? AND kind = 'agent' ORDER BY id`)
       .all(canvas);
   const ORCHESTRATOR = 'outside:orchestrator' as const;
-
-  it('counts an agent whose creation is held in the writer until its commit settles', async () => {
-    const hold = new Int32Array(new SharedArrayBuffer(8));
-    const release = () => {
-      Atomics.store(hold, 0, 0);
-      Atomics.notify(hold, 0);
-    };
-    releaseWriter = release;
-    const started = vi.fn();
-    await restart({ ...SYSTEM_DEPS, hold, writerStarted: started });
-    expect(started).toHaveBeenCalledOnce();
-    const canvas = newCanvasId();
-    await made(canvas, canvasOf(canvas));
-    Atomics.store(hold, 0, 1);
-    const writing = commit(canvas, withAgent(documents.live(canvas).document, 'new-agent'), {
-      op: 'canvas.addAgent',
-      by: ORCHESTRATOR,
-    });
-    try {
-      while (Atomics.load(hold, 1) === 0) await Atomics.waitAsync(hold, 1, 0).value;
-      expect(creators(canvas).some(({ id }) => id === 'new-agent')).toBe(false);
-      expect(documents.created(ORCHESTRATOR)).toBe(1);
-      expect(documents.created(ORCHESTRATOR, canvas)).toBe(1);
-      // Another canvas's admission can run while the writer still holds the first commit.
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(documents.created(ORCHESTRATOR)).toBe(1);
-    } finally {
-      release();
-      await writing;
-    }
-    expect(creators(canvas)).toContainEqual({ id: 'new-agent', created_by: ORCHESTRATOR });
-    expect(documents.created(ORCHESTRATOR)).toBe(1);
-  });
 
   it('subtracts only this party’s removals on this canvas, even when another canvas repeats an id', async () => {
     const [one, two] = [newCanvasId(), newCanvasId()];
