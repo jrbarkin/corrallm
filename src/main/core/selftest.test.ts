@@ -24,7 +24,7 @@ import { openStore } from './store/open';
  * unit tests never load native modules.
  */
 
-/** What the core database's check reports, as it reports it on this platform. */
+/** The full platform-specific report; read-only requires main's write to fail with SQLITE_READONLY. */
 const STORE_CHECKED = new RegExp(
   [
     '^SQLite \\d+\\.\\d+\\.\\d+, WAL, synchronous NORMAL',
