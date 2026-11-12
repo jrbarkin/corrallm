@@ -269,8 +269,10 @@ let closeApp: () => Promise<void>;
 let page: Page;
 let problems: string[];
 let dir: string;
+let closingApp = false;
 
 test.beforeEach(async () => {
+  closingApp = false;
   dir = await mkdtemp(nativePath.join(tmpdir(), 'corrallm-graph-'));
   const folder = nativePath.join(dir, 'project');
   await mkdir(folder);
@@ -291,7 +293,11 @@ test.beforeEach(async () => {
     // Native Terminal views warm xterm's glyph cache; this is its existing timing diagnostic.
     if (/^task queue exceeded allotted deadline by \d+ms$/.test(message.text())) return;
     if (message.type() === 'error' || message.type() === 'warning') {
-      problems.push(`${message.type()}: ${message.text()}`);
+      const problem = `${message.type()}: ${message.text()}`;
+      problems.push(problem);
+      console.error(
+        `[graph-console ${new Date().toISOString()} ${closingApp ? 'closing' : 'active'}] ${problem}`,
+      );
     }
   });
   page.on('pageerror', (error) => {
@@ -314,6 +320,7 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
+  closingApp = true;
   await closeApp();
   await rm(dir, { recursive: true, force: true });
   expect(problems).toEqual([]);
