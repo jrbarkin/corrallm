@@ -19,21 +19,6 @@ export default defineConfig({
           globalSetup: ['./src/main/cli/global-setup.ts'],
         },
       },
-      // The core and its stores on both executors until 6b removes the local one.
-      {
-        test: {
-          name: 'main-writer',
-          environment: 'node',
-          include: [
-            'src/main/core/**/*.test.ts',
-            'src/main/{memory,run-journal,canvas,project}.test.ts',
-          ],
-          exclude: ['src/main/core/store/snapshots-loop.test.ts'],
-          setupFiles: ['./src/main/core/store/test-writer-matrix.ts'],
-          globalSetup: ['./src/main/cli/global-setup.ts'],
-          sequence: { groupOrder: 1 },
-        },
-      },
       {
         test: {
           name: 'store-performance',

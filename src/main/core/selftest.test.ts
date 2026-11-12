@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   checkForkRefused,
@@ -29,7 +29,7 @@ const STORE_CHECKED = new RegExp(
   [
     '^SQLite \\d+\\.\\d+\\.\\d+, WAL, synchronous NORMAL',
     process.platform === 'darwin' ? ', fullfsync' : '',
-    ', its other pragmas as set, a write through the lane flushed and read back, a checkpoint off the loop, its log begun anew there, a snapshot read back',
+    ', its other writer pragmas as set, a blocking write and a planned write through the writer flushed and read back by main, main’s connection read-only, a checkpoint off the loop, its log begun anew there, a snapshot read back',
     process.platform === 'win32' ? '' : ', core\\.db, -wal and -shm 0600',
     '$',
   ].join(''),
@@ -63,6 +63,23 @@ describe('the native self-test', () => {
         await store?.close();
       }
     } finally {
+      await rm(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a planned self-test write that never reaches main’s reader', async () => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'corrallm-sqlite-test-'));
+    const { store } = await openStore(profile);
+    if (store === undefined) throw new Error('No test store');
+    const planned = vi.spyOn(store, 'write').mockResolvedValue(undefined);
+    try {
+      await expect(checkStore(store)).rejects.toThrow(
+        'main’s reader did not see the planned write',
+      );
+      expect(planned).toHaveBeenCalledOnce();
+    } finally {
+      planned.mockRestore();
+      await store.close();
       await rm(profile, { recursive: true, force: true });
     }
   });
