@@ -15,6 +15,8 @@ minimumReleaseAge: 1440
 overrides:
   'appdmg@0.6.6>image-size': 2.0.4
   'qs@<6.16.1': 6.16.1 # GHSA-6pq8-jhm2-2vcw: express 5.3.0 pins a vulnerable qs (dev-only, via the MCP SDK)
+  'hono@<4.13.16': 4.13.18 # Dependabot #8-#12: the MCP SDK's hono, bundled into the app and CLI
+  '@hono/node-server@<2.1.6': 2.1.8 # Dependabot #6
 
 # Dependency lifecycle scripts are blocked unless listed here (strictDepBuilds is on by default).
 allowBuilds:
