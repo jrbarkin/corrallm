@@ -6,9 +6,9 @@ import { describe, expect, it } from 'vitest';
 import { claudeCode } from '../adapter';
 
 /*
- * B21 C10, Claude Code · Agent SDK: what the real CLI did, through SDK 0.3.319, when given
+ * B21 C10, Claude Code · Agent SDK: what the real CLI did, through SDK 0.3.327, when given
  * corrallm's per-session entry as a host-registered `{ type: 'sdk', name: 'corrallm', instance }`
- * server, recorded (Claude Code 2.1.322) in fixtures/mcp-entry.json and replayed here. Nothing in
+ * server, recorded (Claude Code 2.1.328) in fixtures/mcp-entry.json and replayed here. Nothing in
  * this file starts a CLI. The instance in the recordings answered in-process (the channel's
  * stand-in) and its model was a local stub, so no tokens were spent.
  *
@@ -73,10 +73,10 @@ describe("Claude Code · Agent SDK's corrallm entry (B21 C10)", () => {
     expect(connection?.api).toBe('channel');
     expect(fixture.recordedWith).toEqual({
       ...fixture.recordedWith,
-      claude: '2.1.322',
-      sdk: '0.3.319',
+      claude: '2.1.328',
+      sdk: '0.3.327',
     });
-    expect(fixture.minimumVersion).toEqual({ claude: '2.1.322', sdk: '0.3.319' });
+    expect(fixture.minimumVersion).toEqual({ claude: '2.1.328', sdk: '0.3.327' });
   });
 
   it('is the entry the recordings were made with', () => {
