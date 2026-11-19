@@ -18,7 +18,7 @@ import { AgentChip } from './AgentChip';
 import { SettingsMenu } from './Settings';
 import type { Session } from '../../shared/model/session';
 import './AgentSettings.css';
-import { HandoffTile } from './Fallback';
+import { ChainControl, HandoffTile } from './Fallback';
 import { WorkspaceDetails } from '../workspaces/Workspace';
 
 type Options = (adapter: AdapterId) => Promise<SettingsOptions>;
@@ -234,7 +234,6 @@ export function AgentSettingsPanel({
         <div className="agent-settings-connection">
           <span>CLI and connection</span>
           <AgentChip
-            agentId={node.id}
             adapter={adapter}
             connection={connection}
             onChange={onAgent}
@@ -245,6 +244,7 @@ export function AgentSettingsPanel({
           />
         </div>
         <p className="agent-settings-help">{connectionInfo(connection).description}.</p>
+        <ChainControl agent={node.id} variant="settings" />
         <WorkspaceDetails agent={node.id} />
         <HandoffTile agent={node.id} />
         {lead}

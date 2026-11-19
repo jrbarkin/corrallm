@@ -94,6 +94,19 @@
   font-weight: 700;
   text-decoration: underline;
 }
+.fallback-settings {
+  margin-bottom: 18px;
+}
+.fallback-settings h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.fallback-settings .fallback-control {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
 .fallback-sr {
   position: absolute;
   width: 1px;

@@ -22,7 +22,11 @@ const node: AgentNode = {
   position: { x: 0, y: 0 },
   data: { label: 'Writer', adapter: 'zed' },
 };
-async function show(data: Partial<AgentNode['data']> = {}, view = {}) {
+async function show(
+  data: Partial<AgentNode['data']> = {},
+  view = {},
+  { settings = false, inert = false } = {},
+) {
   await loadTestCatalog(TWO_MADE_UP);
   const core = fakeCore();
   cores.push(core);
@@ -47,8 +51,9 @@ async function show(data: Partial<AgentNode['data']> = {}, view = {}) {
       client={core.api}
       mirror={core.topics}
       nodes={[{ ...node, data: dataOf }]}
+      inert={inert}
     >
-      <ChainControl agent="a" />
+      <ChainControl agent="a" variant={settings ? 'settings' : 'chip'} />
       <HandoffTile agent="a" />
       <FallbackMark agent="a" />
     </FallbackProvider>,
@@ -119,6 +124,33 @@ it('offers no chain picker to an unchosen or unavailable agent', async () => {
   expect(screen.queryByRole('button', { name: 'Fallback chain' })).toBeNull();
   unmount();
   await show({ adapter: 'missing' });
+  expect(screen.queryByRole('button', { name: 'Fallback chain' })).toBeNull();
+});
+
+it.each([
+  ['unchosen', { adapter: '' }],
+  ['unavailable adapter', { adapter: 'missing' }],
+  ['unavailable connection', { connection: 'missing' }],
+] as const)('shows no settings chain section for an %s endpoint', async (_kind, data) => {
+  const { core } = await show(data, {}, { settings: true });
+  expect(screen.queryByRole('region', { name: 'Fallback chain' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Fallback chain' })).toBeNull();
+  expect(core.operations).toEqual([]);
+});
+
+it('disables the settings chain picker while its canvas context is inert', async () => {
+  const { core } = await show({}, {}, { settings: true, inert: true });
+  const section = within(screen.getByRole('region', { name: 'Fallback chain' }));
+  const button = section.getByRole<HTMLButtonElement>('button', { name: 'Fallback chain' });
+  expect(button.disabled).toBe(true);
+  fireEvent.click(button);
+  expect(screen.queryByRole('dialog', { name: 'Fallback chain' })).toBeNull();
+  expect(core.operations).toEqual([]);
+});
+
+it('shows no settings chain control without the window canvas context', () => {
+  render(<ChainControl agent="a" variant="settings" />);
+  expect(screen.queryByRole('region', { name: 'Fallback chain' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Fallback chain' })).toBeNull();
 });
 
