@@ -12,7 +12,6 @@ import { createDispatcher } from './call';
 import type { Implementation, Registry } from './call';
 import type { OutsideCaller } from './caller';
 import { mergePermits, onEveryCarrier, ruleChecks } from './rules';
-import type { Engines } from './engines';
 import { CALLERS, CANVAS, isLead, RESOLVERS } from './test-registry';
 
 /*
@@ -109,9 +108,9 @@ describe('merge-permits', () => {
     const carriers = Object.entries(SURFACE as Readonly<Record<string, Surface>>)
       .filter(([, surface]) => surface.rules?.includes('merge-permits'))
       .map(([name]) => name);
-    expect(Object.keys(ruleChecks({} as Engines, MADE_UP)['merge-permits']).sort()).toEqual(
-      carriers.sort(),
-    );
+    expect(
+      Object.keys(ruleChecks({ canvas: () => undefined }, MADE_UP)['merge-permits']).sort(),
+    ).toEqual(carriers.sort());
   });
 
   it('is checked in core.call for every caller: a --no-merge token is refused, you and a merging token aren’t', async () => {

@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import type { Socket } from 'node:net';
 
 import type { ChildSystem } from '../core/children';
@@ -132,7 +132,7 @@ export class TestLifetime implements TestLifetimeOwner {
       // The guardian's exit/error promise reports a lost pipe with the scope's location.
     });
     this.#guardian.unref();
-    (this.#guardian.stdin as Socket).unref();
+    (this.#guardian.stdin as Writable & Pick<Socket, 'unref'>).unref();
   }
 
   prepare(command: string, args: readonly string[], env: NodeJS.ProcessEnv) {

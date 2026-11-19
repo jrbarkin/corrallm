@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import type { BrowserWindow, dialog } from 'electron';
+import { BrowserWindow } from 'electron';
+import type { dialog } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const native = vi.hoisted(() => ({
@@ -11,7 +12,13 @@ const native = vi.hoisted(() => ({
   confirm: vi.fn<typeof dialog.showMessageBox>(),
 }));
 vi.mock('electron', () => ({
-  BrowserWindow: { fromWebContents: () => native.owner },
+  BrowserWindow: class {
+    readonly id = 1;
+
+    static fromWebContents() {
+      return native.owner;
+    }
+  },
   webContents: { fromId: () => (native.owner === null ? undefined : {}) },
   dialog: { showSaveDialog: native.save, showMessageBox: native.confirm },
 }));
@@ -34,7 +41,7 @@ describe('the canvas Save dialog', () => {
   it.each(['parented', 'unparented'] as const)(
     'asks the native %s dialog to confirm an existing filename',
     async (kind) => {
-      if (kind === 'parented') native.owner = {} as BrowserWindow;
+      if (kind === 'parented') native.owner = new BrowserWindow();
       const file = path.join(folder, 'plan.corral');
       native.save.mockResolvedValue({ canceled: false, filePath: file });
       expect(await saveCanvasDialog(1, file)).toBe(file);
@@ -52,7 +59,7 @@ describe('the canvas Save dialog', () => {
   it.each(['parented', 'unparented'] as const)(
     'keeps the extended target on decline in a %s dialog',
     async (kind) => {
-      if (kind === 'parented') native.owner = {} as BrowserWindow;
+      if (kind === 'parented') native.owner = new BrowserWindow();
       const file = path.join(folder, 'plan.corral');
       await writeFile(file, 'Someone else’s canvas');
       native.save.mockResolvedValue({ canceled: false, filePath: path.join(folder, 'plan') });

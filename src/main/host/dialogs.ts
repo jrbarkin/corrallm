@@ -23,7 +23,7 @@ import type { Handlers } from '../../shared/link';
 const FILTERS = [{ name: 'corrallm canvas', extensions: [CANVAS_EXTENSION] }];
 
 /** The window whose web contents' id is `window`, if it is still there. */
-function parent(window: WindowId): BrowserWindow | null {
+function parent(window: WindowId): Electron.BrowserWindow | null {
   const contents = webContents.fromId(window);
   return contents ? BrowserWindow.fromWebContents(contents) : null;
 }

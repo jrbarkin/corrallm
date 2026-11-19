@@ -226,7 +226,7 @@ function tokenTitle(item: NeedsItem): string {
  * (ops/files.ts).
  */
 export function ruleChecks(
-  engines: Engines,
+  engines: Pick<Engines, 'canvas'>,
   catalog: Catalog,
   needOf: (canvas: CanvasId, id: string) => NeedsItem | undefined = () => undefined,
   /** B24 C4: why a party the item names may not give this answer, by the one allowance. */

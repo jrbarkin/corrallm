@@ -1,12 +1,29 @@
+import { MessageChannelMain } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
+import { CoreLink } from '../../shared/link';
+import type { Handlers } from '../../shared/link';
 import { ProfileLocked } from '../core/lock';
 import type { Presence } from '../core/presence';
+import type { CoreSide, HostSide } from '../core/protocol';
 import type { CoreProcess } from './core-process';
 import { CoreSupervisor } from './supervisor';
 import type { SupervisorOptions } from './supervisor';
 import { RESTARTS, WINDOW_MS } from './supervise';
+
+vi.mock('electron', () => {
+  class Port {
+    readonly postMessage = vi.fn();
+    readonly start = vi.fn();
+    readonly close = vi.fn();
+  }
+  return {
+    MessageChannelMain: class {
+      readonly port1 = new Port();
+    },
+  };
+});
 
 /*
  * The core process, supervised (Core Server §7.5), against fake core processes and a fake clock:
@@ -29,7 +46,10 @@ interface FakeCore extends CoreProcess {
 function fakeCore(): FakeCore {
   const exited = Promise.withResolvers<number>();
   return {
-    link: {} as CoreProcess['link'],
+    link: new CoreLink<HostSide, CoreSide>(
+      { post: () => undefined, start: () => undefined },
+      {} as Handlers<HostSide>,
+    ),
     exited: exited.promise,
     presence: undefined,
     exit: exited.resolve,
@@ -103,7 +123,7 @@ describe('starting the core', () => {
   it('hands windows’ ports to the core once it is up', async () => {
     const { supervisor, core } = setup();
     const starting = supervisor.start();
-    const port = {} as Electron.MessagePortMain;
+    const port = new MessageChannelMain().port1;
     supervisor.connect(7, port);
     supervisor.windowGone(8, true);
     supervisor.windowFocused(7);
@@ -149,7 +169,7 @@ describe('a core that crashes', () => {
 
     // The port is the new core's: the epoch says so, before it is up.
     expect(supervisor.epoch).toBe(2);
-    const port = {} as Electron.MessagePortMain;
+    const port = new MessageChannelMain().port1;
     supervisor.windowGone(7);
     supervisor.connect(7, port);
     let asked: CoreProcess | undefined;

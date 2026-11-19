@@ -16,7 +16,6 @@ import type { Caller } from '../caller';
 import { MessageStore, MessageTable } from '../delivery/messages';
 import { ReplyRouter } from '../replies';
 import { ruleChecks } from '../rules';
-import type { Engines } from '../engines';
 import { runReplies } from '../run-replies';
 import type { Store } from '../store/store';
 import { openTestStore } from '../store/test-store';
@@ -342,9 +341,10 @@ beforeEach(async () => {
     grantees: () => ['granted'],
     timer: () => () => undefined,
   });
-  router = new ReplyRouter(runReplies({ engines: {} as Engines, prompts: owner }));
+  const engines = { canvas: () => undefined };
+  router = new ReplyRouter(runReplies({ engines, prompts: owner }));
   rules = ruleChecks(
-    {} as Engines,
+    engines,
     WITH_API,
     (canvas, id) => owner.current(canvas, id),
     (canvas, to, by, answer) => owner.refusal(canvas, to, by, answer),

@@ -1,15 +1,15 @@
 {
   "recordedWith": {
-    "claude": "2.1.322",
-    "sdk": "0.3.319",
+    "claude": "2.1.328",
+    "sdk": "0.3.327",
     "platform": "macOS arm64",
-    "date": "2026-11-10",
+    "date": "2026-11-19",
     "model": "none: a local stub Messages API answered each turn (a call to the tool, then \"done\"); no tokens were spent",
     "config": "a throwaway CLAUDE_CONFIG_DIR, HOME and project; a stand-in MCP server registered as { type: \"sdk\", name: \"corrallm\", instance }, its list and calls answered in-process"
   },
   "minimumVersion": {
-    "claude": "2.1.322",
-    "sdk": "0.3.319"
+    "claude": "2.1.328",
+    "sdk": "0.3.327"
   },
   "entry": {
     "note": "The planned entry (§9.4): mcpServers.corrallm = { type: 'sdk', name: 'corrallm', instance }, the instance a low-level MCP server whose list and calls are the channel's; allowedTools the exact non-destructive names; settings.deniedMcpServers the outside names. No credential: the channel is bound. `tools: [{ name, permission_policy: 'always_ask' }]` on the server asks even for an allowed tool.",
