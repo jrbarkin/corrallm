@@ -17,7 +17,8 @@ export const REASONS = {
   'spending-guard': 'Usage rules are yours: an agent could otherwise defeat its own guard.',
   credentials: 'A person makes tokens, sees each once and may revoke them; no token makes one.',
   consent: 'Consent is yours alone to give.',
-  permissions: 'Who leads, and what an agent runs as (its mode, connection and CLI), are yours.',
+  permissions:
+    'Modes, handoff settings, who leads and continuing a session as you are yours alone.',
   'caller-bound':
     'It acts for its caller itself (a question it asks, an agent’s own work), which you never are: you answer questions.',
   'native-menu':
@@ -39,9 +40,6 @@ export const DEVIATIONS: Partial<Record<OpName, Reason>> = {
   'session.viewCommand': 'view',
   'settings.set': 'consent',
   'app.command': 'consent',
-  'agent.setType': 'permissions',
-  'agent.setConnection': 'permissions',
-  'agent.setFallback': 'permissions',
   'agent.setHandoff': 'permissions',
   'agent.setLead': 'permissions',
   'outside.setGrant': 'permissions',

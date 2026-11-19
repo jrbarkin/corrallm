@@ -46,6 +46,7 @@ export type Rule =
   | 'self'
   | 'human-gate'
   | 'connection'
+  | 'handoff'
   | 'sticky'
   | 'team'
   | 'new-agent'
@@ -320,33 +321,47 @@ export const SURFACE = {
     destructive: true,
   },
   'agent.setType': {
-    access: Y,
+    access: W,
     kind: 'doc',
     scope: 'canvas',
     rules: ['connection'],
+    self: 'refused',
+    destructive: true,
     drains: 'agents',
   },
   'agent.setConnection': {
-    access: Y,
+    access: W,
     kind: 'doc',
     scope: 'canvas',
     rules: ['connection'],
+    self: 'refused',
+    destructive: true,
     drains: 'agents',
   },
-  // B11a C1, C11: the chain is yours alone (D9), on R8's guard; changing it restarts nothing.
+  // Changing a chain restarts nothing; an outside writer proposes the change for you.
   'agent.setFallback': {
-    access: Y,
+    access: W,
     kind: 'doc',
     scope: 'canvas',
     rules: ['connection'],
+    self: 'refused',
+    destructive: true,
   },
-  // B11a C7, C11: when an agent is asked for its handoff, and its Markdown copy, are yours alone
-  // (D9), on R8's guard; changing them restarts nothing.
+  // Restore only the source kept by the existing fallback lane, at its turn boundary.
+  'agent.return': {
+    access: W,
+    kind: 'command',
+    scope: 'none',
+    rules: [],
+    self: 'refused',
+    destructive: true,
+  },
+  // When an agent writes its handoff, and its Markdown copy, remain yours alone.
   'agent.setHandoff': {
     access: Y,
     kind: 'doc',
     scope: 'canvas',
-    rules: ['connection'],
+    rules: ['handoff'],
   },
   // B24 C1 (Design §3): who leads, and what each may answer for its team, are yours alone (D9),
   // kept on this machine and never in a canvas file; so are the outside orchestrators you let

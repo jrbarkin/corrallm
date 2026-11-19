@@ -84,13 +84,12 @@ export const RULES = {
     sentence:
       'Only you remove, move or change an OK or what the run holds for you, move work from behind an OK to before it, or delete an agent whose queue holds one.',
   },
-  // R8: the guard behind agent.setType, agent.setConnection and agent.setFallback being yours
-  // alone, on whatever op's change (B11a C1: the chain, the run's place in it, the handoff settings).
+  // Backend changes need your approval, whatever operation built the change.
   connection: {
     kind: 'change',
-    sentence:
-      'Only you change the adapter, the connection, the fallback chain or the handoff settings of an agent that exists.',
+    sentence: 'An outside token’s backend change needs your approved proposal.',
   },
+  handoff: { kind: 'change', sentence: 'Only you change an existing agent’s handoff settings.' },
   // R10: whatever op builds a lead's change, it reaches only the lead's team and what it adds
   // inside itself. Checked on every commit of a lead's.
   team: {

@@ -32,7 +32,7 @@ export const Role = z
 export const agentOps = {
   'agent.setType': define('agent.setType', {
     summary:
-      'Switches an agent’s CLI, translating steps by their catalog jobs, with an optional connection.',
+      'Switches an agent’s CLI, translating steps by their catalog jobs, with an optional connection. An outside writer proposes it for your approval.',
     input: z.strictObject({
       canvas: OpCanvas,
       agent: AgentId,
@@ -43,7 +43,7 @@ export const agentOps = {
   }),
   'agent.setConnection': define('agent.setConnection', {
     summary:
-      'Switches an agent’s connection, dropping a saved mode the new connection cannot start.',
+      'Switches an agent’s connection, dropping a saved mode the new connection cannot start. An outside writer proposes a change, but cannot change any mode.',
     input: z.strictObject({ canvas: OpCanvas, agent: AgentId, connection: CatalogId }),
     output: z.strictObject({}),
   }),
@@ -51,9 +51,15 @@ export const agentOps = {
     summary:
       'Sets the backends an agent carries on with when its usage runs out (up to three, each an ' +
       'adapter, its connection and optionally a model and effort; back: return to switch back ' +
-      'at the reset), or null to remove them. Yours alone.',
+      'at the reset), or null to remove them. An outside token proposes it for your approval.',
     input: SetFallbackInput,
     output: z.strictObject({ changed: z.boolean() }),
+  }),
+  'agent.return': define('agent.return', {
+    summary:
+      'Returns a fallen-back agent to its own kept endpoint once its turn ends, if that endpoint can take work. No endpoint or mode can be supplied.',
+    input: z.strictObject({ canvas: OpCanvas, agent: AgentId }),
+    output: z.strictObject({}),
   }),
   'agent.setHandoff': define('agent.setHandoff', {
     summary:

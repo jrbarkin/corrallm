@@ -594,7 +594,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         const parsed = admit(sub, op, raw, caller);
         return scopes.draining(
           scopeOf(op[0], parsed),
-          drainsOf(op[0], parsed, registry.surface),
+          drainsOf(op[0], parsed, registry.surface, caller.kind !== 'human'),
           turn.signal,
           () => run(sub, op, parsed, caller, turn, more),
         );
@@ -670,7 +670,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         scopeOf(surface, args),
         {
           preempt: surface.preempt === true,
-          drains: drainsOf(surface, args, registry.surface),
+          drains: drainsOf(surface, args, registry.surface, caller.kind !== 'human'),
         },
         signal,
         async (opSignal, noReturn) => {
@@ -841,9 +841,12 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
  * surfaces in `surfaces`).
  */
 export function drainsOf(
-  surface: Pick<Surface, 'scope' | 'drains'>,
+  surface: Pick<Surface, 'scope' | 'drains'> & Partial<Pick<Surface, 'rules'>>,
   args: unknown,
-  surfaces: Readonly<Record<string, Pick<Surface, 'scope' | 'drains'>>> = {},
+  surfaces: Readonly<
+    Record<string, Pick<Surface, 'scope' | 'drains'> & Partial<Pick<Surface, 'rules'>>>
+  > = {},
+  token = false,
 ): string[][] {
   const {
     canvas,
@@ -862,7 +865,8 @@ export function drainsOf(
     const drained = surface.scope === 'app' ? replace?.canvas : canvas;
     return drained === undefined ? [] : [['app', drained]];
   }
-  if (surface.drains === undefined) return [];
+  if (surface.drains === undefined || (token && surface.rules?.includes('connection') === true))
+    return [];
   return [
     ...[...(agent === undefined ? [] : [agent]), ...nodes].map((one) => [
       'app',
@@ -871,7 +875,9 @@ export function drainsOf(
     ]),
     ...ops.flatMap(({ op, args: inner }) => {
       const drains = Object.hasOwn(surfaces, op) ? surfaces[op] : undefined;
-      return drains?.drains === 'agents' ? drainsOf(drains, { ...inner, canvas }, surfaces) : [];
+      return drains?.drains === 'agents'
+        ? drainsOf(drains, { ...inner, canvas }, surfaces, token)
+        : [];
     }),
   ];
 }

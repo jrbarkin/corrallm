@@ -436,3 +436,45 @@ test('a core crash during source close leaves no switch committed; Resume decide
     await world.close();
   }
 });
+
+test('an outside orchestrator returns a fallen-back agent only to its own endpoint after the reset', async () => {
+  const world = await fallbackWorld({ resetAfterSeconds: 20 });
+  try {
+    await world.start();
+    await world.completed('next');
+    expect(
+      (await world.worker())?.data.fallback?.on?.step,
+      'The agent must be on the configured fallback step before a return is requested',
+    ).toBe(0);
+    const source = (await world.call('usage.get')).readings.find(
+      (one) => one.backend === 'claude-code',
+    );
+    const reset = source?.windows.fiveHour?.resetsAt;
+    expect(reset, 'The source must report a real usage reset').toBeGreaterThan(0);
+    await expect
+      .poll(() => reset !== undefined && reset !== null && Date.now() >= reset, {
+        message: 'A requested return must wait until the source usage is available',
+        timeout: 30_000,
+      })
+      .toBe(true);
+    await world.call('agent.return', { canvas: world.canvas, agent: WORKER });
+    expect(
+      (await world.worker())?.data,
+      'A token’s return must restore exactly the endpoint the chain kept',
+    ).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.terminal' });
+    expect(
+      (await world.worker())?.data.fallback?.on,
+      'The return must clear the fallback position',
+    ).toBeUndefined();
+    expect(
+      (await world.run()).agents[WORKER]?.attempts?.[ItemId.parse('limit')],
+      'Returning must not resend or judge any task again',
+    ).toHaveLength(2);
+    await world.checkpoint();
+  } catch (error) {
+    await world.diagnose(error);
+    throw error;
+  } finally {
+    await world.close();
+  }
+});

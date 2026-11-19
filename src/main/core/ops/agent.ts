@@ -1,6 +1,7 @@
 import { agentEndpoint } from '../../../shared/model/catalog';
 import { z } from 'zod';
 
+import type { CanvasId } from '../../../shared/canvas';
 import { adapterIn, isStartMode } from '../../../shared/adapter';
 import * as agents from '../../../shared/model/agent-ops';
 import { OpFailure } from '../call';
@@ -8,9 +9,10 @@ import type { Implementations, OpServices } from '.';
 import { requireAgent, withoutUndefined } from './agent-document';
 
 export function agentOps(
-  context: Pick<OpServices, 'catalog'>,
+  context: Pick<OpServices, 'catalog' | 'fallback'>,
 ): Pick<
   Implementations,
+  | 'agent.return'
   | 'agent.setType'
   | 'agent.setConnection'
   | 'agent.setFallback'
@@ -26,6 +28,23 @@ export function agentOps(
       );
   };
   return {
+    'agent.return': async ({ canvas, agent }, ctx) => {
+      if (canvas === undefined || context.fallback === undefined)
+        throw new OpFailure('unavailable', 'This core cannot return an agent.');
+      const id = canvas as string as CanvasId;
+      const rev = await context.fallback.returnOwn(id, agent, {
+        by: ctx.by,
+        authorized: () => {
+          ctx.recheck();
+        },
+        committing: () => {
+          ctx.noReturn();
+        },
+        signal: ctx.signal,
+      });
+      ctx.reached(id, rev);
+      return {};
+    },
     'agent.setType': ({ canvas, agent, adapter, connection }, ctx) =>
       ctx.commit(canvas, (doc) => {
         requireAgent(doc, agent);

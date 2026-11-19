@@ -41,6 +41,7 @@
     "api.agent.setType",
     "api.agent.setConnection",
     "api.agent.setFallback",
+    "api.agent.return",
     "api.agent.setHandoff",
     "api.agent.setLead",
     "api.outside.setGrant",
@@ -204,8 +205,12 @@
       "worktree_list"
     ],
     "outside-write": [
+      "agent_return",
+      "agent_setConnection",
+      "agent_setFallback",
       "agent_setRole",
       "agent_setSettings",
+      "agent_setType",
       "agents",
       "app_info",
       "ask",
@@ -278,7 +283,7 @@
     "lead": 58,
     "worker": 15,
     "outside-read": 24,
-    "outside-write": 68
+    "outside-write": 72
   },
   "deviations": {
     "canvas.open": "trust-gate",
@@ -293,9 +298,6 @@
     "session.viewCommand": "view",
     "settings.set": "consent",
     "app.command": "consent",
-    "agent.setType": "permissions",
-    "agent.setConnection": "permissions",
-    "agent.setFallback": "permissions",
     "agent.setHandoff": "permissions",
     "agent.setLead": "permissions",
     "outside.setGrant": "permissions",
@@ -465,15 +467,19 @@
     },
     "agent.setType": {
       "input": "ae31f270ae564f34",
-      "output": "647bbd6cc7b4f077"
+      "output": "e351001ddc871280"
     },
     "agent.setConnection": {
       "input": "1c2f2508eb96bb91",
-      "output": "647bbd6cc7b4f077"
+      "output": "e351001ddc871280"
     },
     "agent.setFallback": {
       "input": "61f7a59a418a62a9",
-      "output": "938d66756294f02f"
+      "output": "b6749b6b7a24a698"
+    },
+    "agent.return": {
+      "input": "dafe7f6753754290",
+      "output": "647bbd6cc7b4f077"
     },
     "agent.setHandoff": {
       "input": "c67a5fe98e897201",

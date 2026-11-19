@@ -1132,6 +1132,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // and what waits on a canvas is read again as one is raised or settled.
   const proposals = new Proposals({
     store,
+    catalog: CATALOG,
     messages: (canvas) => engines.messagesOf(canvas),
     // The agents with a conversation kept, in any workspace and any adapter's CLI.
     conversations: async (canvas) => {
@@ -1602,6 +1603,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             merge: (request) => merges.merge(request),
           },
           control,
+          fallback,
           topics,
           app: config.app,
           catalog: CATALOG,

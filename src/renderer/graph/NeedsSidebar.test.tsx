@@ -684,3 +684,22 @@ it('shows the loop hold’s held message and its pair beside Go on, and no other
   expect(list.querySelectorAll('li')).toHaveLength(2);
   expect(list.querySelector('li')?.textContent).toContain('The question expired.');
 });
+
+it.each(['allow', 'refuse'] as const)(
+  'answers a backend proposal with one %s reply',
+  async (choice) => {
+    const item: NeedsItem = {
+      ...proposal,
+      title: '"orchestrator" asks to change the backend of Worker',
+      detail: 'Change Worker’s backend from codex.app-server to codex.terminal.',
+    };
+    const core = await setup([item]);
+    expect(screen.getByText(item.detail ?? '')).toBeTruthy();
+    await events.click(
+      screen.getByRole('button', { name: choice === 'allow' ? 'Allow' : 'Refuse' }),
+    );
+    await waitFor(() => {
+      expectOneOp(core, 'reply', { canvas, to: item.id, answer: { choice } });
+    });
+  },
+);

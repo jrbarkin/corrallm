@@ -128,6 +128,7 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
       Promise.resolve({ ready: true }),
     ),
   };
+  const carry = vi.fn<NonNullable<FallbackDeps['carry']>>(() => undefined);
   let stopping = false;
   /** The agents a handoff request goes first for (C3's service, here the test's). */
   const firsts = new Set<string>();
@@ -157,6 +158,7 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     changed,
     stopping: () => stopping,
     handoffFirst: (_canvas, agent) => firsts.has(agent),
+    carry,
     now: () => now,
     locale: 'en-US',
   });
@@ -212,6 +214,7 @@ async function world(initial?: CanvasDocument, checkpoint?: ReturnType<Engine['c
     messages,
     engine,
     service,
+    carry,
     sessions,
     fake,
     changed,
@@ -884,6 +887,146 @@ describe('switching back at the reset (C8)', () => {
     back: 'return' as const,
     on: { step: 0, from: CODEX, why: 'usage-limit' as const, at: NOW - HOUR },
   };
+
+  it('returns only to its kept endpoint after the current turn ends, recording who decided', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: { to: ON.to, on: ON.on } })));
+    at.engine.run.start();
+    await quiet(at);
+    const returned = at.service.returnOwn(CANVAS, 'worker', {
+      by: 'outside:orchestrator',
+      authorized: () => undefined,
+      committing: () => undefined,
+      signal: new AbortController().signal,
+    });
+    await settle();
+    expect(at.sessions.close).not.toHaveBeenCalled();
+    expect(at.data()).toMatchObject(CLAUDE);
+    at.end({ status: 'completed', reason: 'completed' }, 'worker', 'claude-code.terminal');
+    await returned;
+    expect(at.data()).toMatchObject(CODEX);
+    expect(at.data().fallback).not.toHaveProperty('on');
+    expect(at.messages.all()).toContainEqual(
+      expect.objectContaining({
+        kind: 'settled',
+        to: 'you',
+        by: 'outside:orchestrator',
+        body: 'Worker returned by "orchestrator".',
+      }),
+    );
+  });
+
+  it('refuses a requested return while its own usage is held or it is not on a fallback step', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));
+    const request = {
+      by: 'outside:orchestrator' as const,
+      authorized: () => undefined,
+      committing: () => undefined,
+      signal: new AbortController().signal,
+    };
+    at.exhaust('codex');
+    await expect(at.service.returnOwn(CANVAS, 'worker', request)).rejects.toThrow(
+      'Its own endpoint can’t take work now.',
+    );
+    const own = await world(canvasOf(worker()));
+    await expect(own.service.returnOwn(CANVAS, 'worker', request)).rejects.toThrow(
+      'This agent is not on a fallback step.',
+    );
+    expect(at.sessions.close).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a requested return before saving it after an awaited availability check', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));
+    const gate = Promise.withResolvers<{ ready: true }>();
+    at.sessions.availability.mockReturnValue(gate.promise);
+    let authorized = true;
+    const request = at.service.returnOwn(CANVAS, 'worker', {
+      by: 'outside:orchestrator',
+      authorized: () => {
+        if (!authorized) throw new Error('Revoked');
+      },
+      committing: () => undefined,
+      signal: new AbortController().signal,
+    });
+    await settle();
+    authorized = false;
+    gate.resolve({ ready: true });
+    await expect(request).rejects.toThrow('This return is no longer authorized.');
+    expect(at.sessions.close).not.toHaveBeenCalled();
+    expect(at.data()).toMatchObject(CLAUDE);
+    expect(at.messages.all().filter(({ kind }) => kind === 'settled')).toEqual([]);
+  });
+
+  it('keeps the handoff carry unchanged if a return record cannot be staged', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));
+    let carried = 'previous';
+    at.carry.mockImplementation(() => {
+      carried = 'return';
+      return {
+        reveal: () => undefined,
+        undo: () => {
+          carried = 'previous';
+        },
+      };
+    });
+    vi.spyOn(at.messages, 'stageWithin').mockImplementationOnce(() => {
+      throw new Error('Records are unavailable');
+    });
+    await expect(
+      at.service.returnOwn(CANVAS, 'worker', {
+        by: 'outside:orchestrator',
+        authorized: () => undefined,
+        committing: () => undefined,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('couldn’t save its switch');
+    expect(carried).toBe('previous');
+    expect(at.data()).toMatchObject(CLAUDE);
+  });
+
+  it('saves the requested return and its decision record together, or neither', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));
+    const before = at.revision();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const allow = await refuseWrites(store, 'message', 'No decision record', CANVAS);
+    try {
+      await expect(
+        at.service.returnOwn(CANVAS, 'worker', {
+          by: 'outside:orchestrator',
+          authorized: () => undefined,
+          committing: () => undefined,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow('couldn’t save its switch');
+    } finally {
+      await allow();
+      errors.mockRestore();
+    }
+    expect(at.data()).toMatchObject(CLAUDE);
+    expect(at.revision()).toEqual(before);
+    expect(at.messages.all().filter(({ kind }) => kind === 'settled')).toEqual([]);
+  });
+
+  it('cancels a requested return waiting for a turn, without holding later work', async () => {
+    const at = await world(canvasOf(worker({ ...CLAUDE, fallback: { to: ON.to, on: ON.on } })));
+    at.engine.run.start();
+    await quiet(at);
+    const controller = new AbortController();
+    const request = at.service.returnOwn(CANVAS, 'worker', {
+      by: 'outside:orchestrator',
+      authorized: () => undefined,
+      committing: () => undefined,
+      signal: controller.signal,
+    });
+    await settle();
+    expect(at.service.switching(CANVAS, 'worker')).toBe(true);
+    controller.abort();
+    await expect(request).rejects.toThrow('This return was cancelled.');
+    expect(at.service.switching(CANVAS, 'worker')).toBe(false);
+    at.end({ status: 'completed', reason: 'completed' }, 'worker', 'claude-code.terminal');
+    await quiet(at);
+    expect(at.sent().at(-1)?.[1]).toBe('claude-code.terminal');
+    expect(at.messages.all().filter(({ kind }) => kind === 'settled')).toEqual([]);
+  });
 
   it('waits for an availability change before trying a blocked return again', async () => {
     const at = await world(canvasOf(worker({ ...CLAUDE, fallback: ON })));

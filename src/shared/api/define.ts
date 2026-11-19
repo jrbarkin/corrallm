@@ -32,7 +32,12 @@ export type Input = z.ZodObject<z.core.$ZodShape, z.core.$strict>;
  * The rules that make a call a proposal for you instead of applying it: R4 and R5, a token's; and
  * B9a's workspace-safety, anyone's (a worktree's work left with no agent is yours to confirm).
  */
-export const PROPOSING_RULES: readonly Rule[] = ['discard', 'restore-code', 'workspace-safety'];
+export const PROPOSING_RULES: readonly Rule[] = [
+  'discard',
+  'restore-code',
+  'workspace-safety',
+  'connection',
+];
 
 /** What an op returns when a token's call became a proposal for you (Core Server §6.9). */
 export const Proposed = z.strictObject({ proposed: NeedId });
@@ -76,7 +81,7 @@ type Extended<O extends z.ZodType, Shape extends z.core.$ZodShape> =
     : never;
 
 type Proposes<S extends Envelope> = S extends { rules: readonly (infer R)[] }
-  ? [Extract<R, 'discard' | 'restore-code'>] extends [never]
+  ? [Extract<R, 'discard' | 'restore-code' | 'connection'>] extends [never]
     ? false
     : true
   : false;

@@ -521,28 +521,29 @@ export function changeChecks({
       }
       return undefined;
     },
-    // R8: how an agent that existed runs, its adapter or its connection, as the one resolver reads
-    // them (choosing an unchosen agent's is a change); and (B11a C1) its fallback chain, the run's
-    // place in it included, and its handoff settings, as JSON says them.
-    connection: (change) => {
+    // Propose an outside writer’s backend change; agent callers remain refused.
+    // Handoff and mode checks run separately, so their refusals always win.
+    connection: (change, { caller }) => {
+      let backend: string | undefined;
       for (const [id, was, is] of keptAgents(change)) {
         const name = nameOf(change.before.nodes, id);
         const [from, to] = [runs(was), runs(is)];
         if (!sameEndpoint(from, to)) {
-          return {
-            refuse: `Only the user changes how ${name} runs (${endpointText(from)}, not ${endpointText(to)}): its adapter and connection are theirs to choose.`,
-          };
+          backend ??= `Changing how ${name} runs needs the user’s approval.`;
         }
         if (!sameJson(canonical(was.fallback), canonical(is.fallback))) {
-          return {
-            refuse: `Only the user changes ${name}’s fallback chain: the backends it carries on with are theirs to choose.`,
-          };
+          backend ??= `Changing ${name}’s fallback chain needs the user’s approval.`;
         }
-        if (!sameJson(canonical(was.handoff), canonical(is.handoff))) {
+      }
+      if (backend === undefined) return undefined;
+      return caller.kind === 'outside' ? { propose: backend } : { refuse: backend };
+    },
+    handoff: (change) => {
+      for (const [id, was, is] of keptAgents(change)) {
+        if (!sameJson(canonical(was.handoff), canonical(is.handoff)))
           return {
-            refuse: `Only the user changes ${name}’s handoff settings.`,
+            refuse: `Only the user changes ${nameOf(change.before.nodes, id)}’s handoff settings.`,
           };
-        }
       }
       return undefined;
     },
@@ -832,12 +833,6 @@ function canonical(value: unknown): unknown {
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([key, one]) => [key, canonical(one)]),
   );
-}
-
-/** What an agent runs, as a refusal says it: its connection, else its adapter, else none chosen. */
-function endpointText(endpoint: AgentEndpoint): string {
-  if (endpoint.connection !== undefined) return endpoint.connection;
-  return endpoint.kind === 'unchosen' ? 'no agent chosen' : endpoint.adapter;
 }
 
 /** Where a change puts an agent, as its manager says it: under an agent, or under none. */

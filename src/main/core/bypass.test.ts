@@ -516,58 +516,65 @@ describe('R7: paused repeat holds', () => {
   );
 });
 
-describe('R8: no token changes how an existing agent runs', () => {
-  it('answers the ops that would human-only, to an outside token and to the lead', async () => {
-    for (const caller of [OUTSIDE, LEAD]) {
-      await failed(
-        'human-only',
-        'agent.setConnection',
-        { agent: 'helper', connection: 'codex.terminal' },
-        caller,
-      );
-      await failed(
-        'human-only',
-        'agent.setType',
-        { agent: 'helper', adapter: 'claude-code' },
-        caller,
-      );
-      // B11a C1: the chain is yours alone too.
-      await failed(
-        'human-only',
-        'agent.setFallback',
-        { agent: 'helper', fallback: { to: [{ adapter: 'claude-code' }] } },
-        caller,
-      );
-      // B11a C7: so are when it is asked for its handoff, and its file.
+describe('backend changes need your approval', () => {
+  it('proposes an outside orchestrator’s changes and refuses agent callers', async () => {
+    for (const [op, args] of [
+      ['agent.setConnection', { connection: 'codex.terminal' }],
+      ['agent.setType', { adapter: 'claude-code' }],
+      ['agent.setFallback', { fallback: { to: [{ adapter: 'claude-code' }] } }],
+    ] as const) {
+      const before = doc();
+      expect(await call(op, { agent: 'helper', ...args }, OUTSIDE)).toMatchObject({
+        ok: true,
+        value: { proposed: expect.stringMatching(/^proposal\//) as unknown },
+      });
+      expect(doc()).toBe(before);
+      await failed('forbidden', op, { agent: 'helper', ...args }, LEAD);
+    }
+    for (const caller of [OUTSIDE, LEAD])
       await failed(
         'human-only',
         'agent.setHandoff',
         { agent: 'helper', handoff: { off: true } },
         caller,
       );
-    }
   });
 
   it.each([
     ['a chain', 'agent.setFallback', { fallback: { to: [{ adapter: 'claude-code' }] } }],
     ['handoff settings', 'agent.setHandoff', { handoff: { file: 'HANDOFF.md' } }],
-  ] as const)('refuses a token’s batch that sets %s, as a whole', async (_what, op, args) => {
-    const before = doc();
-    for (const caller of [OUTSIDE, LEAD]) {
-      const result = await call(
-        'canvas.batch',
-        {
-          ops: [
-            { op: 'canvas.move', args: { moves: [{ node: 'helper', position: { x: 9, y: 9 } }] } },
-            { op, args: { agent: 'helper', ...args } },
-          ],
-        },
-        caller,
-      );
-      expect(result).toMatchObject({ ok: false, error: { code: 'human-only' } });
-    }
-    expect(doc()).toBe(before);
-  });
+  ] as const)(
+    'keeps a batch setting %s unapplied until you approve it, or refused',
+    async (_what, op, args) => {
+      const before = doc();
+      for (const caller of [OUTSIDE, LEAD]) {
+        const result = await call(
+          'canvas.batch',
+          {
+            ops: [
+              {
+                op: 'canvas.move',
+                args: { moves: [{ node: 'helper', position: { x: 9, y: 9 } }] },
+              },
+              { op, args: { agent: 'helper', ...args } },
+            ],
+          },
+          caller,
+        );
+        if (caller === OUTSIDE && op === 'agent.setFallback')
+          expect(result).toMatchObject({
+            ok: true,
+            value: { proposed: expect.stringMatching(/^proposal\//) as unknown },
+          });
+        else
+          expect(result).toMatchObject({
+            ok: false,
+            error: { code: op === 'agent.setHandoff' ? 'human-only' : 'forbidden' },
+          });
+      }
+      expect(doc()).toBe(before);
+    },
+  );
 });
 
 describe('R11: what a token’s new agents run with, and how many it keeps', () => {
@@ -1024,12 +1031,17 @@ describe('on the change itself, whatever builds it', () => {
     ],
   ];
 
-  it.each(EDITS)('refuses a token’s change of %s, and applies yours', async (_what, edit) => {
-    const before = documents.live(BUILT).rev;
-    await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
-    expect(documents.live(BUILT).rev).toBe(before);
-    await expect(build(edit, YOU)).resolves.toMatchObject({ rev: before + 1 });
-  });
+  it.each(EDITS)(
+    'reserves a token’s change of %s for you, and applies yours',
+    async (what, edit) => {
+      const before = documents.live(BUILT).rev;
+      if (['a connection', 'an adapter', 'a fallback chain'].includes(what))
+        await expect(build(edit)).resolves.toEqual({ proposed: PROPOSAL });
+      else await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
+      expect(documents.live(BUILT).rev).toBe(before);
+      await expect(build(edit, YOU)).resolves.toMatchObject({ rev: before + 1 });
+    },
+  );
 
   it('refuses a token’s new agent on another connection, or with a startup mode, unless it copies one', async () => {
     const elsewhere = adding('new', { connection: 'codex.app-server' });
@@ -1062,7 +1074,7 @@ describe('on the change itself, whatever builds it', () => {
       ],
     });
 
-  it('refuses a token’s change choosing an unchosen agent’s endpoint, whichever it names (B12 C2)', async () => {
+  it('requires your approval to choose an unchosen agent’s endpoint, whichever it names', async () => {
     await build(unchosen('u'), YOU);
     for (const edit of [
       editing('u', (data) => ({ ...data, adapter: 'claude-code' })),
@@ -1070,12 +1082,8 @@ describe('on the change itself, whatever builds it', () => {
       editing('u', (data) => ({ ...data, connection: 'claude-code.terminal' })),
     ]) {
       const before = documents.live(BUILT).rev;
-      for (const caller of [OUTSIDE, LEAD]) {
-        await expect(build(edit, caller)).rejects.toMatchObject({
-          code: 'refused',
-          message: /Only the user changes how Unchosen runs \(no agent chosen, not /,
-        });
-      }
+      await expect(build(edit, OUTSIDE)).resolves.toEqual({ proposed: PROPOSAL });
+      await expect(build(edit, LEAD)).rejects.toMatchObject({ code: 'refused' });
       expect(documents.live(BUILT).rev).toBe(before);
     }
     // A change that leaves it unchosen is no change of how it runs.
@@ -1116,7 +1124,7 @@ describe('on the change itself, whatever builds it', () => {
     }
   });
 
-  it('refuses a token’s change to a chain you set, its run position too, or its removal', async () => {
+  it('reserves a chain change for your approval and refuses handoff changes', async () => {
     const chain = {
       to: [
         { adapter: 'claude-code', connection: 'claude-code.terminal' },
@@ -1128,7 +1136,7 @@ describe('on the change itself, whatever builds it', () => {
       YOU,
     );
     const before = documents.live(BUILT).rev;
-    for (const edit of [
+    for (const [index, edit] of [
       editing('c', (data) => ({ ...data, fallback: { ...chain, to: chain.to.slice(1) } })),
       editing('c', (data) => ({ ...data, fallback: { ...chain, back: 'return' as const } })),
       editing('c', (data) => ({
@@ -1154,8 +1162,9 @@ describe('on the change itself, whatever builds it', () => {
         delete next.handoff;
         return next;
       }),
-    ]) {
-      await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
+    ].entries()) {
+      if (index < 4) await expect(build(edit)).resolves.toEqual({ proposed: PROPOSAL });
+      else await expect(build(edit)).rejects.toMatchObject({ code: 'refused' });
       await expect(build(edit, LEAD)).rejects.toMatchObject({ code: 'refused' });
     }
     expect(documents.live(BUILT).rev).toBe(before);
@@ -1971,7 +1980,7 @@ describe('canvas.batch: every rule on the whole, each inner op checked as its ow
     expect(node('c').data.label).toBe('C');
   });
 
-  it('refuses a batch holding agent.setConnection, yours alone, or a link or unlink between agents that exist', async () => {
+  it('proposes a batch changing a connection, but refuses a link or unlink between agents that exist', async () => {
     const before = doc();
     expect(
       await call(
@@ -1981,7 +1990,10 @@ describe('canvas.batch: every rule on the whole, each inner op checked as its ow
         },
         OUTSIDE,
       ),
-    ).toMatchObject({ ok: false, error: { code: 'human-only' } });
+    ).toMatchObject({
+      ok: true,
+      value: { proposed: expect.stringMatching(/^proposal\//) as unknown },
+    });
     expect(doc()).toBe(before);
     await refused('canvas.batch', { ops: [{ op: 'canvas.link', args: { a: 'a', b: 'c' } }] });
     await refused('canvas.batch', { ops: [{ op: 'canvas.unlink', args: { a: 'a', b: 'b' } }] });

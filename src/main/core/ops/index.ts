@@ -27,6 +27,7 @@ import type { HostServices } from '../host';
 import type { StalledTurns } from '../stalled';
 import type { PromptOwner } from '../prompts/owner';
 import type { TokenStore } from '../tokens';
+import type { FallbackService } from '../fallback';
 import type { CommandLink } from '../command-link';
 import type { LeadStore } from '../leads';
 import { agentOps } from './agent';
@@ -72,6 +73,7 @@ export type Implementations = {
 /** What the operations act on: the services the core composes (createCore). */
 export interface OpServices {
   control: SessionControl;
+  fallback?: Pick<FallbackService, 'returnOwn'>;
   topics: Pick<Topics, 'subscribe' | 'unsubscribe'>;
   /** Which app this is, as app.info says. */
   app: { name: string; version: string };
