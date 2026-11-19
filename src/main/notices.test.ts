@@ -246,20 +246,20 @@ describe('joinNotices', () => {
 
   describe('an addon built from its scope sibling’s repository', () => {
     const repository = 'git+https://github.com/xtermjs/xterm.js.git';
-    async function xterm(folder: string, addon: Record<string, unknown>) {
+    async function xterm(folder: string, addon: Record<string, unknown>, name = 'addon-fit') {
       const root = path.join(folder, 'node_modules/@xterm');
       await mkdir(path.join(root, 'xterm'), { recursive: true });
-      await mkdir(path.join(root, 'addon-fit'), { recursive: true });
+      await mkdir(path.join(root, name), { recursive: true });
       await writeFile(
         path.join(root, 'xterm/package.json'),
         JSON.stringify({ name: '@xterm/xterm', version: '6', license: 'MIT', repository }),
       );
       await writeFile(path.join(root, 'xterm/LICENSE'), 'The xterm.js license');
       await writeFile(
-        path.join(root, 'addon-fit/package.json'),
-        JSON.stringify({ name: '@xterm/addon-fit', version: '0.1', ...addon }),
+        path.join(root, name, 'package.json'),
+        JSON.stringify({ name: `@xterm/${name}`, version: '0.1', ...addon }),
       );
-      return path.join(root, 'addon-fit/index.js');
+      return path.join(root, name, 'index.js');
     }
 
     it('takes the repository’s license, and says so', async () => {
@@ -271,8 +271,29 @@ describe('joinNotices', () => {
       expect(text).toContain('xterm repository');
     });
 
+    it('takes the repository’s license when an addon names its path inside the repository', async () => {
+      const { folder, notices } = await project();
+      const addon = await xterm(
+        folder,
+        {
+          version: '0.14.0',
+          license: 'MIT',
+          repository: 'https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize',
+        },
+        'addon-serialize',
+      );
+      await bundles(notices, [addon]);
+      const text = await joinNotices(notices);
+      expect(text).toContain('@xterm/addon-serialize 0.14.0\nLicense: MIT');
+      expect(text).toContain('The xterm.js license');
+    });
+
     it.each([
       ['another repository', { license: 'MIT', repository: 'https://github.com/other/other' }],
+      [
+        'a repository with only the same prefix',
+        { license: 'MIT', repository: 'https://github.com/xtermjs/xterm.js-other' },
+      ],
       ['another license', { license: 'ISC', repository }],
     ])('refuses one with %s', async (_name, addon) => {
       const { folder, notices } = await project();
@@ -324,7 +345,12 @@ describe('joinNotices', () => {
 
     it.each([
       ['a different runtime repository', { repository: 'https://github.com/other/other' }, {}],
-      ['a repository with only the same prefix', { repository: `${repository}/other` }, {}],
+      ['a path outside the named repository URL', { repository: `${repository}/other` }, {}],
+      [
+        'a repository with only the same prefix',
+        { repository: 'https://github.com/facebook/react-other' },
+        {},
+      ],
       ['a different holder repository', {}, { repository: 'https://github.com/other/other' }],
       ['a different holder license', {}, { license: 'ISC' }],
       ['a different shared license', { license: 'ISC' }, { license: 'ISC' }],

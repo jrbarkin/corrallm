@@ -200,6 +200,12 @@ function repositoryOf(manifest: Manifest): string {
   return url.replace(/^[a-z]+\+/, '').replace(/\.git$/, '');
 }
 
+/** A repository URL or a path within it, never another repository with the same prefix. */
+function inRepository(manifest: Manifest, repositories: readonly string[]): boolean {
+  const url = repositoryOf(manifest);
+  return repositories.some((repository) => url === repository || url.startsWith(`${repository}/`));
+}
+
 /** The license text a package without a file of its own may use, or none. */
 async function repositoryLicense(
   dir: string,
@@ -212,7 +218,7 @@ async function repositoryLicense(
   if (!entry) return undefined;
   const { holder: holderName, repositories, license, source } = entry[1];
   if (
-    !repositories.includes(repositoryOf(manifest)) ||
+    !inRepository(manifest, repositories) ||
     (license !== undefined && licenseOf(manifest) !== license)
   )
     return undefined;
@@ -224,7 +230,7 @@ async function repositoryLicense(
   if (
     holder.name !== holderName ||
     licenseOf(holder) !== licenseOf(manifest) ||
-    !repositories.includes(repositoryOf(holder))
+    !inRepository(holder, repositories)
   )
     return undefined;
   const texts = await textsOf(holderDir, LICENSE_FILE);
