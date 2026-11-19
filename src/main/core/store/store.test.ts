@@ -710,12 +710,37 @@ describe('checkpoints', () => {
     });
     const before = await size();
     expect(pending()).toEqual([expect.objectContaining({ ms: 1000 })]);
-
-    fire();
-
-    await vi.waitFor(async () => {
+    const checkpoint: (this: Checkpointer) => Promise<Checkpointed> = Reflect.get(
+      Checkpointer.prototype,
+      'checkpoint',
+    );
+    const entered = Promise.withResolvers<undefined>();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const checkpoints = vi
+      .spyOn(Checkpointer.prototype, 'checkpoint')
+      .mockImplementation(async function (this: Checkpointer) {
+        entered.resolve(undefined);
+        // A busy worker may start later than waitFor's default deadline, without missing the job.
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        return checkpoint.call(this);
+      });
+    try {
+      fire();
+      await entered.promise;
+      expect(checkpoints).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await size()).toBe(before);
+      await vi.advanceTimersByTimeAsync(100);
+      await checkpoints.mock.results[0]?.value;
       expect(await size()).toBeGreaterThan(before);
-    });
+    } finally {
+      try {
+        await vi.advanceTimersByTimeAsync(1100);
+        await checkpoints.mock.results[0]?.value;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
     expect(pending()).toEqual([]);
   });
 

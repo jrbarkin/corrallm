@@ -2,12 +2,52 @@ import { execFileSync } from 'node:child_process';
 
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { stopTestGroup, TEST_GROUP_SYSTEM } from './test-process-groups';
+import { stopTestGroup, TEST_GROUP_SYSTEM, testProcessAlive } from './test-process-groups';
 
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(execFileSync).mockReset();
+});
+
+it.skipIf(process.platform === 'win32').each([
+  ['Z', false],
+  ['Z+', false],
+  ['S', true],
+  ['T', true],
+] as const)('distinguishes an unreaped test process from a running one (%s)', (state, live) => {
+  // The group cleanup already observed its exit, while PID 1 has not reaped its pid yet.
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  vi.mocked(execFileSync).mockReturnValue(`${state}\n`);
+  expect(testProcessAlive(42)).toBe(live);
+});
+
+it.skipIf(process.platform === 'win32')(
+  'recognizes a test process reaped during its state read',
+  () => {
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    vi.mocked(execFileSync).mockImplementation(() => {
+      throw Object.assign(new Error('No such process'), { status: 1, stdout: '', stderr: '' });
+    });
+    expect(testProcessAlive(42)).toBe(false);
+  },
+);
+
+it.skipIf(process.platform === 'win32').each(['EIO', 'ETIMEDOUT'])(
+  'keeps a failed test-process state read (%s) a failure',
+  (code) => {
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    vi.mocked(execFileSync).mockImplementation(() => {
+      throw Object.assign(new Error(`spawnSync ps ${code}`), { code });
+    });
+    expect(() => testProcessAlive(42)).toThrow(`spawnSync ps ${code}`);
+  },
+);
+
+it.skipIf(process.platform === 'win32')('refuses an unreadable test-process state', () => {
+  vi.spyOn(process, 'kill').mockReturnValue(true);
+  vi.mocked(execFileSync).mockReturnValue('not a state');
+  expect(() => testProcessAlive(42)).toThrow(/Could not read test process/);
 });
 
 it.each(['', ' 84 S\n', ' 42 Z+\n 84 S\n'])(
