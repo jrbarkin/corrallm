@@ -103,21 +103,28 @@ function asProcess(env: Record<string, string> = {}): SpawnAppServer {
 }
 
 it('keeps plan-revision feedback private when resuming a native conversation', async () => {
-  const env = { FAKE_CODEX_STATE: path.join(dir, 'threads.json') };
+  const gate = path.join(dir, 'revision');
+  const script = path.join(dir, 'turns.json');
+  await writeFile(script, JSON.stringify({ turns: { 'private-revision': { gate } } }));
+  const env = { FAKE_CODEX_STATE: path.join(dir, 'threads.json'), FAKE_CODEX_FALLBACK: script };
   const first = await start({ mode: 'plan' }, env);
   await first.session.send({ id: 'review-plan', text: 'Plan a change' });
   const plan = await first.heard('prompt', { prompt: { kind: 'plan' } });
+  const revised = first.nextEvent('prompt', { prompt: { kind: 'plan' } });
   first.answer(plan.key, { kind: 'choice', value: 'keep-planning', feedback: 'private-revision' });
-  let revised: PromptEvent | undefined;
-  await vi.waitFor(() => {
-    revised = first.events.find(
-      (event): event is PromptEvent =>
-        event.type === 'prompt' && event.prompt.kind === 'plan' && event.key !== plan.key,
-    );
-    expect(revised).toBeDefined();
-  });
-  if (!revised) throw new Error('No revised plan');
-  first.answer(revised.key, { kind: 'choice', value: 'keep-planning' });
+  // Fault injection: the native revision takes longer than the old one-second observer.
+  const release = new Promise((resolve) => setTimeout(resolve, 1100)).then(() =>
+    writeFile(gate, 'open'),
+  );
+  let revision: PromptEvent;
+  try {
+    revision = await revised;
+  } finally {
+    await writeFile(gate, 'open');
+    await release;
+  }
+  expect(revision.key).not.toBe(plan.key);
+  first.answer(revision.key, { kind: 'choice', value: 'keep-planning' });
   await first.ended('review-plan');
   const conversation = first.remembered.at(-1);
   if (!conversation) throw new Error('No conversation');
@@ -232,6 +239,7 @@ async function start(
   deps: Partial<AppServerConnectorDeps> = {},
 ) {
   const events: HostEvent[] = [];
+  const listeners = new Set<(event: HostEvent) => void>();
   const remembered: string[] = [];
   const activity = vi.fn();
   const session = await connector(env, deps).start(
@@ -245,7 +253,10 @@ async function start(
       ...spec,
     },
     {
-      emit: (event: HostEvent) => events.push(event),
+      emit: (event: HostEvent) => {
+        events.push(event);
+        for (const listener of listeners) listener(event);
+      },
       remember: (id) => remembered.push(id),
       activity,
     },
@@ -285,7 +296,17 @@ async function start(
   const answer = (key: string, given: PromptAnswer) => session.prompts?.answer(key, given);
   /** The prompts raised to the core's owner so far. */
   const raised = () => events.filter((event): event is PromptEvent => event.type === 'prompt');
-  return { session, events, remembered, turn, ended, heard, activity, answer, raised };
+  /** A future event, subscribed before the action that raises it; the test's own bound applies. */
+  const nextEvent = <T extends HostEvent['type']>(type: T, like: object = {}) =>
+    new Promise<Extract<HostEvent, { type: T }>>((resolve) => {
+      const listener = (event: HostEvent) => {
+        if (event.type !== type || !matches(event, like)) return;
+        listeners.delete(listener);
+        resolve(event as Extract<HostEvent, { type: T }>);
+      };
+      listeners.add(listener);
+    });
+  return { session, events, remembered, turn, ended, heard, nextEvent, activity, answer, raised };
 }
 
 function matches(event: object, like: object): boolean {
@@ -857,29 +878,55 @@ describe('the App Server connection', () => {
   });
 
   it('keeps the next turn queued until command termination answers, even after turn/completed', async () => {
-    const { session, heard, ended, events } = await start(
-      {},
-      {
-        FAKE_CODEX_TERMINATE: 'delay',
-        FAKE_CODEX_PROCESS_LOG: path.join(dir, 'processes.jsonl'),
-      },
-    );
-    await session.send({ id: 'm1', text: 'slow' });
-    await heard('tool', { detail: { kind: 'output' } });
-    await session.send({ id: 'm2', text: 'next' });
-    await session.interrupt();
-    await vi.waitFor(async () => {
-      expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
+    const rpc = await import('../rpc');
+    const original = rpc.startAppServer;
+    const answered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const starting = vi.spyOn(rpc, 'startAppServer').mockImplementation(async (options) => {
+      const server = await original(options);
+      return {
+        ...server,
+        request: async (method, params) => {
+          const result = await server.request(method, params);
+          if (method === 'thread/backgroundTerminals/terminate') {
+            answered.resolve(undefined);
+            // The native process has stopped, but its acknowledgement has not reached the session.
+            await release.promise;
+          }
+          return result;
+        },
+      };
     });
-    expect(events.some((event) => event.type === 'user' && event.id === 'm2')).toBe(false);
-    await ended('m2');
-    const log = (await readFile(path.join(dir, 'processes.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line) as { type: string; live: string[] });
-    expect(log.map((event) => event.type)).toEqual(['turn', 'process', 'terminated', 'turn']);
-    expect(log.at(-1)?.live).toEqual([]);
-    expect(await requests('thread/backgroundTerminals/clean')).toEqual([]);
+    try {
+      const { session, heard, ended, events } = await start(
+        {},
+        {
+          FAKE_CODEX_PROCESS_LOG: path.join(dir, 'processes.jsonl'),
+        },
+      );
+      await session.send({ id: 'm1', text: 'slow' });
+      await heard('tool', { detail: { kind: 'output' } });
+      await session.send({ id: 'm2', text: 'next' });
+      await session.interrupt();
+      await answered.promise;
+      expect(events.some((event) => event.type === 'user' && event.id === 'm2')).toBe(false);
+      expect(events.some((event) => event.type === 'end' && event.messages.includes('m1'))).toBe(
+        false,
+      );
+      release.resolve(undefined);
+      await ended('m2');
+      expect(await requests('thread/backgroundTerminals/terminate')).toHaveLength(1);
+      const log = (await readFile(path.join(dir, 'processes.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { type: string; live: string[] });
+      expect(log.map((event) => event.type)).toEqual(['turn', 'process', 'terminated', 'turn']);
+      expect(log.at(-1)?.live).toEqual([]);
+      expect(await requests('thread/backgroundTerminals/clean')).toEqual([]);
+    } finally {
+      release.resolve(undefined);
+      starting.mockRestore();
+    }
   });
 
   it.each(['missing', 'unknown', 'fail', 'hang'])(
