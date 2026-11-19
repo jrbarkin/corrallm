@@ -6,7 +6,23 @@ import { describe, expect, it } from 'vitest';
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 
 // Extend this list as the remaining public docs are reviewed against the implementation.
-const PUBLIC_DOCS = ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'SECURITY.md'];
+const PUBLIC_DOCS = [
+  'README.md',
+  'AGENTS.md',
+  'CONTRIBUTING.md',
+  'SECURITY.md',
+  'docs/architecture/registry.md',
+  'docs/architecture/renderer.md',
+  'docs/architecture/run-recovery.md',
+  'docs/architecture/security.md',
+  'docs/architecture/sessions.md',
+  'docs/architecture/store.md',
+  'docs/architecture/testing.md',
+  'docs/architecture/toolchain.md',
+  'docs/architecture/updates.md',
+  'docs/architecture/usage.md',
+  'docs/architecture/workspaces.md',
+];
 
 /** References a reader cannot resolve from the public repository. */
 function internalReferences(markdown: string): string[] {
