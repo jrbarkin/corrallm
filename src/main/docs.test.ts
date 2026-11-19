@@ -6,7 +6,23 @@ import { describe, expect, it } from 'vitest';
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 
 // Extend this list as the remaining public docs are reviewed against the implementation.
-const PUBLIC_DOCS = ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'SECURITY.md'];
+const PUBLIC_DOCS = [
+  'README.md',
+  'AGENTS.md',
+  'CONTRIBUTING.md',
+  'SECURITY.md',
+  'docs/architecture/overview.md',
+  'docs/architecture/canvas.md',
+  'docs/architecture/catalog.md',
+  'docs/architecture/claude-code.md',
+  'docs/architecture/codex.md',
+  'docs/architecture/core.md',
+  'docs/architecture/engine.md',
+  'docs/architecture/headless.md',
+  'docs/architecture/ipc.md',
+  'docs/architecture/messages.md',
+  'docs/architecture/native-modules.md',
+];
 
 /** References a reader cannot resolve from the public repository. */
 function internalReferences(markdown: string): string[] {
@@ -14,6 +30,7 @@ function internalReferences(markdown: string): string[] {
     /\b(?:B\d+[a-z]?|[CX]\d+[a-z]?)\b/g,
     /\btasks?(?:[\s_-]+#?|#)?\d+[a-z]?\b/gi,
     /\bBuild[\s_-]+Plan\b/gi,
+    /\bCodex[\s_-]+task\b/gi,
     /\bcorrallm-docs\b|\bprivate[\s-]+(?:design|plan)(?:\s+(?:documents?|docs?|notes?))?\b/gi,
     /\bcorrallm\s*[—–-]\s*[^`\r\n]*?\bDesign\b|\bDesign\.md\b/g,
     /§\s*[\d.a-z-]*/gi,
@@ -57,6 +74,7 @@ describe('repository instructions and architecture docs', () => {
     'task 224',
     'task224',
     'task #224',
+    'Codex task',
     'Task-224b',
     'Build Plan Q23',
     'private design notes',
