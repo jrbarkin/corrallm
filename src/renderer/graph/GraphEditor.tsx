@@ -12,7 +12,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
-  useStoreApi,
+  useReactFlowStoreApi,
   useViewport,
 } from '@xyflow/react';
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
@@ -123,6 +123,10 @@ const edgeTypes = { default: LinkView, work: WorkEdgeView } satisfies EdgeTypes;
 /** Middle and right mouse buttons pan; the left button draws the selection box. */
 const PAN_BUTTONS = [1, 2];
 const MULTI_SELECT_KEYS = ['Meta', 'Control', 'Shift'];
+// React Flow's numeric padding is pixels. Keep the previous 0.2/0.3 viewport factors:
+// each side takes half of the space left by dividing the viewport by (1 + factor).
+const FIT_PADDING = '8.333333333333334%';
+const INSERT_PADDING = '11.538461538461538%';
 
 type Command = Exclude<KeyAction, 'rename'>;
 
@@ -468,7 +472,7 @@ function Editor({
     setDrawn(undefined);
     setAgentMenu({ id, x: event.clientX, y: event.clientY });
   }, []);
-  const store = useStoreApi();
+  const store = useReactFlowStoreApi();
   const { screenToFlowPosition, fitView, zoomIn, zoomOut } = useReactFlow();
   const { zoom } = useViewport();
   const wrapper = useRef<HTMLDivElement>(null);
@@ -497,13 +501,13 @@ function Editor({
   const selectOne = useCallback(
     (id: string) => {
       setSelection((current) => onlySelection(current, id));
-      store.setState({ nodesSelectionActive: false });
+      store.optionsStore.setState({ nodesSelectionActive: false });
     },
     [store],
   );
   const clearSelection = useCallback(() => {
     setSelection(EMPTY_SELECTION);
-    store.setState({ nodesSelectionActive: false });
+    store.optionsStore.setState({ nodesSelectionActive: false });
   }, [store]);
   const removed = useCallback((cleared: readonly string[]) => {
     setNotice(cleared.length > 0 ? cleared : undefined);
@@ -678,13 +682,13 @@ function Editor({
     if (!ready || fittedCanvas.current === canvasId) return;
     fittedCanvas.current = canvasId;
     // Mark an empty binding too: its first newly added node must stay at the pointer.
-    if (model.nodes.length > 0) void fitView({ padding: 0.2, maxZoom: 1 });
+    if (model.nodes.length > 0) void fitView({ padding: FIT_PADDING, maxZoom: 1 });
   }, [ready, canvasId, model.nodes.length, fitView]);
   /** The template's inserted roots: the view moves to show them together. */
   const [inserted, setInserted] = useState<readonly string[]>();
   useEffect(() => {
     if (inserted !== undefined)
-      void fitView({ nodes: inserted.map((id) => ({ id })), padding: 0.3, maxZoom: 1 });
+      void fitView({ nodes: inserted.map((id) => ({ id })), padding: INSERT_PADDING, maxZoom: 1 });
   }, [inserted, fitView]);
 
   /** Reset only view state, subscribe to the switched canvas and fit its first snapshot. */
@@ -1144,6 +1148,7 @@ function Editor({
           nodeTypes={nodeTypes}
           nodesDraggable={!arranging}
           edgeTypes={edgeTypes}
+          elevateEdgesOnSelect={false}
           onSelectionStart={() => {
             // Commit the controlled reset before React Flow compares its first rectangle with
             // the previous selection, so it also reports cards that were already selected.
@@ -1152,19 +1157,19 @@ function Editor({
           onNodesChange={(changes) => {
             setSelection((current) => {
               const nodes = new Set(current.nodes);
-              for (const change of changes)
-                if (change.type === 'select') {
-                  if (change.selected) nodes.add(change.id);
-                  else nodes.delete(change.id);
-                }
+              for (const change of changes.getByType('select')) {
+                if (change.selected) nodes.add(change.id);
+                else nodes.delete(change.id);
+              }
               return { ...current, nodes };
             });
             // React Flow places a moved node in its parent as it holds that parent now; the
             // overlay keeps it there in canvas coordinates, whatever the commit does to the parent.
-            const { nodeLookup } = store.getState();
+            const { nodeLookup } = store.nodesStore.getState();
+            const positions = changes.getByType('position');
             const placed = new Map(
-              changes.flatMap((change) => {
-                if (change.type !== 'position' || !change.position) return [];
+              positions.flatMap((change) => {
+                if (!change.position) return [];
                 const parent = nodeLookup.get(change.id)?.parentId;
                 const origin =
                   parent === undefined
@@ -1196,8 +1201,8 @@ function Editor({
               }
               return next;
             });
-            const nudges = changes.flatMap((change) =>
-              change.type === 'position' && change.position && change.dragging === undefined
+            const nudges = positions.flatMap((change) =>
+              change.position && change.dragging === undefined
                 ? [{ node: change.id, position: change.position }]
                 : [],
             );
@@ -1206,11 +1211,10 @@ function Editor({
           onEdgesChange={(changes) => {
             setSelection((current) => {
               const edges = new Set(current.edges);
-              for (const change of changes)
-                if (change.type === 'select') {
-                  if (change.selected) edges.add(change.id);
-                  else edges.delete(change.id);
-                }
+              for (const change of changes.getByType('select')) {
+                if (change.selected) edges.add(change.id);
+                else edges.delete(change.id);
+              }
               return { ...current, edges };
             });
           }}
@@ -1285,7 +1289,6 @@ function Editor({
           multiSelectionKeyCode={MULTI_SELECT_KEYS}
           deleteKeyCode={null}
           defaultMarkerColor={null}
-          colorMode="system"
         >
           <Background />
           <NodeToolbar
@@ -1436,7 +1439,7 @@ function Editor({
                 void zoomOut();
               }}
               onFit={() => {
-                void fitView({ padding: 0.2, maxZoom: 1 });
+                void fitView({ padding: FIT_PADDING, maxZoom: 1 });
               }}
               onArrange={() => {
                 perform(api.canvasSetArrange({ canvas: canvasId, on: !arranging }));
@@ -1707,7 +1710,7 @@ function Editor({
                 (result) => {
                   if ('roots' in result) {
                     setSelection({ nodes: new Set(result.roots), edges: new Set() });
-                    store.setState({ nodesSelectionActive: false });
+                    store.optionsStore.setState({ nodesSelectionActive: false });
                     setInserted(result.roots);
                   }
                 },
