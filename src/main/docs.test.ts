@@ -5,6 +5,28 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 
+// Extend this list as the remaining public docs are reviewed against the implementation.
+const PUBLIC_DOCS = ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'SECURITY.md'];
+
+/** References a reader cannot resolve from the public repository. */
+function internalReferences(markdown: string): string[] {
+  const patterns = [
+    /\b(?:B\d+[a-z]?|[CX]\d+[a-z]?)\b/g,
+    /\btasks?(?:[\s_-]+#?|#)?\d+[a-z]?\b/gi,
+    /\bBuild[\s_-]+Plan\b/gi,
+    /\bcorrallm-docs\b|\bprivate[\s-]+(?:design|plan)(?:\s+(?:documents?|docs?|notes?))?\b/gi,
+    /\bcorrallm\s*[—–-]\s*[^`\r\n]*?\bDesign\b|\bDesign\.md\b/g,
+    /§\s*[\d.a-z-]*/gi,
+  ];
+  return markdown
+    .split('\n')
+    .flatMap((line, index) =>
+      patterns.flatMap((pattern) =>
+        [...line.matchAll(pattern)].map((match) => `${String(index + 1)}: ${match[0]}`),
+      ),
+    );
+}
+
 /** Concrete repository paths in inline code; examples and globs name no single file. */
 function codePaths(markdown: string): string[] {
   return [...markdown.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)].flatMap((match) => {
@@ -22,6 +44,39 @@ function markdownFiles(folder: string): string[] {
 }
 
 describe('repository instructions and architecture docs', () => {
+  it.each(PUBLIC_DOCS)('keeps %s understandable without private plans', (file) => {
+    expect(internalReferences(readFileSync(path.join(ROOT, file), 'utf8'))).toEqual([]);
+  });
+
+  it.each([
+    'B9a',
+    'B11',
+    'B22b',
+    'X12',
+    'C7',
+    'task 224',
+    'task224',
+    'task #224',
+    'Task-224b',
+    'Build Plan Q23',
+    'private design notes',
+    '~/Repos/corrallm-docs/review.md',
+    'corrallm — Store Writer Design.md',
+    'Design §3',
+    '§9.2',
+  ])('recognizes an internal reference in %s', (text) => {
+    expect(internalReferences(text)).not.toEqual([]);
+  });
+
+  it('allows public links, feature names and technical versions', () => {
+    expect(
+      internalReferences(
+        '[Store](docs/architecture/store.md) uses SQLite and a writer thread. ' +
+          'Node 24.22.1, WebGL2, x64, C++ and a task queue are public terms.',
+      ),
+    ).toEqual([]);
+  });
+
   it('keeps the canonical instructions within 20,000 bytes', () => {
     expect(readFileSync(path.join(ROOT, 'AGENTS.md')).byteLength).toBeLessThanOrEqual(20_000);
   });
@@ -60,7 +115,7 @@ describe('repository instructions and architecture docs', () => {
 
   it('keeps every concrete backticked repository path valid', () => {
     const missing = [
-      path.join(ROOT, 'AGENTS.md'),
+      ...PUBLIC_DOCS.map((file) => path.join(ROOT, file)),
       ...markdownFiles(path.join(ROOT, 'docs')),
     ].flatMap((file) =>
       codePaths(readFileSync(file, 'utf8')).flatMap((target) =>
