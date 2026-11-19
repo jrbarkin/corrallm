@@ -319,6 +319,8 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
   readonly #dismissed = new Set<string>();
   /** The folder trust dialog its CLI shows now, as it is listed; undefined while none shows. */
   #trust: string | undefined;
+  /** Its own exit report ended the wait, even if its last dialog is still on the screen. */
+  #cleared = false;
   /**
    * Whether its CLI got past its first-run dialogs (it reported a state but that it is going, a
    * hook posted, or its prompt showed): it no longer asks whether to trust the folder.
@@ -599,6 +601,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     this.#pty = pty;
     this.#reports.clear();
+    this.#cleared = false;
     this.#spawned = Date.now();
     this.#exit = new Promise((resolve) => {
       pty.onExit(({ exitCode }) => {
@@ -796,6 +799,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * its turns; its tasks' are left out.
    */
   #status(report: ProgramStatus, source = 'status'): void {
+    if (report.id === undefined) this.#cleared = report.state === 'clear';
     const record = JSON.stringify([source, report.id ?? '']);
     const value = JSON.stringify(report);
     if (this.#reports.get(record) !== value) {
@@ -1170,7 +1174,7 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
    * asked) or its prompt (it is past them).
    */
   #firstRunDialogs(): void {
-    if (this.#passed || !this.#pty) return;
+    if (this.#passed || this.#cleared || !this.#pty) return;
     if (this.#cli.draft(this.#screen) !== undefined) {
       this.#pass();
       return;

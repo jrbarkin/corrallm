@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { inspectProcess } from '../core/process-identity';
 import { TestChildren } from './test-children';
-import { stopTestGroup } from './test-process-groups';
+import { stopTestGroup, testProcessAlive as alive } from './test-process-groups';
 
 let directory: string;
 let children: TestChildren;
@@ -22,20 +22,10 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 }, 30_000);
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    throw error;
-  }
-}
-
 it.skipIf(process.platform === 'win32')(
   'stops what a group’s exited leader left running in it, then passes',
   async () => {
-    // G3's crash test: a fake codex's sleeping command, in the codex's own group, outlived it.
+    // A native fake's sleeping command can outlive it in its own process group.
     const file = path.join(directory, 'left.json');
     const leader = spawn(
       process.execPath,
@@ -43,15 +33,19 @@ it.skipIf(process.platform === 'win32')(
         '-e',
         `const child = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
          require('node:fs').writeFileSync(${JSON.stringify(file)}, JSON.stringify({ pid: child.pid }));
-         setTimeout(() => process.exit(0), 300);`,
+         process.once('message', () => process.exit(0));
+         process.send('ready');`,
       ],
-      { detached: true, stdio: 'ignore' },
+      { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] },
     );
     const group = leader.pid ?? 0;
+    const ready = new Promise((resolve) => leader.once('message', resolve));
     const exited = new Promise((resolve) => leader.once('exit', resolve));
     try {
       const started = inspectProcess(group)?.started;
       if (started === undefined) throw new Error('The leader exited before it was recorded.');
+      await ready;
+      leader.send('exit');
       await exited;
       const left = (JSON.parse(await readFile(file, 'utf8')) as { pid: number }).pid;
       expect(alive(left)).toBe(true);

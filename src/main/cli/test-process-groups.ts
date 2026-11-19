@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 
@@ -10,6 +11,33 @@ export interface TestGroup {
   pid: number;
   started: ProcessStart;
   profile?: string;
+}
+
+/** Whether a test process still runs, rather than merely retaining an unreaped pid. */
+export function testProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    throw error;
+  }
+  if (process.platform === 'win32') return true;
+  let state: string;
+  try {
+    state = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 1000,
+    }).trim();
+  } catch (error) {
+    const failed = error as { status?: number; stdout?: string; stderr?: string };
+    if (failed.status === 1 && failed.stdout?.trim() === '' && failed.stderr?.trim() === '')
+      return false;
+    throw error;
+  }
+  if (!/^\S+$/.test(state)) throw new Error(`Could not read test process ${String(pid)}.`);
+  return !state.startsWith('Z');
 }
 
 export const TEST_GROUP_SYSTEM: ChildSystem = {

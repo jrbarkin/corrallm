@@ -11,6 +11,7 @@ import { helpFlags } from './claude';
 import { TerminalConnector } from './connector';
 import { Replay } from './replay';
 import type { TerminalFixture } from './replay';
+import { Screen } from '../terminal/screen';
 
 /*
  * Claude Code in corrallm's terminal, as the real Claude Code 2.1.321 behaved (B13 C13): each
@@ -59,10 +60,10 @@ const SPEC: SessionSpec = {
 };
 
 /** Starts a session whose pseudo-terminal plays `name`'s recording. */
-async function start(name: TerminalFixture) {
+async function start(name: TerminalFixture, beforeExit?: () => Promise<void>) {
   const connector = new TerminalConnector({
     spawn: (_file, args, options) => {
-      const run = new Replay(name, args, options);
+      const run = new Replay(name, args, options, beforeExit);
       runs.push(run);
       return Promise.resolve(run);
     },
@@ -337,6 +338,46 @@ describe('the folder trust dialog of the real Claude Code (2.1.321), raised to t
       expect(open().size).toBe(1);
     });
     session.terminal?.input('\r');
+    await until(() => {
+      expect(last('closed')).toBeDefined();
+    });
+    expect(last('closed')?.error).toMatch(/exited with code 1/);
+    expect(endings()).toEqual([`${TRUST}:withdrawn`]);
+  });
+
+  it('withdraws folder trust once when the exit report precedes a delayed process exit', async () => {
+    const exiting = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const session = await start('trust-no', () => {
+      exiting.resolve(undefined);
+      return release.promise;
+    });
+    await until(() => {
+      expect(open().size).toBe(1);
+    });
+    const checked = Promise.withResolvers<undefined>();
+    const settled: (this: Screen) => Promise<void> = Reflect.get(Screen.prototype, 'settled');
+    const scan = vi.spyOn(Screen.prototype, 'settled').mockImplementation(function (this: Screen) {
+      const done = settled.call(this);
+      void done.then(() => {
+        setImmediate(() => {
+          checked.resolve(undefined);
+        });
+      });
+      return done;
+    });
+    try {
+      session.terminal?.input('\r');
+      await exiting.promise;
+      await checked.promise;
+      expect(last('closed')).toBeUndefined();
+      expect(raised()).toHaveLength(1);
+      expect(open().size).toBe(0);
+      expect(endings()).toEqual([`${TRUST}:withdrawn`]);
+    } finally {
+      release.resolve(undefined);
+      scan.mockRestore();
+    }
     await until(() => {
       expect(last('closed')).toBeDefined();
     });
