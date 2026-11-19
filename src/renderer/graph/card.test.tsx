@@ -18,6 +18,33 @@ afterEach(() => {
   rules.remove();
 });
 
+it.each([
+  ['light', 'rgb(255, 255, 255)', 'rgb(37, 99, 235)'],
+  ['dark', 'rgb(31, 35, 41)', 'rgb(96, 165, 250)'],
+] as const)(
+  'keeps cards and selection legible in the %s color scheme',
+  async (scheme, bg, accent) => {
+    rules.textContent = css;
+    document.head.append(rules);
+    const { container } = await renderReady(<GraphEditor />);
+    const flow = container.querySelector<HTMLElement>('.react-flow');
+    if (!flow) throw new Error('No flow');
+    // React Flow inherits the scheme; it no longer adds a class for the system's dark mode.
+    flow.style.colorScheme = scheme;
+    const card = document.createElement('div');
+    card.className = 'graph-card';
+    card.style.borderColor = 'var(--graph-accent)';
+    flow.append(card);
+    expect(getComputedStyle(card).backgroundColor).toBe(bg);
+    expect(getComputedStyle(card).borderTopColor).toBe(accent);
+  },
+);
+
+it('keeps the selection cursor on the pane’s pointer overlay', () => {
+  // Pseudo-element styles need the built app; pin the rule that targets its hit surface here.
+  expect(css).toMatch(/\.react-flow__pane\.selection::before\s*\{\s*cursor: default;/);
+});
+
 it('shows topic workspace attention beside Idle, glows the dock, and opens the exact setup card', async () => {
   let core: FakeCanvas | undefined;
   const need = 'setup/11111111-1111-4111-8111-111111111111/1';

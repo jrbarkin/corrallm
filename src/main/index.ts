@@ -214,7 +214,7 @@ function main(): void {
       ): Promise<CoreSide['requests'][K]['result']> =>
         answered((await supervisor.core).link.request(name, ...args));
       // How corrallm ends, every way it may (B14 C2, C4), and how a window comes back (C10).
-      const quit = new QuitCoordinator<BrowserWindow>({
+      const quit = new QuitCoordinator<Electron.BrowserWindow>({
         changed: () => {
           nativePresence.refresh();
           if (quit.approved) for (const native of notifications) native.close();

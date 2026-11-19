@@ -51,6 +51,33 @@ test('adding an agent waits for a choice, accepts Enter only after a pick, and c
   );
 });
 
+test('cards keep their colors in both system themes and selecting empty canvas uses a plain cursor', async () => {
+  const agent = await addAgentAt('Agent 1', 250, 200);
+  const card = agent.locator('.graph-card');
+  await expect(agent).toHaveClass(/selected/);
+  for (const [colorScheme, background, accent] of [
+    ['light', 'rgb(255, 255, 255)', 'rgb(37, 99, 235)'],
+    ['dark', 'rgb(31, 35, 41)', 'rgb(96, 165, 250)'],
+  ] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expect(card).toHaveCSS('background-color', background);
+    await expect(card).toHaveCSS('outline-color', accent);
+  }
+  const start = await at(850, 450);
+  const end = await at(900, 500);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(end.x, end.y, { steps: 2 });
+    await expect(pane()).toHaveClass(/selection/);
+    await expect
+      .poll(() => pane().evaluate((element) => getComputedStyle(element, '::before').cursor))
+      .toBe('default');
+  } finally {
+    await page.mouse.up();
+  }
+});
+
 test('an unchosen agent holds its work until the person chooses through its chip', async () => {
   const file = nativePath.join(dir, 'unchosen.corral');
   await writeFile(
@@ -287,8 +314,7 @@ test.beforeEach(async () => {
   }, folder);
   page = await app.firstWindow();
   problems = [];
-  // Warnings too: the only React Flow diagnostic left in a production build is a console.warn
-  // ("Parent node … not found": a child placed before its parent in the nodes array).
+  // Collect warnings too: React Flow emits some diagnostics as console.warn.
   page.on('console', (message) => {
     // Native Terminal views warm xterm's glyph cache; this is its existing timing diagnostic.
     if (/^task queue exceeded allotted deadline by \d+ms$/.test(message.text())) return;

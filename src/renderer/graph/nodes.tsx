@@ -7,7 +7,7 @@ import {
   Handle,
   NodeToolbar,
   Position,
-  useStore,
+  useNodesStore,
 } from '@xyflow/react';
 import type { Edge, EdgeProps, NodeProps } from '@xyflow/react';
 import { startTransition, useEffect, useRef, useState } from 'react';
@@ -34,7 +34,7 @@ import { isBlank } from '../../shared/model/queue';
  */
 export function AgentNodeView({ id, data, parentId }: NodeProps<GraphNode>) {
   const hover = useHover();
-  const isParent = useStore((state) => state.parentLookup.has(id));
+  const isParent = useNodesStore((state) => state.parentLookup.has(id));
   const { remove, ungroup, queueState, groupState, card: cardOf } = useGraphActions();
   const card = cardOf?.(id) ?? { status: 'Idle', line: 'Idle', completed: 0, total: 0 };
   const progress = card.total === 0 ? 0 : Math.round((card.completed / card.total) * 100);

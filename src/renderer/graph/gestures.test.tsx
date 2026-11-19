@@ -6,7 +6,8 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type * as XYFlow from '@xyflow/react';
-import type { ReactFlow } from '@xyflow/react';
+import { EdgeChangeset, getViewportForBounds, NodeChangeset } from '@xyflow/react';
+import type { ReactFlow, FitViewOptions } from '@xyflow/react';
 import { api } from '../api/client';
 import { EXAMPLES } from '../../shared/examples';
 import { templateInfo } from '../../shared/templates';
@@ -26,7 +27,7 @@ import { GraphEditor } from './GraphEditor';
 
 const seen = vi.hoisted(() => ({
   props: undefined as ComponentProps<typeof ReactFlow> | undefined,
-  fits: [] as unknown[],
+  fits: [] as FitViewOptions[],
   nodeLists: [] as NonNullable<ComponentProps<typeof ReactFlow>['nodes']>[],
 }));
 vi.mock('@xyflow/react', async (importOriginal) => {
@@ -39,7 +40,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
       const originalFit = flow.fitView;
       const fitView = useCallback(
         (options: Parameters<typeof originalFit>[0]) => {
-          seen.fits.push(options);
+          seen.fits.push(options ?? {});
           return originalFit(options);
         },
         [originalFit],
@@ -397,7 +398,9 @@ it('links with one operation', async () => {
 it('unlinks with one operation', async () => {
   const view = await setup({ linked: true });
   act(() => {
-    seen.props?.onEdgesChange?.([{ id: 'a->b', type: 'select', selected: true }]);
+    seen.props?.onEdgesChange?.(
+      new EdgeChangeset([{ id: 'a->b', type: 'select', selected: true }]),
+    );
   });
   fireEvent.click(await screen.findByRole('button', { name: 'Delete link' }));
   await called(view.core);
@@ -406,9 +409,11 @@ it('unlinks with one operation', async () => {
 it('sends no move during a drag and one move at drop', async () => {
   const view = await setup({ selected: ['a'] });
   act(() => {
-    seen.props?.onNodesChange?.([
-      { id: 'a', type: 'position', position: { x: 700, y: 800 }, dragging: true },
-    ]);
+    seen.props?.onNodesChange?.(
+      new NodeChangeset([
+        { id: 'a', type: 'position', position: { x: 700, y: 800 }, dragging: true },
+      ]),
+    );
   });
   expect(view.core.operations).toEqual([]);
   expect(view.document.nodes[0]?.position).toEqual({ x: 20, y: 52 });
@@ -525,6 +530,7 @@ it.each(['TDD relay', 'Head to head'])(
       expect(seen.props?.nodes?.filter((node) => node.selected).map(({ id }) => id)).toEqual(roots);
       expect(seen.fits.at(-1)).toMatchObject({ nodes: roots.map((id) => ({ id })) });
     });
+    expect(fittedViewport(seen.fits.at(-1))).toEqual({ x: 115, y: 207.5, zoom: 0.385 });
   },
 );
 it('keeps Arrange when deleting an unselected agent from its controls', async () => {
@@ -625,12 +631,14 @@ it('keeps a dropped child where it was dropped while the mirror holds the move t
   // Past the group's top-left corner: the group grows up and left once the card is dropped.
   const dropped = { x: -100, y: -60 };
   act(() => {
-    seen.props?.onNodesChange?.([{ id: 'a', type: 'position', position: dropped, dragging: true }]);
+    seen.props?.onNodesChange?.(
+      new NodeChangeset([{ id: 'a', type: 'position', position: dropped, dragging: true }]),
+    );
   });
   act(() => {
-    seen.props?.onNodesChange?.([
-      { id: 'a', type: 'position', position: dropped, dragging: false },
-    ]);
+    seen.props?.onNodesChange?.(
+      new NodeChangeset([{ id: 'a', type: 'position', position: dropped, dragging: false }]),
+    );
   });
   const shownA = seen.props?.nodes?.find((one) => one.id === 'a');
   if (!shownA) throw new Error('No dragged node');
@@ -665,9 +673,11 @@ it('removes a rejected drag overlay so the view returns to the mirror', async ()
     error: { code: 'refused', sentence: 'The move was refused.' },
   });
   act(() => {
-    seen.props?.onNodesChange?.([
-      { id: 'a', type: 'position', position: { x: 700, y: 800 }, dragging: true },
-    ]);
+    seen.props?.onNodesChange?.(
+      new NodeChangeset([
+        { id: 'a', type: 'position', position: { x: 700, y: 800 }, dragging: true },
+      ]),
+    );
   });
   const node = seen.props?.nodes?.find((node) => node.id === 'a');
   if (!node) throw new Error('No a');
@@ -680,7 +690,9 @@ it('removes a rejected drag overlay so the view returns to the mirror', async ()
 it('writes one move for a keyboard position change, without waiting for a drag stop', async () => {
   const view = await setup({ selected: ['a'] });
   act(() => {
-    seen.props?.onNodesChange?.([{ id: 'a', type: 'position', position: { x: 25, y: 52 } }]);
+    seen.props?.onNodesChange?.(
+      new NodeChangeset([{ id: 'a', type: 'position', position: { x: 25, y: 52 } }]),
+    );
   });
   await called(view.core);
   expectOneOp(view.core, 'canvas.move', {
@@ -730,6 +742,7 @@ it('fits a nonempty initial canvas once, and preserves its viewport and queues a
   await waitFor(() => {
     expect(seen.fits).toHaveLength(1);
   });
+  expect(fittedViewport(seen.fits[0])).toEqual({ x: 83, y: 191.5, zoom: 0.417 });
   fireEvent.click(screen.getByRole('button', { name: 'Show all queues' }));
   expect(await screen.findByRole('dialog', { name: 'All queues' })).toBeTruthy();
   await act(() => {
@@ -741,6 +754,27 @@ it('fits a nonempty initial canvas once, and preserves its viewport and queues a
   });
   expect(screen.getByRole('dialog', { name: 'All queues' })).toBeTruthy();
   expect(seen.fits).toHaveLength(1);
+});
+
+/** A large canvas leaves the same margins at boot, on Fit, and around an inserted template. */
+function fittedViewport(options: FitViewOptions | undefined) {
+  return getViewportForBounds(
+    { x: 0, y: 0, width: 2000, height: 1000 },
+    1000,
+    800,
+    0.1,
+    options?.maxZoom,
+    options?.padding,
+  );
+}
+
+it('fits with room around the cards without lifting selected edges above them', async () => {
+  await setup();
+  seen.fits = [];
+  fireEvent.click(screen.getByRole('button', { name: 'Fit view' }));
+  expect(seen.fits).toHaveLength(1);
+  expect(fittedViewport(seen.fits[0])).toEqual({ x: 83, y: 191.5, zoom: 0.417 });
+  expect(seen.props?.elevateEdgesOnSelect).toBe(false);
 });
 
 it('announces a restored database warning as an alert', async () => {

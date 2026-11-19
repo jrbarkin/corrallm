@@ -16,23 +16,16 @@
  * --xy-edge-stroke. A selected edge takes the accent, like a selected node.
  */
 .graph-editor .react-flow {
-  --graph-accent: #2563eb;
-  --graph-card-bg: #fff;
-  --graph-card-chip: #e9ecf1;
-  --graph-done: #2f8f55;
+  --graph-accent: light-dark(#2563eb, #60a5fa);
+  --graph-card-bg: light-dark(#fff, #1f2329);
+  --graph-card-chip: light-dark(#e9ecf1, #2b3038);
+  --graph-done: light-dark(#2f8f55, #5cc985);
   --xy-edge-stroke: #8a8a8a;
   --xy-edge-stroke-selected: var(--graph-accent);
 }
 
-.graph-editor .react-flow.dark {
-  --graph-accent: #60a5fa;
-  --graph-card-bg: #1f2329;
-  --graph-card-chip: #2b3038;
-  --graph-done: #5cc985;
-}
-
 /* An empty canvas is not a link. */
-.graph-editor .react-flow__pane.selection {
+.graph-editor .react-flow__pane.selection::before {
   cursor: default;
 }
 
