@@ -71,8 +71,14 @@ function endpointName(step: FallbackStep): string {
     .join(' · ');
 }
 
-/** The same picker lives beside the chip in the window and the settings sheet. */
-export function ChainControl({ agent }: { agent: string }) {
+/** One picker, beside the window's chip and in the settings sheet's labelled chain section. */
+export function ChainControl({
+  agent,
+  variant = 'chip',
+}: {
+  agent: string;
+  variant?: 'chip' | 'settings';
+}) {
   const { context, node, summary } = useAgent(agent);
   const scope = `${context?.canvas ?? ''}/${agent}`;
   const [opened, setOpened] = useState<string>();
@@ -84,36 +90,46 @@ export function ChainControl({ agent }: { agent: string }) {
   const own = node && (node.data.fallback?.on?.from ?? endpointOf(node.data, catalog()));
   if (!context || !node || !own || agentEndpoint(node.data, catalog()).kind !== 'known')
     return null;
+  const button = (
+    <button
+      type="button"
+      className="fallback-control"
+      aria-label="Fallback chain"
+      disabled={context.inert}
+      onClick={() => {
+        setOpen(true);
+      }}
+    >
+      {node.data.fallback ? (
+        <>
+          <span data-current={summary?.fallback?.step == null ? '' : undefined}>
+            {endpointName(own)}
+          </span>
+          {node.data.fallback.to.map((step, index) => (
+            <span key={index}>
+              {' '}
+              →{' '}
+              <span data-current={summary?.fallback?.step === index ? '' : undefined}>
+                {endpointName(step)}
+              </span>
+            </span>
+          ))}
+        </>
+      ) : (
+        'Fallback chain…'
+      )}
+    </button>
+  );
   return (
     <>
-      <button
-        type="button"
-        className="fallback-control"
-        aria-label="Fallback chain"
-        disabled={context.inert}
-        onClick={() => {
-          setOpen(true);
-        }}
-      >
-        {node.data.fallback ? (
-          <>
-            <span data-current={summary?.fallback?.step == null ? '' : undefined}>
-              {endpointName(own)}
-            </span>
-            {node.data.fallback.to.map((step, index) => (
-              <span key={index}>
-                {' '}
-                →{' '}
-                <span data-current={summary?.fallback?.step === index ? '' : undefined}>
-                  {endpointName(step)}
-                </span>
-              </span>
-            ))}
-          </>
-        ) : (
-          'Fallback chain…'
-        )}
-      </button>
+      {variant === 'settings' ? (
+        <section className="fallback-settings" aria-label="Fallback chain">
+          <h3>Fallback chain</h3>
+          {button}
+        </section>
+      ) : (
+        button
+      )}
       {open && (
         <ChainPicker
           context={context}

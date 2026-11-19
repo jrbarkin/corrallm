@@ -47,7 +47,7 @@ async function show() {
   if (!canvas) throw new Error('No canvas');
   return { ...view, canvas };
 }
-it('opens one shared chain picker from the agent chip and Agent settings', async () => {
+it('opens the shared chain picker from the chip and a labelled section in Agent settings', async () => {
   const { container, canvas } = await show();
   const card = required(container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]'));
   await events.doubleClick(card);
@@ -57,13 +57,38 @@ it('opens one shared chain picker from the agent chip and Agent settings', async
   await events.click(screen.getByRole('button', { name: 'Cancel' }));
   await events.click(window.getByRole('button', { name: 'Agent settings: Writer' }));
   const settings = within(screen.getByRole('dialog', { name: 'Agent settings: Writer' }));
-  await events.click(settings.getByRole('button', { name: 'Fallback chain' }));
+  const section = within(settings.getByRole('region', { name: 'Fallback chain' }));
+  expect(settings.getAllByRole('button', { name: 'Fallback chain' })).toHaveLength(1);
+  expect(section.getByRole('heading', { name: 'Fallback chain' })).toBeTruthy();
   canvas.core.operations.length = 0;
+  await events.click(section.getByRole('button', { name: 'Fallback chain' }));
+  await events.click(screen.getByRole('checkbox', { name: 'Return when its own usage resets' }));
+  expect(canvas.core.operations).toEqual([]);
   await events.click(screen.getByRole('button', { name: 'Save chain' }));
   expectOneOp(canvas.core, 'agent.setFallback', {
     canvas: canvas.document.id,
     agent: 'a',
-    fallback: { to: [{ adapter: 'zed', connection: 'zed.free' }] },
+    fallback: { to: [{ adapter: 'zed', connection: 'zed.free' }], back: 'return' },
+  });
+  expect(screen.getByRole('dialog', { name: 'Agent settings: Writer' })).toBeTruthy();
+});
+it('removes a chain from Agent settings in one operation', async () => {
+  const { container, canvas } = await show();
+  await events.doubleClick(
+    required(container.querySelector<HTMLElement>('.react-flow__node[data-id="a"]')),
+  );
+  await events.click(screen.getByRole('button', { name: 'Agent settings: Writer' }));
+  const settings = within(screen.getByRole('dialog', { name: 'Agent settings: Writer' }));
+  const section = within(settings.getByRole('region', { name: 'Fallback chain' }));
+  canvas.core.operations.length = 0;
+  await events.click(section.getByRole('button', { name: 'Fallback chain' }));
+  await events.click(screen.getByRole('button', { name: 'Remove step 1' }));
+  expect(canvas.core.operations).toEqual([]);
+  await events.click(screen.getByRole('button', { name: 'Save chain' }));
+  expectOneOp(canvas.core, 'agent.setFallback', {
+    canvas: canvas.document.id,
+    agent: 'a',
+    fallback: null,
   });
 });
 it('marks the card and All queues lane from the core chain position and keeps the card dimensions', async () => {
