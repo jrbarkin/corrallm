@@ -1918,8 +1918,12 @@ describe('GraphEditor', () => {
       nodes: [agentNode('a', 300, 300), agentNode('b', 0, 0)],
       edges: [{ id: 'a->b', source: 'a', target: 'b' }],
     });
-    const y = (id: string) =>
-      Number(/translate\([^,]+,\s*([-\d.]+)px\)/.exec(node(id).style.transform)?.[1]);
+    const y = (id: string) => {
+      // CSS serializes translate(x, 0) as translate(x).
+      const match = /^translate\([-.\d]+px(?:,\s*([-\d.]+)px)?\)$/.exec(node(id).style.transform);
+      if (!match) throw new Error(node(id).style.transform);
+      return Number(match[1] ?? 0);
+    };
     const toggle = button('Arrange automatically');
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
     expect(y('a')).toBeGreaterThan(y('b'));

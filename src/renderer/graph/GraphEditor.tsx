@@ -18,6 +18,7 @@ import {
 import type { Connection, Edge, EdgeTypes, NodeTypes } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import type {
   ComponentProps,
   MouseEvent as ReactMouseEvent,
@@ -1144,11 +1145,9 @@ function Editor({
           nodesDraggable={!arranging}
           edgeTypes={edgeTypes}
           onSelectionStart={() => {
-            // The pane resets controlled selection before computing its first rectangle, but
-            // leaves its internal selected flags set. Clear those too, so a previously selected
-            // node inside the rectangle is included in the new selection changes.
-            const flow = store.getState();
-            flow.unselectNodesAndEdges({ nodes: [...flow.nodeLookup.values()] });
+            // Commit the controlled reset before React Flow compares its first rectangle with
+            // the previous selection, so it also reports cards that were already selected.
+            flushSync(clearSelection);
           }}
           onNodesChange={(changes) => {
             setSelection((current) => {
