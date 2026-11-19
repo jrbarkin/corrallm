@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 import { openNeeds } from './canvas-actions';
-import { connectionLabel } from './catalog';
+import { connectionName } from './catalog';
 import { continuityWorld } from './continuity-world';
 
 test('an outside connection change waits for your approval in Needs, then opens the new connection', async () => {
@@ -39,10 +39,12 @@ test('an outside connection change waits for your approval in Needs, then opens 
     ).toBe(true);
     await openNeeds(world.page);
     const card = world.page.getByRole('article', { name: /asks to change the backend of Builder/ });
-    await expect(card, 'Needs must identify both the old and proposed connections').toContainText(
-      'claude-code.sdk',
+    await expect(
+      card,
+      'Needs must identify both endpoints in order, including their model and effort defaults',
+    ).toContainText(
+      `Change Builder’s backend from ${connectionName('claude-code.sdk')} (model: native default, effort: native default) to ${connectionName('claude-code.terminal')} (model: native default, effort: native default).`,
     );
-    await expect(card).toContainText(connectionLabel('claude-code.terminal'));
     await card.getByRole('button', { name: 'Allow', exact: true }).click();
     await expect
       .poll(
