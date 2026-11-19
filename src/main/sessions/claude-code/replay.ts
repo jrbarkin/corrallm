@@ -79,6 +79,7 @@ export class Replay implements Pty {
   readonly args: readonly string[];
   readonly options: PtyOptions;
   readonly #records: TerminalRecord[];
+  readonly #beforeExit: (() => Promise<void>) | undefined;
   readonly #data = new Set<(data: string) => void>();
   readonly #exit = new Set<(exit: { exitCode: number }) => void>();
   /** Writes not yet matched against the keys the recording waits for. */
@@ -86,8 +87,14 @@ export class Replay implements Pty {
   #wake: (() => void) | undefined;
   exited = false;
 
-  constructor(name: TerminalFixture, args: readonly string[], options: PtyOptions) {
+  constructor(
+    name: TerminalFixture,
+    args: readonly string[],
+    options: PtyOptions,
+    beforeExit?: () => Promise<void>,
+  ) {
     this.#records = recordedTerminal(name);
+    this.#beforeExit = beforeExit;
     this.args = args;
     this.options = options;
     void this.#play();
@@ -191,6 +198,7 @@ export class Replay implements Pty {
           break;
         }
         case 'exit':
+          await this.#beforeExit?.();
           this.#end(record.data.exitCode);
           return;
         default:

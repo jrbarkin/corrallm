@@ -22,6 +22,17 @@ const PUBLIC_DOCS = [
   'docs/architecture/ipc.md',
   'docs/architecture/messages.md',
   'docs/architecture/native-modules.md',
+  'docs/architecture/registry.md',
+  'docs/architecture/renderer.md',
+  'docs/architecture/run-recovery.md',
+  'docs/architecture/security.md',
+  'docs/architecture/sessions.md',
+  'docs/architecture/store.md',
+  'docs/architecture/testing.md',
+  'docs/architecture/toolchain.md',
+  'docs/architecture/updates.md',
+  'docs/architecture/usage.md',
+  'docs/architecture/workspaces.md',
 ];
 
 /** References a reader cannot resolve from the public repository. */
