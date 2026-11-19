@@ -175,13 +175,24 @@ const NOTICE_FILE = /^notice(\.[a-z]+)?$/i;
 
 /**
  * Packages built from another package's repository that publish no license file of their own.
- * Their scope sibling carries the repository's, and is used only when both manifests name the same
- * repository and the same license (xterm.js's addons, beside @xterm/xterm).
+ * Their sibling carries the repository's, and is used only when both manifests name its repository
+ * and the same license. Entries without a trailing slash name one exact package.
  */
-const REPOSITORY_LICENSE_HOLDERS: Readonly<Record<string, { holder: string; repository: string }>> =
-  {
-    '@xterm/': { holder: '@xterm/xterm', repository: 'https://github.com/xtermjs/xterm.js' },
-  };
+const REPOSITORY_LICENSE_HOLDERS: Readonly<
+  Record<
+    string,
+    { holder: string; repositories: readonly string[]; license?: string; source?: string }
+  >
+> = {
+  '@xterm/': { holder: '@xterm/xterm', repositories: ['https://github.com/xtermjs/xterm.js'] },
+  // 1.0.0 ships no LICENSE. React carries the repository's MIT text; facebook/react was renamed.
+  'react-compiler-runtime': {
+    holder: 'react',
+    repositories: ['https://github.com/facebook/react', 'https://github.com/react/react'],
+    license: 'MIT',
+    source: 'https://github.com/react/react/blob/main/LICENSE',
+  },
+};
 
 function repositoryOf(manifest: Manifest): string {
   const repository = manifest.repository;
@@ -195,18 +206,25 @@ async function repositoryLicense(
   name: string,
   manifest: Manifest,
 ): Promise<string[] | undefined> {
-  const entry = Object.entries(REPOSITORY_LICENSE_HOLDERS).find(([prefix]) =>
-    name.startsWith(prefix),
+  const entry = Object.entries(REPOSITORY_LICENSE_HOLDERS).find(([named]) =>
+    named.endsWith('/') ? name.startsWith(named) : name === named,
   );
-  if (!entry || !repositoryOf(manifest).startsWith(entry[1].repository)) return undefined;
-  const holderDir = path.join(path.dirname(dir), entry[1].holder.split('/')[1] ?? '');
+  if (!entry) return undefined;
+  const { holder: holderName, repositories, license, source } = entry[1];
+  if (
+    !repositories.includes(repositoryOf(manifest)) ||
+    (license !== undefined && licenseOf(manifest) !== license)
+  )
+    return undefined;
+  const holderDir = path.join(path.dirname(dir), holderName.split('/').at(-1) ?? '');
   if (!existsSync(path.join(holderDir, 'package.json'))) return undefined;
   const holder = JSON.parse(
     await readFile(path.join(holderDir, 'package.json'), 'utf8'),
   ) as Manifest;
   if (
+    holder.name !== holderName ||
     licenseOf(holder) !== licenseOf(manifest) ||
-    !repositoryOf(holder).startsWith(entry[1].repository)
+    !repositories.includes(repositoryOf(holder))
   )
     return undefined;
   const texts = await textsOf(holderDir, LICENSE_FILE);
@@ -214,7 +232,7 @@ async function repositoryLicense(
     ? undefined
     : texts.map(
         (text) =>
-          `(The license of the ${entry[1].holder} repository, which this package is built from.)\n\n${text}`,
+          `(The license of the ${holderName} repository, which this package is built from${source === undefined ? '' : `: ${source}`}.)\n\n${text}`,
       );
 }
 

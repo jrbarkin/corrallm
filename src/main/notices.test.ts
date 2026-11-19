@@ -281,6 +281,69 @@ describe('joinNotices', () => {
     });
   });
 
+  describe('the React compiler runtime’s repository license', () => {
+    const repository = 'git+https://github.com/facebook/react.git';
+
+    async function runtime(
+      folder: string,
+      manifest: Record<string, unknown> = {},
+      holder: Record<string, unknown> = {},
+    ) {
+      const module = await install(
+        folder,
+        'react-compiler-runtime',
+        { version: '1.0.0', license: 'MIT', repository, ...manifest },
+        {},
+      );
+      // React is the runtime's peer, beside it in either a flat or pnpm installation.
+      const react = path.join(path.dirname(path.dirname(module)), 'react');
+      await mkdir(react);
+      await writeFile(
+        path.join(react, 'package.json'),
+        JSON.stringify({
+          name: 'react',
+          license: 'MIT',
+          repository: { url: 'https://github.com/react/react.git' },
+          ...holder,
+        }),
+      );
+      const license = await readFile(path.join(root, 'node_modules/react/LICENSE'), 'utf8');
+      await writeFile(path.join(react, 'LICENSE'), license);
+      return { module, license };
+    }
+
+    it('includes the runtime with React’s complete MIT text and its upstream source', async () => {
+      const { folder, notices } = await project();
+      const { module, license } = await runtime(folder);
+      await bundles(notices, [module]);
+      const text = await joinNotices(notices);
+      expect(text).toContain('react-compiler-runtime 1.0.0\nLicense: MIT');
+      expect(text).toContain(license.trim());
+      expect(text).toContain('https://github.com/react/react/blob/main/LICENSE');
+    });
+
+    it.each([
+      ['a different runtime repository', { repository: 'https://github.com/other/other' }, {}],
+      ['a repository with only the same prefix', { repository: `${repository}/other` }, {}],
+      ['a different holder repository', {}, { repository: 'https://github.com/other/other' }],
+      ['a different holder license', {}, { license: 'ISC' }],
+      ['a different shared license', { license: 'ISC' }, { license: 'ISC' }],
+    ])('refuses %s', async (_name, manifest, holder) => {
+      const { folder, notices } = await project();
+      const { module } = await runtime(folder, manifest, holder);
+      await bundles(notices, [module]);
+      await expect(joinNotices(notices)).rejects.toThrow(/react-compiler-runtime.*no license file/);
+    });
+
+    it('still refuses an unknown package without a license file beside the named runtime', async () => {
+      const { folder, notices } = await project();
+      const { module } = await runtime(folder);
+      const unknown = await install(folder, 'unknown', { license: 'MIT', repository }, {});
+      await bundles(notices, [module, unknown]);
+      await expect(joinNotices(notices)).rejects.toThrow(/^unknown 1\.2\.3.*no license file/);
+    });
+  });
+
   it('reads a license given as an object or a list', async () => {
     const { folder, notices } = await project();
     const old = await install(folder, 'old', { licenses: [{ type: 'MIT' }] }, { LICENSE: 'text' });
