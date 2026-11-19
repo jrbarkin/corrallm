@@ -1,4 +1,4 @@
-import { testPromptEntry } from '../../shared/test-prompts';
+import { testApproval, testPromptEntry } from '../../shared/test-prompts';
 import { promptNeed } from '../../shared/model/prompt-views';
 import { cleanup, render, screen, waitFor, act, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -376,6 +376,37 @@ it.each(['before', 'after'] as const)(
     expect(screen.getByRole('button', { name: 'Allow' })).toHaveProperty('disabled', false);
   },
 );
+
+it('opens a moved terminal prompt after Needs was empty between the hold and its native dialog', async () => {
+  const held = testPromptEntry(testApproval(), 'a');
+  const moved = testPromptEntry({ ...testApproval(), answerIn: 'terminal', choices: [] }, 'a');
+  const need = (entry: typeof held) =>
+    promptNeed(
+      { canvas, need: entry.need, name: 'A', prompt: entry.prompt, standIn: false },
+      'you',
+    );
+  const core = await setup(
+    [need(held)],
+    [{ id: 'a', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'A' } }],
+  );
+  expect(screen.getByRole('group', { name: 'A asks' })).toBeTruthy();
+  act(() => {
+    core.change({ topic: `needs:${canvas}`, rev: 1, replace: { items: [] } });
+  });
+  expect(screen.queryByRole('complementary', { name: 'Needs you' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Needs you' })).toHaveProperty('disabled', true);
+
+  act(() => {
+    core.change({ topic: `needs:${canvas}`, rev: 2, replace: { items: [need(moved)] } });
+  });
+  const button = screen.getByRole('button', { name: 'Needs you' });
+  expect(button.getAttribute('aria-expanded')).toBe('false');
+  const card = screen.getByRole('group', { name: 'A asks, in its terminal', hidden: true });
+  expect(screen.queryByRole('group', { name: 'A asks, in its terminal' })).toBeNull();
+  await events.click(button);
+  expect(screen.getByRole('group', { name: 'A asks, in its terminal' })).toBe(card);
+  expect(core.operations).toEqual([]);
+});
 
 it.each(['permission', 'trust'] as const)(
   'keeps the native Terminal %s wording beside its core Need',

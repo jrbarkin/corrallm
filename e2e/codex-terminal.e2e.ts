@@ -552,9 +552,21 @@ test('moves an unanswered held approval to its terminal at the deadline, where i
   await openNeeds(page);
   const needs = page.getByRole('complementary', { name: 'Needs you' });
   await expect(needs.getByRole('group', { name: /asks$/ })).toBeVisible();
+  const held = (await promptEntries()).find((entry) => entry.outcome === undefined);
+  expect(held, 'The held approval must have its owner entry before its deadline').toBeDefined();
   // Nobody answers: corrallm lets the request go at 20 s, and the approval is the terminal's.
-  await expect(needs.getByRole('group', { name: /asks, in its terminal$/ })).toBeVisible({
+  // Ending the hold can empty Needs before the CLI draws its approval, unmounting the popover.
+  // Wait for the new card even when collapsed, then open it as the user does.
+  const moved = page
+    .getByRole('complementary', { name: 'Needs you', includeHidden: true })
+    .getByRole('group', { name: /asks, in its terminal$/, includeHidden: true });
+  await expect(moved).toHaveCount(1, {
     timeout: 40_000,
+  });
+  await openNeeds(page);
+  await expect(moved).toBeVisible();
+  expect((await promptEntries()).find((entry) => entry.id === held?.id)).toMatchObject({
+    outcome: { type: 'moved' },
   });
   await page.locator('.react-flow__node').dblclick();
   await typeIn(terminal, 'y');

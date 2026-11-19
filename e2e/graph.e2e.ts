@@ -304,6 +304,9 @@ test.beforeEach(async () => {
     problems.push(error.message);
   });
   // Reload so that errors during page load (e.g. CSP violations) are collected too.
+  // A new Electron page can still be about:blank: its load event is not the app's first load.
+  // Wait for a connected renderer before reloading, so main's initial loadURL is not aborted.
+  await expect(page.locator('.graph-editor')).toHaveAttribute('aria-busy', 'false');
   await page.waitForLoadState('load');
   await page.reload();
   await dismissStart(page);
