@@ -2,7 +2,6 @@ import type { b11SessionOps } from '../../../shared/api/ops/session';
 import type { z } from 'zod';
 import type { SessionControl } from '../session-control';
 import type { Registry, RuleCheck } from '../call';
-import type { TokenCaller } from '../caller';
 import type { Implementations } from '.';
 
 type SessionName =
@@ -47,7 +46,7 @@ export function sessionControlOps(control: SessionControl): Pick<Implementations
 }
 /** R5's argument check, `restore-code` on session.rewind: a token's code restore proposes. */
 export function sessionRules(control: SessionControl): Registry['rules'] {
-  const restoreCode = ((args: ArgsOf<'session.rewind'>, call: { caller: TokenCaller }) =>
+  const restoreCode = ((args: ArgsOf<'session.rewind'>, call: Parameters<RuleCheck>[1]) =>
     control.restoreCode(args, call)) as RuleCheck;
   return { 'restore-code': { 'session.rewind': restoreCode } };
 }

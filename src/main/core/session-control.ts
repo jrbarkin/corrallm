@@ -639,7 +639,7 @@ export class SessionControl {
       message: string;
       restore: RewindRestore;
     },
-    { caller }: { caller: TokenCaller },
+    { caller, noReturn }: { caller: TokenCaller; noReturn: () => void },
   ): Promise<RuleOutcome> {
     if (args.restore === 'conversation') return undefined;
     const target = this.#target(args.canvas, args.agent);
@@ -664,29 +664,33 @@ export class SessionControl {
     const what = `restore ${name}’s files to how they were ${before}${args.restore === 'both' ? ', and rewind its conversation' : ''}`;
     const named = guard.files.slice(0, NAMED_FILES).map(({ path }) => path);
     const more = count - named.length;
-    const id: NeedId = await this.#deps.proposals.raise(open.document.id, {
-      op: 'session.rewind',
-      args: {
-        canvas: open.document.id,
-        agent: args.agent,
-        message: args.message,
-        restore: args.restore,
+    const id: NeedId = await this.#deps.proposals.raise(
+      open.document.id,
+      {
+        op: 'session.rewind',
+        args: {
+          canvas: open.document.id,
+          agent: args.agent,
+          message: args.message,
+          restore: args.restore,
+        },
+        by,
+        touched: {},
+        lost: {
+          what,
+          title: `${partyText(nodes, by)} asks to ${what}: ${files}`,
+          ...(count === 0
+            ? {}
+            : {
+                detail: `It changes ${andList([...named, ...(more > 0 ? [`${String(more)} more`] : [])])} for every agent working in that folder. Allow applies it only if none of it changed since.`,
+              }),
+          agents: [args.agent],
+          agent: args.agent,
+        },
+        guard,
       },
-      by,
-      touched: {},
-      lost: {
-        what,
-        title: `${partyText(nodes, by)} asks to ${what}: ${files}`,
-        ...(count === 0
-          ? {}
-          : {
-              detail: `It changes ${andList([...named, ...(more > 0 ? [`${String(more)} more`] : [])])} for every agent working in that folder. Allow applies it only if none of it changed since.`,
-            }),
-        agents: [args.agent],
-        agent: args.agent,
-      },
-      guard,
-    });
+      noReturn,
+    );
     return { propose: id };
   }
 

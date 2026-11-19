@@ -235,7 +235,12 @@ export type RuleOutcome = { refuse: string } | { propose: NeedId } | undefined;
 /** Checks a rule on a token's arguments, in the op's scope, before the op runs. */
 export type RuleCheck = (
   args: never,
-  call: { caller: TokenCaller; party: Party },
+  call: {
+    caller: TokenCaller;
+    party: Party;
+    /** A rule that creates a proposal rechecks authority here, inside its queued write. */
+    noReturn: () => void;
+  },
 ) => RuleOutcome | Promise<RuleOutcome>;
 
 /**
@@ -456,6 +461,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     args: unknown,
     caller: TokenCaller,
     party: Party,
+    noReturn: () => void,
   ): Promise<NeedId | undefined> {
     for (const rule of surface.rules ?? []) {
       const checks = registry.rules[rule];
@@ -465,7 +471,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       if (!checkRule) {
         throw new OpFailure('refused', `No check is kept for the rule ${rule} on ${name}.`);
       }
-      const outcome = await checkRule(args as never, { caller, party });
+      const outcome = await checkRule(args as never, { caller, party, noReturn });
       if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
       if (outcome) return outcome.propose;
     }
@@ -501,8 +507,14 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     options: CommitOptions = {},
   ): Promise<unknown> {
     const party = checkReach(name, surface, def, args, caller);
+    let irreversible = false;
+    const noReturn = () => {
+      if (!irreversible) checkReach(name, surface, def, args, caller);
+      turn.noReturn();
+      irreversible = true;
+    };
     if (caller.kind !== 'human') {
-      const proposed = await checkRules(name, surface, args, caller, party);
+      const proposed = await checkRules(name, surface, args, caller, party, noReturn);
       checkReach(name, surface, def, args, caller);
       if (proposed !== undefined) return { proposed };
     }
@@ -512,7 +524,6 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       expect?: Readonly<Record<string, number>>;
     };
     const proposes = surface.rules?.some((rule) => PROPOSING_RULES.includes(rule)) === true;
-    let irreversible = false;
     const ctx: OpContext = {
       caller,
       get party() {
@@ -524,11 +535,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       recheck: () => {
         checkReach(name, surface, def, args, caller);
       },
-      noReturn: () => {
-        if (!irreversible) checkReach(name, surface, def, args, caller);
-        turn.noReturn();
-        irreversible = true;
-      },
+      noReturn,
       ...(options.after === undefined ? {} : { after: options.after }),
       ...(options.guard === undefined ? {} : { guard: options.guard }),
       ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
@@ -607,7 +614,17 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         }
         const parsed = admit(sub, op, raw, caller);
         if (caller.kind !== 'human') {
-          const proposed = await checkRules(sub, inner, parsed, caller, partyOf(caller, isLead));
+          const proposed = await checkRules(
+            sub,
+            inner,
+            parsed,
+            caller,
+            partyOf(caller, isLead),
+            () => {
+              checkReach(sub, inner, innerDef, parsed, caller);
+              ctx.noReturn();
+            },
+          );
           checkReach(sub, inner, innerDef, parsed, caller);
           if (proposed)
             throw new OpFailure('refused', `${sub} can’t come to the user as a proposal here.`);

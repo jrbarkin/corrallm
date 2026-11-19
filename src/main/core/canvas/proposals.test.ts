@@ -61,13 +61,17 @@ afterEach(async () => {
 });
 
 async function raised(): Promise<Proposal> {
-  const id = await proposals.raise(CANVAS, {
-    op: 'canvas.close',
-    args: { canvas: CANVAS },
-    by: 'outside:orchestrator',
-    touched: { 'node/lead': 1 },
-    lost: { what: 'close the canvas', title: 'Close the canvas?' },
-  });
+  const id = await proposals.raise(
+    CANVAS,
+    {
+      op: 'canvas.close',
+      args: { canvas: CANVAS },
+      by: 'outside:orchestrator',
+      touched: { 'node/lead': 1 },
+      lost: { what: 'close the canvas', title: 'Close the canvas?' },
+    },
+    () => undefined,
+  );
   const proposal = proposals.get(CANVAS, id);
   if (proposal === undefined) throw new Error('No proposal.');
   return proposal;
@@ -76,6 +80,47 @@ async function raised(): Promise<Proposal> {
 const outcomes = () => disk.prepare('SELECT outcome, settled_by FROM proposal').all();
 
 describe('Proposals', () => {
+  it('checks permission when its queued write runs, before keeping a proposal', async () => {
+    let allowed = true;
+    const entered = Promise.withResolvers<undefined>();
+    const go = Promise.withResolvers<undefined>();
+    const write = store.writeBlocking.bind(store);
+    const blocked = vi.spyOn(store, 'writeBlocking').mockImplementationOnce(async (run, failed) => {
+      entered.resolve(undefined);
+      await go.promise;
+      return write(run, failed);
+    });
+    const args = {
+      op: 'canvas.close',
+      args: { canvas: CANVAS },
+      by: 'outside:orchestrator' as const,
+      touched: {},
+      lost: { what: 'close the canvas', title: 'Close the canvas?' },
+    };
+    const check = () => {
+      if (!allowed) throw new Error('No longer permitted');
+    };
+    const pending = proposals.raise(CANVAS, args, check);
+    try {
+      await entered.promise;
+      allowed = false;
+      go.resolve(undefined);
+      await expect(pending).rejects.toThrow('No longer permitted');
+      expect(proposals.open(CANVAS)).toEqual([]);
+      expect(outcomes()).toEqual([]);
+      allowed = true;
+      const id = await proposals.raise(CANVAS, args, check);
+      expect(proposals.get(CANVAS, id)).toBeDefined();
+      allowed = false;
+      await expect(proposals.raise(CANVAS, args, check)).rejects.toThrow('No longer permitted');
+      expect(outcomes()).toEqual([{ outcome: null, settled_by: null }]);
+    } finally {
+      go.resolve(undefined);
+      await pending.catch(() => undefined);
+      blocked.mockRestore();
+    }
+  });
+
   it('settles one in a planned write, which reads nothing, giving its proposer a record', async () => {
     const proposal = await raised();
     const blocking = vi.spyOn(store, 'writeBlocking');

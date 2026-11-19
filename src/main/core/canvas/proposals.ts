@@ -185,6 +185,8 @@ export class Proposals {
    * replay checks. One that is no change of a document's (R4's argument half: a close, a replace,
    * a save) has none: it says what it touches, its canvas's document and file, and what it would
    * do and lose itself (`touched`, `lost`).
+   * `beforeWrite` is the call's authority and cancellation boundary, run in the store lane before
+   * returning an existing proposal or writing a new one, after all preparation has finished.
    */
   async raise(
     canvas: CanvasId,
@@ -207,6 +209,7 @@ export class Proposals {
           trees?: readonly TreeState[];
         }
     ),
+    beforeWrite: () => void,
   ): Promise<NeedId> {
     const { op, by } = raised;
     // Its arguments as the database keeps them (a key left undefined is none), so that an identical
@@ -240,6 +243,7 @@ export class Proposals {
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
     const { proposal, made } = await this.#deps.store.writeBlocking(() => {
+      beforeWrite();
       const rows = this.#deps.store
         .prepare(
           `SELECT id, op, args, by_party, touched, lost, raised_at FROM proposal

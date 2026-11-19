@@ -16,6 +16,7 @@ import { keepCanvases } from './store/test-store';
 import { CALLERS, NO_DESKTOP } from './test-registry';
 import { legacyDirectories } from './workspaces/test-directories';
 import { WorkspacePlanner } from './workspaces/planner';
+import { Proposals } from './canvas/proposals';
 
 /*
  * The authority stamp (B21 §9 C2), composed in the real core: a caller a token identifies holds
@@ -127,6 +128,64 @@ function sentBy(party: string): string[] {
 }
 
 describe('an outside token’s authority', () => {
+  it.each(['backend', 'close'] as const)(
+    'rechecks the caller before writing a %s proposal after preparation',
+    async (kind) => {
+      await keep();
+      await start();
+      const caller = await token();
+      expect(
+        await current().call(
+          'canvas.rename',
+          { canvas: M1, node: 'builder', label: 'Edited' },
+          CALLERS.you,
+        ),
+      ).toMatchObject({ ok: true });
+      const entered = Promise.withResolvers<undefined>();
+      const go = Promise.withResolvers<undefined>();
+      // Proposal preparation and the store lane may each await before their durable write.
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Called on the actual service below.
+      const raise = Proposals.prototype.raise;
+      const spy = vi.spyOn(Proposals.prototype, 'raise').mockImplementation(async function (
+        this: Proposals,
+        ...args: Parameters<Proposals['raise']>
+      ) {
+        entered.resolve(undefined);
+        await go.promise;
+        return raise.apply(this, args);
+      });
+      const pending =
+        kind === 'backend'
+          ? current().call(
+              'agent.setConnection',
+              { canvas: M1, agent: 'builder', connection: 'codex.terminal' },
+              caller,
+            )
+          : current().call('canvas.close', { canvas: M1, discard: true }, caller);
+      try {
+        await entered.promise;
+        await current().tokens.revoke('orchestrator');
+        go.resolve(undefined);
+        expect(await pending).toEqual({
+          ok: false,
+          error: { code: 'refused', sentence: TOKEN_REPLACED },
+        });
+        const needs = await current().call('needs', { canvas: M1 }, CALLERS.you);
+        expect(needs.ok && needs.value.items.some((item) => item.id.startsWith('proposal/'))).toBe(
+          false,
+        );
+        expect(current().engines.canvas(M1)?.document.nodes[0]).toMatchObject({
+          type: 'agent',
+          data: { connection: 'codex.app-server' },
+        });
+      } finally {
+        go.resolve(undefined);
+        await pending;
+        spy.mockRestore();
+      }
+    },
+  );
+
   it.each(['writing', 'proposing'] as const)(
     'rechecks a document commit’s caller after workspace preflight, before %s',
     async (effect) => {

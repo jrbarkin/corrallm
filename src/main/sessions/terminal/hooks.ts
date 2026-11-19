@@ -203,6 +203,11 @@ export class HookServer {
     });
     request.on('end', () => {
       if (size > MAX_BODY) return;
+      // Headers never reserve a registration after its session has released it.
+      if (!this.#listeners.has(token)) {
+        reply(401);
+        return;
+      }
       let event: unknown;
       try {
         event = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -289,6 +294,10 @@ class Hold implements HookHold {
 
   #write(how: HoldEnd, text: string): boolean {
     if (this.#ended !== undefined) return false;
+    if (how !== 'deadline' && Date.now() >= this.deadline) {
+      this.#write('deadline', '{}');
+      return false;
+    }
     this.#finish(how);
     try {
       this.#response.writeHead(200, { 'Content-Type': 'application/json' });
