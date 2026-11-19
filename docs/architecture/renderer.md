@@ -28,7 +28,7 @@ Its nodes are agents (type 'agent'); groups are type 'frame'.
 
 Structure operations live in src/shared/model/structure.ts; flow.ts projects the canvas topic's immutable rows into model nodes and React Flow views, memoized per entity object (fromRows reads only a changed node's rows; unchanged nodes, queue items and edges keep their objects).
 
-GraphNode is a view type, never the model read by the engine or widgets. selection.ts keeps selection outside the document; marquee start clears React Flow's internal selection too, so a node selected before the marquee is included in its first change.
+GraphNode is a view type, never the model read by the engine or widgets. selection.ts keeps selection outside the document; marquee start synchronously commits the controlled selection reset before React Flow computes its first rectangle, so a node selected before the marquee is included in its first change.
 
 Empty canvases never queue a fit that would move their first added node. overlay.ts holds measurements and a drag until its one canvas.move lands at drop, fitting containers for display while dragging; a dragged node is held in canvas coordinates, placed in its parent as projected, so the commit that refits its groups shows it where it was dropped even while the overlay still holds it.
 
