@@ -10,51 +10,41 @@ Canonical instructions for every agent. Before changing an area, read its archit
 
 Start with [the overview](docs/architecture/overview.md). Paths include tests.
 
-| Code area                                                                            | Read                                                                                       |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `src/main/core/`, main services and `src/main/host/`                                 | [Core](docs/architecture/core.md)                                                          |
-| `src/main/core/store/`                                                               | [Store](docs/architecture/store.md)                                                        |
-| `src/main/core/workspaces/`, `src/main/git.ts`                                       | [Workspaces](docs/architecture/workspaces.md), [Security](docs/architecture/security.md)   |
-| `src/shared/api/`, core operations/dispatch/rules/topics, `src/main/api/`            | [Registry](docs/architecture/registry.md)                                                  |
-| `src/main/core/delivery/`                                                            | [Messages](docs/architecture/messages.md)                                                  |
-| `src/main/cli/`                                                                      | [Headless](docs/architecture/headless.md)                                                  |
-| `src/main/core/canvas/`, `src/shared/model/`, canvas memory, projects and files      | [Canvas](docs/architecture/canvas.md), [Core](docs/architecture/core.md)                   |
-| `src/main/run-journal.ts`, `src/renderer/run/`, restore and switching                | [Run recovery](docs/architecture/run-recovery.md)                                          |
-| Adapter descriptors and catalog consumers                                            | [Catalog](docs/architecture/catalog.md)                                                    |
-| `src/main/sessions/`, agent settings                                                 | [Sessions](docs/architecture/sessions.md)                                                  |
-| `src/main/sessions/claude-code/`                                                     | [Claude Code](docs/architecture/claude-code.md), [Sessions](docs/architecture/sessions.md) |
-| `src/main/sessions/codex/`                                                           | [Codex](docs/architecture/codex.md), [Sessions](docs/architecture/sessions.md)             |
-| Usage in main, renderer and shared                                                   | [Usage](docs/architecture/usage.md)                                                        |
-| `src/renderer/` (graph, agent, queues, terminal, search)                             | [Renderer](docs/architecture/renderer.md)                                                  |
-| `src/main/core/engine/`                                                              | [Engine](docs/architecture/engine.md)                                                      |
-| `src/preload/`, `src/shared/gui-link.ts`, `src/main/ipc.ts`, core channels and links | [IPC](docs/architecture/ipc.md), [Security](docs/architecture/security.md)                 |
-| Security, CSP, URLs, trust, tokens, paths and permissions                            | [Security](docs/architecture/security.md)                                                  |
-| Native dependencies, packaging and self-tests                                        | [Native modules](docs/architecture/native-modules.md)                                      |
-| Configs, dependencies, `build/`, `scripts/`                                          | [Toolchain](docs/architecture/toolchain.md)                                                |
-| Test infrastructure, fakes, fixtures and `e2e/`                                      | [Testing](docs/architecture/testing.md), plus the area's doc                               |
+- `src/main/core/`, main services and `src/main/host/`: [Core](docs/architecture/core.md).
+- `src/main/core/store/`: [Store](docs/architecture/store.md).
+- `src/main/core/workspaces/` and `src/main/git.ts`: [Workspaces](docs/architecture/workspaces.md) and [Security](docs/architecture/security.md).
+- `src/shared/api/`, `src/main/api/`, core operations, dispatch, rules and topics: [Registry](docs/architecture/registry.md).
+- `src/main/core/delivery/`: [Messages](docs/architecture/messages.md).
+- `src/main/cli/`: [Headless](docs/architecture/headless.md).
+- `src/main/core/canvas/`, `src/shared/model/`, canvas memory, projects and files: [Canvas](docs/architecture/canvas.md) and [Core](docs/architecture/core.md).
+- `src/main/run-journal.ts`, `src/renderer/run/`, restore and switching: [Run recovery](docs/architecture/run-recovery.md).
+- Adapter descriptors and catalog consumers: [Catalog](docs/architecture/catalog.md).
+- `src/main/sessions/` and agent settings: [Sessions](docs/architecture/sessions.md); for adapter code, also [Claude Code](docs/architecture/claude-code.md) or [Codex](docs/architecture/codex.md).
+- Usage in main, renderer and shared: [Usage](docs/architecture/usage.md).
+- `src/renderer/` (graph, agent, queues, terminal, search): [Renderer](docs/architecture/renderer.md).
+- `src/main/core/engine/`: [Engine](docs/architecture/engine.md).
+- `src/preload/`, `src/shared/gui-link.ts`, `src/main/ipc.ts`, core channels and links: [IPC](docs/architecture/ipc.md) and [Security](docs/architecture/security.md).
+- Security, CSP, URLs, trust, tokens, paths and permissions: [Security](docs/architecture/security.md).
+- Native dependencies, packaging and self-tests: [Native modules](docs/architecture/native-modules.md).
+- Configs, dependencies, `build/` and `scripts/`: [Toolchain](docs/architecture/toolchain.md).
+- Test infrastructure, fakes, fixtures and `e2e/`: [Testing](docs/architecture/testing.md) and the area's doc.
 
 ## Commands and done gate
 
 Needs Node 24.22.1 (`.nvmrc`) and pnpm 12.11.2 (`packageManager`).
 
-| Command                                      | Purpose                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------- |
-| `pnpm dev`                                   | Forge + Vite + HMR; press `r` after main-process changes                         |
-| `pnpm typecheck`                             | TypeScript solution (node, web, tooling)                                         |
-| `pnpm lint`                                  | Type-aware ESLint, zero warnings                                                 |
-| `pnpm format` / `pnpm format:check`          | Prettier write / verify                                                          |
-| `pnpm test:fast`                             | Local tier: Vitest main, renderer, preload (no crash gate, no store-performance) |
-| `pnpm test`                                  | Vitest main, preload, renderer and store-performance                             |
-| `pnpm exec vitest run --project main <file>` | Focused main tests                                                               |
-| `pnpm test:e2e:smoke`                        | Local tier: boot, CSP/sandbox, canvas save/open, lock                            |
-| `pnpm test:e2e`                              | Playwright; first builds the unsigned app and CLI                                |
-| `pnpm package` / `pnpm make`                 | Packaged app / installers                                                        |
-| `pnpm build:cli`                             | Plain Node CLI in `dist-cli/`                                                    |
-| `pnpm corrallm`                              | CLI: serve, wait, dump or native self-test                                       |
-| `pnpm api:surface`                           | Regenerate the API snapshot; review its diff                                     |
-| `pnpm media`                                 | Remake the README's screenshots and GIF; look at them                            |
+- `pnpm dev`: Forge, Vite and HMR; press `r` after main-process changes.
+- `pnpm typecheck`: TypeScript solution (node, web, tooling). `pnpm lint`: type-aware ESLint, zero warnings.
+- `pnpm format` / `pnpm format:check`: Prettier write / verify.
+- `pnpm test:fast`: Vitest main, renderer and preload, excluding the crash gate and store-performance. `pnpm test` includes both.
+- `pnpm exec vitest run --project main <file>`: focused main tests.
+- `pnpm test:e2e:smoke`: boot, CSP/sandbox, canvas save/open and lock. `pnpm test:e2e`: all Playwright tests; first builds the unsigned app and CLI.
+- `pnpm package` / `pnpm make`: packaged app / installers.
+- `pnpm build:cli`: plain Node CLI in `dist-cli/`. `pnpm corrallm`: serve, wait, dump or native self-test.
+- `pnpm api:surface`: regenerate the API snapshot; review its diff.
+- `pnpm media`: remake the README's screenshots and GIF; look at them.
 
-Two tiers. Locally run typecheck, lint, format, `pnpm test:fast` (or the files you changed) and `pnpm test:e2e:smoke`. GitHub CI (`.github/workflows/ci.yml`) runs everything on every pushed branch: the full `pnpm test` (with the crash gate and store-performance), `pnpm package` and the packaged self-tests on Linux, macOS and Windows, and the full `pnpm test:e2e` on macOS and Linux. A change is done when its blocking jobs are green ([toolchain](docs/architecture/toolchain.md) says which block today); read CI's other jobs for failures in your files. Run full suites locally only for a release or when nothing else runs. Before a release, also run `scripts/check-macos.sh` (it adds the shipped command); `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh` reproduce Linux in Docker.
+Two tiers. Locally run typecheck, lint, format, `pnpm test:fast` (or the files you changed) and `pnpm test:e2e:smoke`. GitHub CI (`.github/workflows/ci.yml`) runs the full `pnpm test` (including crash and store-performance tests), packaging and packaged self-tests on macOS and Linux for every pushed branch and fork pull request. Windows runs on main only and does not block; the full `pnpm test:e2e` runs on macOS and Linux. A change is done when its blocking jobs are green ([toolchain](docs/architecture/toolchain.md) lists them); read other jobs for failures in your files. Run full suites locally only for a release or when nothing else runs. Before a release, also run `scripts/check-macos.sh` (it adds the shipped command); `scripts/ci-linux.sh`, `scripts/check-linux.sh` and `scripts/check-linux-packages.sh` reproduce Linux in Docker.
 See [toolchain](docs/architecture/toolchain.md) for executable overrides, build environments and the packaged self-test; [testing](docs/architecture/testing.md) for load/crash gates and production-build reuse.
 
 ## Testing rules
@@ -70,7 +60,7 @@ See [toolchain](docs/architecture/toolchain.md) for executable overrides, build 
 
 ## Security rules (do not regress)
 
-Read [security mechanisms](docs/architecture/security.md) first. CLI-specific argv, trust, hooks and R42 ID rules live in the [Claude Code](docs/architecture/claude-code.md) and [Codex](docs/architecture/codex.md) docs.
+Read [security mechanisms](docs/architecture/security.md) first. CLI-specific argv, trust, hooks and native-ID checks live in the [Claude Code](docs/architecture/claude-code.md) and [Codex](docs/architecture/codex.md) docs.
 
 - Never enable `nodeIntegration`, and never disable `contextIsolation`, `sandbox` or `webSecurity`. No `<webview>`.
 - Expose only typed, fixed channel/operation functions through `contextBridge`. Never expose `ipcRenderer`, a port, generic invoke/send, a function taking a channel/operation name, or Electron event objects to the page.
@@ -79,15 +69,15 @@ Read [security mechanisms](docs/architecture/security.md) first. CLI-specific ar
 - Block navigation, redirects and renderer-created windows. Links use `link.open` or `link.reveal`, never window.open/target=_blank. Validate, cap and normalize URLs in the core; open only normalized targets. File reveal requires an existing real path within the chosen project, never opens/executes it, and never follows a symlink outside.
 - All permission requests and checks are denied (`ALLOWED_PERMISSIONS` in `security.ts`). Add entries deliberately.
 - Canvas and token text never act as the user. Refuse a token's shell-prefixed message; hold automated canvas text starting with its recipient's current shell prefix at both dispatch and session start. Only user-typed sends pass holds. Frame other parties' messages with their sender; never let a message bypass sandbox permissions.
-- No token is ever you. Human identity comes only from main's trusted window/native UI. Human-only operations are refused to tokens, not merely hidden. Token deletes and destructive discard/replace/close/save cases require R4 proposals; only you answer them, only while current, and refusal rules win over proposals.
-- Who leads is yours: `agent.setLead` and `outside.setGrant` are human-only and never in a file, template or command line. A lead or outside grantee answers a native prompt only through the one allowance (`prompts/grants.ts`): once, no free text, and only reject or hand back on `signals: false`. A manager row moves only away from lost authority.
+- No token is ever you. Human identity comes only from main's trusted window/native UI. Human-only operations are refused to tokens, not merely hidden. Token deletes and destructive discard/replace/close/save cases require confirmation proposals; only you answer them, only while current, and refusal rules win over proposals.
+- Who leads is yours: `agent.setLead` and `outside.setGrant` are human-only and never in a file, template or command line. A lead or outside grantee answers a native prompt only through the one allowance (`src/main/core/prompts/grants.ts`): once, no free text, and only reject or hand back on `signals: false`. Manager messages and asks move only away from lost authority.
 - Every transport calls `core.call`. Audience/reach are enforced on every call, with rechecks inside scopes/builds; token change rules run on the committed change, whatever op built it. No operation may widen a token.
 - Both local servers bind only 127.0.0.1, rejecting foreign Host and any Origin before token checks, and accept only bounded application/json bodies.
-- Native conversation IDs meet R42 at every boundary: the platform's bounded safe shape, never a leading dash, then their adapter's stricter shape. Never let an ID be read as a CLI flag. Agent IDs route events only, never argv or native paths.
+- Native conversation IDs are checked at every boundary: the platform's bounded safe shape, never a leading dash, then their adapter's stricter shape. Never let an ID be read as a CLI flag. Agent IDs route events only, never argv or native paths.
 - One owner per profile: retain both the app instance lock and core.lock. A window is only a view: reload, crash, close and switching canvases end no session. Only a genuine canvas close, agent deletion, project/workspace switch, explicit restart or app quit may end them.
 - Canvas files opened or saved and project folders worked in are core-minted `TrustedPath`s from completed dialogs or previously kept canvas memory; a workspace checkout only via `verifiedCheckout`, rechecked at every use. No command line mints a `TrustedPath`; `serve` opens a `--canvas` file only if canvas memory names it, using its kept project folder. `--profile` selects a profile, never a trusted project folder. The renderer supplies no project/file path, command line or environment. The picked project is the trust gate. Terminal file drops are the narrow exception: preload-derived paths, core-validated and quoted only for pasting.
 - Outside tokens are made, renewed and revoked by a person on a terminal (`serve --new-token`, or `corrallm token` over the profile's owner-only token socket, never MCP), bounded to named canvases/expiry, stored only as durable SHA-256 hashes and printed once, or written only to the 0600 file `--into` names. Session credentials live only in their process environment or Claude Terminal’s 0600 `mcp.json`, removed at cleanup; the SDK channel has none. Never log/store plaintext tokens otherwise or put them in argv; wait reads its environment (or that file) and sends them only to validated local HTTP.
-- Read-only Git uses `SAFE_GIT_OPTIONS` as the minimum (no repository fsmonitor or implicit bare repositories), with `SAFE_GIT_ENV` over its environment (no lazy fetch or transport). Diff-producing commands (diff, log, show) also use `safeGitDiffArgs` from `src/main/git.ts`, after reading filter-driver keys, to disable external diff, textconv, filter-driver, signature and submodule programs; a driver `-c` can't name is refused. Workspace Git (worktrees, and B9b's merges, prepared away from your checkout and installed only by a fast-forward) runs only through `src/main/core/workspaces/git.ts`: no repository hooks, filters, transports or auto-gc, a scrubbed `GIT_*` environment, bounded owned children, and owned roots and written Git metadata (the user's, no link) verified before any write.
+- Read-only Git uses `SAFE_GIT_OPTIONS` as the minimum (no repository fsmonitor or implicit bare repositories), with `SAFE_GIT_ENV` over its environment (no lazy fetch or transport). Diff-producing commands (diff, log, show) also use `safeGitDiffArgs` from `src/main/git.ts`, after reading filter-driver keys, to disable external diff, textconv, filter-driver, signature and submodule programs; a driver `-c` can't name is refused. Workspace Git (worktrees and merges, prepared away from your checkout and installed only by a fast-forward) runs only through `src/main/core/workspaces/git.ts`: no repository hooks, filters, transports or auto-gc, a scrubbed `GIT_*` environment, bounded owned children, and owned roots and written Git metadata (the user's, no link) verified before any write.
 - A worktree's setup runs only the fixed table's command or the one you set (`project.setSetupCommand`, human-only, one visible line), never a token's, a file's or the repository's; its card is yours alone, answered only at its generation, your approval on disk before it runs, as an owned process group. An interrupted setup is never rerun by itself; none runs on Windows yet. Local files are copied only as the base's `.worktreeinclude` selects among ignored files: no symlink, no overwrite, bounded.
 - Keep `FORBIDDEN_SWITCHES` and the configured fuses: no RunAsNode, NODE_OPTIONS or Node inspect; ASAR integrity and OnlyLoadAppFromAsar stay enabled. Packaged children use utilityProcess/spawn, not child_process.fork.
 - Never commit `.env` or key files. Credentials belong to CLI logins/environment, never corrallm's stores/arguments; login checks ask only the kind. Validate settings against the catalog connection; model and effort values pass `MODEL_PATTERN`/`EFFORT_PATTERN`, never with a leading dash. Explicit startup modes must ask. corrallm answers a Terminal CLI's prompt only through that CLI's own hook, with the decision of whoever settled it, written only to the request that raised it; never by typing into its terminal, never for a human-only prompt you didn't answer. Other hooks, and held ones nobody answered, get no decision; never override user/managed hook disabling or trust untrusted hooks. Close every session process before the core exits. Usage keeps shares and times only.
@@ -112,4 +102,6 @@ Read the recipe first.
 - **Window protocol:** [IPC recipe](docs/architecture/ipc.md). Calls are registered operations with fixed generated preload methods. Runtime state uses topics. Keep core:connect, terminal screen events, draft flush and host lifecycle protocols typed, with no generic channel function. Test the core port and preload contracts.
 - **Connection:** [sessions recipe](docs/architecture/sessions.md). Implement a Connector in its adapter using the registry-supplied executable, declare its descriptor and register it by connection ID; pin capabilities in the adapter contract and drive a fake CLI in tests. Extend shared session types, engine receiver and tests only if the protocol grows. Keep argv, native-ID validation and other CLI-specific rules inside the adapter.
 
-The docs guard (`src/main/docs.test.ts`) checks concrete backticked repository paths, this file's 20,000-byte ceiling and the exact CLAUDE import. Update references when files move.
+Public docs describe current behavior for readers of this repository. Check claims against code; use feature names and publicly accessible sources. Omit internal phase, part or task IDs, dangling section references and promises about unbuilt work. After reviewing a doc, add it to the reviewed list in `src/main/docs.test.ts`.
+
+The docs guard also checks concrete backticked repository paths, this file's 20,000-byte ceiling and the exact CLAUDE import. Keep real headroom under the ceiling and update references when files move.
