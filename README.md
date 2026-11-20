@@ -22,14 +22,14 @@ These pictures come from a demo canvas with scripted fake agents: `pnpm media` r
 
 ## Current status
 
-| Area                                        | Status       | What is covered                                                                                        |
-| ------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------ |
-| macOS and Linux; all four agent connections | Works now    | Unit tests, native protocol recordings and app journeys with fake CLIs. Login requirements are below.  |
-| Canvases, queues, templates and recovery    | Works now    | Editable workflows, paused recovery and unsaved canvases kept across restarts.                         |
-| Branch review and local merge               | Works now    | Real-Git tests and app journeys; conflicts and changed review state are held for you.                  |
-| Outside orchestration and leads             | Works now    | Scoped MCP tools, limited prompt delegation and backend-change proposals you approve.                  |
-| Usage-driven fallback and handoffs          | Experimental | Implemented and tested with fake CLIs and controlled limits; not verified at real provider limits.     |
-| Windows                                     | Unverified   | Main-branch checks are non-blocking; no shipped command, OS notifications or worktree setup execution. |
+| Area                                        | Status       | What is covered                                                                                                                                    |
+| ------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS and Linux; all four agent connections | Works now    | Unit tests, native protocol recordings and app journeys with fake CLIs. Login requirements are below.                                              |
+| Canvases, queues, templates and recovery    | Works now    | Editable workflows, paused recovery and unsaved canvases kept across restarts.                                                                     |
+| Branch review and local merge               | Works now    | Real-Git tests and app journeys; conflicts and changed review state are held for you.                                                              |
+| Outside orchestration and leads             | Works now    | Scoped MCP tools, limited prompt delegation and backend-change proposals you approve.                                                              |
+| Usage-driven fallback and handoffs          | Experimental | Tested with fake CLIs and controlled limits. The switch has run at a real Codex limit; carrying a handoff and returning automatically haven't yet. |
+| Windows                                     | Unverified   | Main-branch checks are non-blocking; no shipped command, OS notifications or worktree setup execution.                                             |
 
 ## How it works
 
