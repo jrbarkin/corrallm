@@ -1436,6 +1436,9 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     this.#asks = this.#asks.filter(({ prompt }) => askOf(prompt) !== same);
     this.#holds.set(held.id, held);
     hold.onEnd((how) => {
+      // A successful owner answer is settled by the owner. Deadline/closed still need the
+      // session's normal end path, including a deadline discovered synchronously by answer().
+      if (how === 'answered') return;
       // Let go of by this session: it has already said how. Otherwise the server's deadline or
       // the CLI closing the request ended it.
       if (!this.#holds.has(held.id)) return;
@@ -1484,11 +1487,10 @@ export class TerminalSession<M extends SessionMode = PermissionMode> implements 
     }
     // Throws for an answer its CLI's hook cannot express: nothing is written, the prompt stays.
     const body = held.held.reply(answer);
-    // Forgotten before the write, which ends the request: that end is ours, not the CLI's.
-    this.#holds.delete(held.id);
     if (!held.hold.answer(body)) {
       throw new Error(`${this.#cli.name} no longer waits on this request.`);
     }
+    this.#holds.delete(held.id);
     // The owner settles it: nothing is ended or raised here. The wait it covered is spoken for
     // for a while, and raised as any undescribed wait only if the CLI still reports it then.
     this.#raised.delete(key);

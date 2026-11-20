@@ -11,7 +11,7 @@ export function adapterName(id: AdapterId): string {
   return adapter.name;
 }
 
-function connectionName(id: ConnectionId, short = false): string {
+export function connectionName(id: ConnectionId, short = false): string {
   const found = connectionIn(catalog, id);
   if (!found) throw new Error(`The test catalog has no connection ${id}.`);
   return `${found.adapter.name} · ${short ? found.connection.short : found.connection.label}`;

@@ -8,7 +8,7 @@ import type { CanvasDocument, CanvasNode } from '../../../shared/model/canvas';
 import type { PartyId } from '../../../shared/model/messages';
 import { andList } from '../../../shared/model/words';
 import { OpFailure } from '../call';
-import type { OpContext, RuleOutcome } from '../call';
+import type { OpContext, RuleCheck, RuleOutcome } from '../call';
 import { partyIdOf } from '../caller';
 import type { TokenCaller } from '../caller';
 import type { Lifecycle } from '../canvas/lifecycle';
@@ -221,6 +221,7 @@ export function discardChecks({ lifecycle, proposals, catalog, refusal }: Discar
     caller: TokenCaller,
     lost: Lost,
     touched: readonly string[],
+    noReturn: () => void,
   ): Promise<NeedId> {
     await lifecycle.keepRows(canvas);
     const kept = Object.fromEntries(
@@ -228,7 +229,11 @@ export function discardChecks({ lifecycle, proposals, catalog, refusal }: Discar
     );
     const revs: Record<string, number> = {};
     for (const key of touched) revs[key] = (await lifecycle.touched(key)) ?? 0;
-    return proposals.raise(canvas, { op, args: kept, by: partyIdOf(caller), touched: revs, lost });
+    return proposals.raise(
+      canvas,
+      { op, args: kept, by: partyIdOf(caller), touched: revs, lost },
+      noReturn,
+    );
   }
   /** How a canvas is named in a proposal's words. */
   const named = async (canvas: CanvasId) => (await lifecycle.nameOf(canvas)) ?? 'an unsaved canvas';
@@ -239,7 +244,7 @@ export function discardChecks({ lifecycle, proposals, catalog, refusal }: Discar
     'canvas.batch': (): RuleOutcome => undefined,
     'canvas.close': async (
       { canvas: id, discard }: ArgsOf<'canvas.close'>,
-      { caller }: { caller: TokenCaller; party: Party },
+      { caller, noReturn }: Parameters<RuleCheck>[1],
     ): Promise<RuleOutcome> => {
       if (id === undefined) return undefined;
       const canvas = id as string as CanvasId;
@@ -255,12 +260,13 @@ export function discardChecks({ lifecycle, proposals, catalog, refusal }: Discar
           caller,
           wordsOf(caller, what, why, name),
           [DOCUMENT(canvas)],
+          noReturn,
         ),
       };
     },
     'canvas.create': async (
       args: ArgsOf<'canvas.create'>,
-      { caller, party }: { caller: TokenCaller; party: Party },
+      { caller, party, noReturn }: Parameters<RuleCheck>[1],
     ): Promise<RuleOutcome> => {
       const { replace } = args;
       if (replace === undefined) return undefined;
@@ -290,12 +296,13 @@ export function discardChecks({ lifecycle, proposals, catalog, refusal }: Discar
           caller,
           wordsOf(caller, what, why, name),
           [DOCUMENT(canvas)],
+          noReturn,
         ),
       };
     },
     'canvas.save': async (
       { canvas: id }: ArgsOf<'canvas.save'>,
-      { caller }: { caller: TokenCaller; party: Party },
+      { caller, noReturn }: Parameters<RuleCheck>[1],
     ): Promise<RuleOutcome> => {
       if (id === undefined) return undefined;
       const canvas = id as string as CanvasId;
@@ -322,6 +329,7 @@ export function discardChecks({ lifecycle, proposals, catalog, refusal }: Discar
                 : `Its file on disk has ${agentsText(lost)}, which the canvas no longer has: Allow writes the canvas over it, and ${lost.length === 1 ? 'it is' : 'they are'} gone from the file.`,
           },
           [DOCUMENT(canvas), FILE(canvas)],
+          noReturn,
         ),
       };
     },

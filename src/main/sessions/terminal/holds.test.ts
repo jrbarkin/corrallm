@@ -14,7 +14,7 @@ import type { CodexMode, SessionEvent } from '../../../shared/session';
 import type { SessionSpec } from '../connector';
 import type { TerminalCli, TerminalHold, TerminalSignal } from './cli';
 import { HookServer } from './hooks';
-import type { HookEvent, HookRegistration } from './hooks';
+import type { HoldEnd, HookEvent, HookHold, HookListener, HookRegistration } from './hooks';
 import type { Pty, PtyOptions } from './pty';
 import type { Screen } from './screen';
 import { TerminalSession, TIMING } from './session';
@@ -211,6 +211,7 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const abort of aborts) abort.abort();
   await Promise.all(sessions.map((session) => session.close()));
+  vi.restoreAllMocks();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -485,6 +486,72 @@ describe('a held request, answered in the terminal too (both)', () => {
 });
 
 describe('a held request only corrallm answers (api)', () => {
+  it('moves a late answer to the terminal before the deadline timer runs', async () => {
+    let hear: HookListener | undefined;
+    vi.spyOn(HookServer.prototype, 'register').mockImplementation((listener) => {
+      hear = listener;
+      return Promise.resolve({
+        url: 'http://127.0.0.1:47104/hook',
+        statusUrl: 'http://127.0.0.1:47104/status',
+        token: 'test',
+        release: () => undefined,
+      });
+    });
+    const started = await start();
+    await working(started);
+    vi.useFakeTimers();
+    try {
+      // The hold reports its synchronous deadline end from answer(), as the hook server does.
+      let ended: HoldEnd | undefined;
+      const listeners: ((how: HoldEnd) => void)[] = [];
+      const finish = (how: HoldEnd) => {
+        ended = how;
+        for (const listener of listeners.splice(0)) listener(how);
+      };
+      const hold: HookHold = {
+        received: Date.now(),
+        deadline: Date.now() + 20_000,
+        get ended() {
+          return ended;
+        },
+        onEnd: (listener) => listeners.push(listener),
+        answer: () => {
+          finish(performance.now() >= 20_000 ? 'deadline' : 'answered');
+          return ended === 'answered';
+        },
+        release: () => {
+          if (ended !== undefined) return false;
+          finish('released');
+          return true;
+        },
+      };
+      const timer = setTimeout(() => {
+        finish('deadline');
+      }, 20_000);
+      if (hear === undefined) throw new Error('No hook listener');
+      hear(request({ answer_in: 'api' }), hold);
+      const [key] = [...open().keys()];
+      expect(key).toBeDefined();
+      vi.spyOn(performance, 'now').mockReturnValue(20_000);
+      expect(() => {
+        started.session.prompts.answer(key ?? '', { kind: 'choice', value: 'yes' });
+      }).toThrow('Held no longer waits on this request.');
+      expect(endsOf()).toContainEqual({ type: 'prompt-ended', key, reason: 'moved' });
+      expect(hold.ended).toBe('deadline');
+      expect(lastStatus()).toBe('working');
+      started.screen().print(title('[ ! ] Action Required'));
+      await vi.advanceTimersByTimeAsync(10);
+      expect([...open().values()]).toMatchObject([
+        { title: approval('api').title, answerIn: 'terminal', choices: [] },
+      ]);
+      expect([...open().values()][0]).not.toHaveProperty('until');
+      expect(lastStatus()).toBe('waiting');
+      clearTimeout(timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is listed from its arrival, makes the session wait, and is answered through its request', async () => {
     const started = await start();
     await working(started);

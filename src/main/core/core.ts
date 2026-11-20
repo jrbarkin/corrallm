@@ -1132,6 +1132,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // and what waits on a canvas is read again as one is raised or settled.
   const proposals = new Proposals({
     store,
+    catalog: CATALOG,
     messages: (canvas) => engines.messagesOf(canvas),
     // The agents with a conversation kept, in any workspace and any adapter's CLI.
     conversations: async (canvas) => {
@@ -1602,6 +1603,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             merge: (request) => merges.merge(request),
           },
           control,
+          fallback,
           topics,
           app: config.app,
           catalog: CATALOG,
@@ -1684,14 +1686,20 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         // A token's change only you may make waits for you (R4), and so does a deletion of yours
         // leaving a worktree that holds work (B9a C7: its confirmation, through the same proposals).
         propose: (canvas, change, call, before, trees) =>
-          proposals.raise(canvas, {
-            op: call.op,
-            args: call.args ?? {},
-            by: call.by,
-            change,
-            before,
-            ...(trees.length === 0 ? {} : { trees }),
-          }),
+          proposals.raise(
+            canvas,
+            {
+              op: call.op,
+              args: call.args ?? {},
+              by: call.by,
+              change,
+              before,
+              ...(trees.length === 0 ? {} : { trees }),
+            },
+            () => {
+              call.noReturn();
+            },
+          ),
       }),
       openCanvases: () => engines.opened(),
       holds: holder(engines),

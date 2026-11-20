@@ -10,6 +10,7 @@ export function withPublication(ops: Implementations): Implementations {
     'reply',
     'ask',
     'complete',
+    'agent.return',
     'session.open',
     'session.setMode',
     'session.setModel',

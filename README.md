@@ -84,7 +84,7 @@ An orchestrator outside corrallm (Claude Code or Codex in another folder, or a s
 
 `corrallm token renew --into <file>` gives a token a new value and `corrallm token revoke` removes it; either takes effect at once.
 
-**A token is never you.** It can't pick a file or folder, change an agent's mode, connection or CLI, make or widen a token, or answer a human-only prompt. Without your explicit approval grant, it cannot answer native prompts at all. A grant permits only eligible one-time approval choices, with no feedback, own words or lasting permission; a connection that cannot classify permission effects permits rejection only. Deleting an agent, or discarding what you might lose, waits for you to allow it in the app. Token renewal and revocation remain terminal commands, never MCP tools.
+**A token is never you.** It can't pick a file or folder, change an agent's mode, make or widen a token, or answer a human-only prompt. An outside writer may propose a change to an agent's CLI, connection or fallback chain; only your approval in Needs applies it. It may also request a return from a fallback step to that agent's own saved endpoint, once its usage allows it and its current turn ends. Without your explicit approval grant, it cannot answer native prompts at all. A grant permits only eligible one-time approval choices, with no feedback, own words or lasting permission; a connection that cannot classify permission effects permits rejection only. Deleting an agent, or discarding what you might lose, waits for you to allow it in the app. Token renewal and revocation remain terminal commands, never MCP tools.
 
 See [Headless](docs/architecture/headless.md) for every command and option.
 

@@ -235,7 +235,12 @@ export type RuleOutcome = { refuse: string } | { propose: NeedId } | undefined;
 /** Checks a rule on a token's arguments, in the op's scope, before the op runs. */
 export type RuleCheck = (
   args: never,
-  call: { caller: TokenCaller; party: Party },
+  call: {
+    caller: TokenCaller;
+    party: Party;
+    /** A rule that creates a proposal rechecks authority here, inside its queued write. */
+    noReturn: () => void;
+  },
 ) => RuleOutcome | Promise<RuleOutcome>;
 
 /**
@@ -456,6 +461,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     args: unknown,
     caller: TokenCaller,
     party: Party,
+    noReturn: () => void,
   ): Promise<NeedId | undefined> {
     for (const rule of surface.rules ?? []) {
       const checks = registry.rules[rule];
@@ -465,7 +471,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       if (!checkRule) {
         throw new OpFailure('refused', `No check is kept for the rule ${rule} on ${name}.`);
       }
-      const outcome = await checkRule(args as never, { caller, party });
+      const outcome = await checkRule(args as never, { caller, party, noReturn });
       if (outcome && 'refuse' in outcome) throw new OpFailure('refused', outcome.refuse);
       if (outcome) return outcome.propose;
     }
@@ -501,8 +507,14 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
     options: CommitOptions = {},
   ): Promise<unknown> {
     const party = checkReach(name, surface, def, args, caller);
+    let irreversible = false;
+    const noReturn = () => {
+      if (!irreversible) checkReach(name, surface, def, args, caller);
+      turn.noReturn();
+      irreversible = true;
+    };
     if (caller.kind !== 'human') {
-      const proposed = await checkRules(name, surface, args, caller, party);
+      const proposed = await checkRules(name, surface, args, caller, party, noReturn);
       checkReach(name, surface, def, args, caller);
       if (proposed !== undefined) return { proposed };
     }
@@ -512,7 +524,6 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       expect?: Readonly<Record<string, number>>;
     };
     const proposes = surface.rules?.some((rule) => PROPOSING_RULES.includes(rule)) === true;
-    let irreversible = false;
     const ctx: OpContext = {
       caller,
       get party() {
@@ -524,11 +535,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
       recheck: () => {
         checkReach(name, surface, def, args, caller);
       },
-      noReturn: () => {
-        if (!irreversible) checkReach(name, surface, def, args, caller);
-        turn.noReturn();
-        irreversible = true;
-      },
+      noReturn,
       ...(options.after === undefined ? {} : { after: options.after }),
       ...(options.guard === undefined ? {} : { guard: options.guard }),
       ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
@@ -594,7 +601,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         const parsed = admit(sub, op, raw, caller);
         return scopes.draining(
           scopeOf(op[0], parsed),
-          drainsOf(op[0], parsed, registry.surface),
+          drainsOf(op[0], parsed, registry.surface, caller.kind !== 'human'),
           turn.signal,
           () => run(sub, op, parsed, caller, turn, more),
         );
@@ -607,7 +614,17 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         }
         const parsed = admit(sub, op, raw, caller);
         if (caller.kind !== 'human') {
-          const proposed = await checkRules(sub, inner, parsed, caller, partyOf(caller, isLead));
+          const proposed = await checkRules(
+            sub,
+            inner,
+            parsed,
+            caller,
+            partyOf(caller, isLead),
+            () => {
+              checkReach(sub, inner, innerDef, parsed, caller);
+              ctx.noReturn();
+            },
+          );
           checkReach(sub, inner, innerDef, parsed, caller);
           if (proposed)
             throw new OpFailure('refused', `${sub} can’t come to the user as a proposal here.`);
@@ -670,7 +687,7 @@ export function createDispatcher(registry: Registry, options: DispatchOptions = 
         scopeOf(surface, args),
         {
           preempt: surface.preempt === true,
-          drains: drainsOf(surface, args, registry.surface),
+          drains: drainsOf(surface, args, registry.surface, caller.kind !== 'human'),
         },
         signal,
         async (opSignal, noReturn) => {
@@ -841,9 +858,12 @@ export function scopeOf(surface: Pick<Surface, 'scope'>, args: unknown): string[
  * surfaces in `surfaces`).
  */
 export function drainsOf(
-  surface: Pick<Surface, 'scope' | 'drains'>,
+  surface: Pick<Surface, 'scope' | 'drains'> & Partial<Pick<Surface, 'rules'>>,
   args: unknown,
-  surfaces: Readonly<Record<string, Pick<Surface, 'scope' | 'drains'>>> = {},
+  surfaces: Readonly<
+    Record<string, Pick<Surface, 'scope' | 'drains'> & Partial<Pick<Surface, 'rules'>>>
+  > = {},
+  token = false,
 ): string[][] {
   const {
     canvas,
@@ -862,7 +882,8 @@ export function drainsOf(
     const drained = surface.scope === 'app' ? replace?.canvas : canvas;
     return drained === undefined ? [] : [['app', drained]];
   }
-  if (surface.drains === undefined) return [];
+  if (surface.drains === undefined || (token && surface.rules?.includes('connection') === true))
+    return [];
   return [
     ...[...(agent === undefined ? [] : [agent]), ...nodes].map((one) => [
       'app',
@@ -871,7 +892,9 @@ export function drainsOf(
     ]),
     ...ops.flatMap(({ op, args: inner }) => {
       const drains = Object.hasOwn(surfaces, op) ? surfaces[op] : undefined;
-      return drains?.drains === 'agents' ? drainsOf(drains, { ...inner, canvas }, surfaces) : [];
+      return drains?.drains === 'agents'
+        ? drainsOf(drains, { ...inner, canvas }, surfaces, token)
+        : [];
     }),
   ];
 }

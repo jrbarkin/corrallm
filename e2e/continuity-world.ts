@@ -29,8 +29,9 @@ export const CONTINUITY_QUEUE = [
 /** Built app, real core and native fake; only the test holds/releases its CLI's first turn. */
 export async function continuityWorld({
   terminal = false,
+  fakeSessions = false,
   queue = CONTINUITY_QUEUE,
-}: { terminal?: boolean; queue?: unknown[] } = {}) {
+}: { terminal?: boolean; fakeSessions?: boolean; queue?: unknown[] } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'corrallm-continuity-'));
   const profile = path.join(dir, 'profile');
   const project = path.join(dir, 'shop');
@@ -91,6 +92,7 @@ export async function continuityWorld({
     profile,
     diagnoseFailure: () => test.info().status !== test.info().expectedStatus,
     env: {
+      CORRALLM_FAKE_SESSIONS: fakeSessions ? '1' : '',
       CORRALLM_AGENT_PATHS: JSON.stringify({ 'claude-code': executable }),
       ANTHROPIC_API_KEY: terminal ? '' : 'sk-ant-fake',
       CLAUDE_CONFIG_DIR: config,

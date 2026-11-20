@@ -14,6 +14,8 @@ import type {
   FallbackPassed,
   FallbackStep,
 } from '../../shared/model/fallback';
+import type { PartyId } from '../../shared/model/messages';
+import { OpFailure } from './call';
 import { agentParty } from '../../shared/model/messages';
 import { nodeKey } from '../../shared/model/rows';
 import { resetTime } from '../../shared/model/words';
@@ -28,7 +30,7 @@ import type { MessageStore, Staged } from './delivery/messages';
 import { runOwned } from './delivery/messages';
 import type { Engine } from './engine/engine';
 import type { Admission, AdmittedWork } from './engine/run/runner';
-import { nameOf } from './parties';
+import { nameOf, partyText } from './parties';
 
 /*
  * B11a's fallback service (C2 to C6, C8): when an agent's usage runs out, or a usage rule says to
@@ -105,6 +107,14 @@ interface Target {
   step: number | null;
 }
 
+/** Authority rechecked until source close; caller cancellation applies only to admission. */
+export interface ReturnRequest {
+  by: PartyId;
+  authorized(): void;
+  committing(): void;
+  signal: AbortSignal;
+}
+
 /** A switch going on (C4's lane), from the capture admission made. */
 interface Lane {
   canvas: CanvasId;
@@ -132,6 +142,10 @@ interface Lane {
   /** Why it was abandoned from outside it (the service closing), if it was. */
   stop?: Abandoned;
   unsubscribe: () => void;
+  request?: ReturnRequest;
+  /** Caller authority is final before teardown; only core barriers may abandon it afterwards. */
+  requestFinal?: true;
+  committed?: number;
 }
 
 /** Why a switch was given up: said to whoever reads what waits, where it holds the agent. */
@@ -200,6 +214,57 @@ export class FallbackService {
       lane.stop = new Abandoned('corrallm is closing');
       lane.wake?.();
     }
+  }
+
+  /** A requested return uses exactly the automatic return lane, without changing its opt-in. */
+  async returnOwn(
+    canvas: CanvasId,
+    agent: string,
+    request: ReturnRequest,
+  ): Promise<{ settled: Promise<number> }> {
+    request.authorized();
+    request.signal.throwIfAborted();
+    if (this.switching(canvas, agent))
+      throw new OpFailure('refused', 'This agent is already switching backends.');
+    const blocked = this.#blocked.get(keyOf(canvas, agent));
+    if (blocked?.rev === revOf(this.#deps.documents.loaded(canvas), agent))
+      throw new OpFailure('refused', blocked.sentence);
+    const runtime = this.#deps.canvas(canvas);
+    const node = runtime === undefined ? undefined : agentIn(runtime.document, agent);
+    if (runtime === undefined || node === undefined)
+      throw new OpFailure('not-found', 'This agent is not available.');
+    const on = node.data.fallback?.on;
+    if (on === undefined) throw new OpFailure('refused', 'This agent is not on a fallback step.');
+    if (!this.#takes(runtime, on.from, this.#deps.now(), on.why))
+      throw new OpFailure('refused', 'Its own endpoint can’t take work now.');
+    if (this.#deps.handoffFirst?.(canvas, agent) === true)
+      throw new OpFailure('refused', 'Its handoff request goes first.');
+    this.#start(
+      canvas,
+      runtime,
+      node,
+      {},
+      'return',
+      on.why,
+      { endpoint: on.from, step: null },
+      [],
+      request,
+    );
+    const lane = this.#lanes.get(keyOf(canvas, agent));
+    if (lane === undefined) throw new OpFailure('refused', 'This agent cannot return now.');
+    const settled = lane.settled.promise
+      .then(() => {
+        if (lane.committed === undefined)
+          throw new OpFailure('unavailable', 'The return was not saved.');
+        return lane.committed;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Abandoned) throw new OpFailure('refused', error.message);
+        throw error;
+      });
+    // The lane reports its own failure even when its accepted caller no longer waits for it.
+    void settled.catch(() => undefined);
+    return Promise.resolve({ settled });
   }
 
   /**
@@ -412,6 +477,7 @@ export class FallbackService {
     why: 'usage-limit' | 'rule',
     target: Target,
     passed: readonly FallbackPassed[] = [],
+    request?: ReturnRequest,
   ): Admission {
     const from = this.#endpoint(runtime, node.data);
     if (from === undefined) return 'go';
@@ -438,6 +504,7 @@ export class FallbackService {
       settled,
       wake: undefined,
       unsubscribe: () => undefined,
+      ...(request === undefined ? {} : { request }),
     };
     const wake = () => {
       lane.wake?.();
@@ -486,6 +553,10 @@ export class FallbackService {
     const availability = await sessions.availability(canvas, agent);
     this.#check(lane);
     if (!availability.ready) throw new Abandoned(availability.sentence, true);
+    // Final authority/reach check before the first native effect. An accepted request's client
+    // may leave; after this boundary, later revocation cannot leave its session half-closed.
+    lane.request?.committing();
+    lane.requestFinal = true;
     // Close the source: the engine's driver, then any session the manager runs for it.
     await runtime.engine.sessions.close(agent);
     this.#check(lane);
@@ -553,6 +624,13 @@ export class FallbackService {
    * take work. Throws, abandoning the switch, if any fails.
    */
   #check(lane: Lane): void {
+    if (lane.requestFinal !== true) {
+      try {
+        lane.request?.authorized();
+      } catch {
+        throw new Abandoned('This return is no longer authorized.');
+      }
+    }
     if (lane.stop) throw lane.stop;
     if (this.#closed || this.#deps.stopping())
       throw new Abandoned('corrallm is stopping: the switch is decided again as it starts');
@@ -587,7 +665,7 @@ export class FallbackService {
     const { canvas, agent } = lane;
     const deps = this.#deps;
     try {
-      await this.#deps.documents.change(canvas, {
+      const committed = await this.#deps.documents.change(canvas, {
         revision: {
           op: lane.kind === 'return' ? 'fallback.return' : 'fallback.switch',
           by: 'corrallm',
@@ -606,11 +684,41 @@ export class FallbackService {
           if (safety.propose !== undefined) throw new Abandoned(safety.propose, true);
           return safety.removals;
         },
+        // Requested returns finalized caller authority before teardown, not during this write.
         committing: () => undefined,
-        ...(deps.carry === undefined
-          ? {}
-          : { within: () => deps.carry?.(canvas, agent, lane.id) ?? NOTHING }),
+        within: () => {
+          const carry = deps.carry?.(canvas, agent, lane.id) ?? NOTHING;
+          let record: Staged | undefined;
+          try {
+            record =
+              lane.request === undefined
+                ? undefined
+                : lane.runtime.messages.stageWithin({
+                    from: 'corrallm',
+                    to: 'you',
+                    kind: 'settled',
+                    origin: 'party',
+                    state: 'delivered',
+                    by: lane.request.by,
+                    body: `${nameOf(lane.runtime.document.nodes, agent)} returned by ${partyText(lane.runtime.document.nodes, lane.request.by)}.`,
+                  });
+          } catch (error) {
+            carry.undo();
+            throw error;
+          }
+          return {
+            reveal: () => {
+              carry.reveal();
+              record?.reveal();
+            },
+            undo: () => {
+              record?.undo();
+              carry.undo();
+            },
+          };
+        },
       });
+      if (committed.committed !== undefined) lane.committed = committed.committed.rev;
     } catch (error) {
       if (error instanceof Abandoned) throw error;
       // C4: a commit that fails (CommitFailed, a store failed closed, a refused change): no switch.

@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
+import { adapterIn, connectionIn } from '../../../shared/adapter';
+import type { Catalog } from '../../../shared/adapter';
+import { agentEndpoint } from '../../../shared/model/catalog';
+import type { AgentData } from '../../../shared/model/canvas';
+import type { Fallback, FallbackStep } from '../../../shared/model/fallback';
 import type { NeedId } from '../../../shared/api/ids';
 import { MAX_OPEN_PROPOSALS } from '../../../shared/api/limits';
 import { SURFACE } from '../../../shared/api/surface';
@@ -41,8 +46,7 @@ export type Outcome = 'allowed' | 'refused' | 'stale';
 const NAMED = 5;
 
 /** Why only you may choose either of a proposal's choices. */
-const YOURS =
-  'Deleting agents, or discarding their work, is the user’s to decide: no token’s say-so does it.';
+const YOURS = 'Only the user approves or refuses a proposal: no token’s say-so applies it.';
 
 /** A proposal waiting for you. */
 export interface Proposal {
@@ -100,6 +104,8 @@ export interface Settlement {
 }
 
 export interface ProposalsDeps {
+  /** Display names for backend proposals; absent in stores reading only older proposal kinds. */
+  catalog?: Catalog;
   /** The profile's database, which keeps them. */
   store: Database;
   /** A canvas's message store, where each proposer's record goes. */
@@ -179,6 +185,8 @@ export class Proposals {
    * replay checks. One that is no change of a document's (R4's argument half: a close, a replace,
    * a save) has none: it says what it touches, its canvas's document and file, and what it would
    * do and lose itself (`touched`, `lost`).
+   * `beforeWrite` is the call's authority and cancellation boundary, run in the store lane before
+   * returning an existing proposal or writing a new one, after all preparation has finished.
    */
   async raise(
     canvas: CanvasId,
@@ -201,6 +209,7 @@ export class Proposals {
           trees?: readonly TreeState[];
         }
     ),
+    beforeWrite: () => void,
   ): Promise<NeedId> {
     const { op, by } = raised;
     // Its arguments as the database keeps them (a key left undefined is none), so that an identical
@@ -218,7 +227,13 @@ export class Proposals {
       touched = Object.fromEntries([...change.entities].map(([key, { rev }]) => [key, rev ?? 0]));
       const inner = Array.isArray(args.ops) ? args.ops.length : undefined;
       const trees = raised.trees ?? [];
-      lost = wordsOf(change, await this.#deps.conversations(canvas), inner, trees);
+      lost = wordsOf(
+        change,
+        await this.#deps.conversations(canvas),
+        inner,
+        trees,
+        this.#deps.catalog,
+      );
       before = raised.before;
       cleanup = trees.length === 0 ? undefined : { trees };
     } else {
@@ -228,6 +243,7 @@ export class Proposals {
     }
     // Check inside the write lane too: two raises may have awaited conversations together.
     const { proposal, made } = await this.#deps.store.writeBlocking(() => {
+      beforeWrite();
       const rows = this.#deps.store
         .prepare(
           `SELECT id, op, args, by_party, touched, lost, raised_at FROM proposal
@@ -492,6 +508,7 @@ function wordsOf(
   conversations: ReadonlySet<string>,
   inner: number | undefined,
   trees: readonly TreeState[] = [],
+  catalog?: Catalog,
 ): Lost {
   const { nodes } = change.before;
   const removed = nodes.filter((node) => change.removed.has(node.id));
@@ -509,16 +526,85 @@ function wordsOf(
     ...named.map((node) => nameOf(nodes, node.id)),
     ...(more > 0 ? [`${String(more)} more`] : []),
   ]);
-  const what = `delete ${names}`;
+  const endpointWords = (step: Partial<FallbackStep>, unset = 'saved setting'): string => {
+    const found =
+      step.connection === undefined || catalog === undefined
+        ? undefined
+        : connectionIn(catalog, step.connection);
+    const adapter =
+      step.adapter === undefined || catalog === undefined
+        ? undefined
+        : adapterIn(catalog, step.adapter);
+    const label =
+      found === undefined
+        ? (adapter?.name ?? step.adapter ?? step.connection ?? 'no agent chosen')
+        : `${found.adapter.name} · ${found.connection.label}`;
+    const settings = [
+      `model: ${step.model === undefined ? unset : JSON.stringify(step.model)}`,
+      `effort: ${step.effort === undefined ? unset : JSON.stringify(step.effort)}`,
+    ];
+    return `${label} (${settings.join(', ')})`;
+  };
+  const currentWords = (data: AgentData): string => {
+    const endpoint = catalog === undefined ? undefined : agentEndpoint(data, catalog);
+    const adapter = endpoint?.kind === 'known' ? endpoint.adapter : data.adapter;
+    const connection = endpoint?.kind === 'known' ? endpoint.connection : data.connection;
+    return endpointWords(
+      {
+        ...(adapter === undefined ? {} : { adapter }),
+        ...(connection === undefined ? {} : { connection }),
+        ...data.settings?.[adapter ?? ''],
+      },
+      'native default',
+    );
+  };
+  const chainWords = (chain: Fallback | undefined): string =>
+    chain === undefined
+      ? 'none'
+      : `${chain.to.map((step, index) => `${String(index + 1)}: ${endpointWords(step)}`).join('; ')}; ${chain.back === 'return' ? 'return when its own usage resets' : 'stay on the fallback'}; ${chain.on === undefined ? 'not on a fallback step' : `on step ${String(chain.on.step + 1)}, own endpoint: ${endpointWords(chain.on.from)}`}`;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const backends = change.after.nodes.flatMap((node) => {
+    if (node.type !== 'agent') return [];
+    const was = byId.get(node.id);
+    if (was?.type !== 'agent') return [];
+    const name = nameOf(nodes, node.id);
+    const words: string[] = [];
+    if (was.data.adapter !== node.data.adapter || was.data.connection !== node.data.connection)
+      words.push(
+        `Change ${name}’s backend from ${currentWords(was.data)} to ${currentWords(node.data)}.`,
+      );
+    if (!isDeepStrictEqual(was.data.fallback, node.data.fallback))
+      words.push(
+        `Change ${name}’s fallback chain from ${chainWords(was.data.fallback)} to ${chainWords(node.data.fallback)}.`,
+      );
+    if (words.length === 0) return [];
+    if (was.data.adapter !== node.data.adapter)
+      words.push('Translate its queue actions by catalog job.');
+    return [{ id: node.id, words: words.join(' ') }];
+  });
+  const backendNames = andList([
+    ...backends.slice(0, NAMED).map(({ id }) => nameOf(nodes, id)),
+    ...(backends.length > NAMED ? [`${String(backends.length - NAMED)} more`] : []),
+  ]);
+  const what = [
+    removed.length === 0 ? '' : `delete ${names}`,
+    backends.length === 0 ? '' : `change the backend of ${backendNames}`,
+  ]
+    .filter(Boolean)
+    .join(' and ');
   const [only] = removed;
+  const [backend] = backends;
   const who = partyText(nodes, change.by);
   const title =
-    removed.length === 1 && only !== undefined
-      ? `${who} asks to ${what}: ${loses(only)}`
-      : `${who} asks to ${what}: ${andList(named.map((node) => `${nameOf(nodes, node.id)} (${loses(node)})`))}`;
+    removed.length === 0
+      ? `${who} asks to ${what}`
+      : removed.length === 1 && only !== undefined
+        ? `${who} asks to ${what}: ${loses(only)}`
+        : `${who} asks to ${what}: ${andList(named.map((node) => `${nameOf(nodes, node.id)} (${loses(node)})`))}`;
   const others = inner === undefined ? 0 : inner - 1;
   const work = treeWords(nodes, trees);
   const details = [
+    ...backends.map(({ words }) => words),
     ...(work === undefined ? [] : [work]),
     ...(inner === undefined
       ? []
@@ -530,9 +616,13 @@ function wordsOf(
     what,
     // Yours (a deletion of yours waiting for you to confirm it), it is a question to you.
     title: change.by === 'you' ? `Delete ${names}? Its worktree holds work.` : title,
-    agents: removed.map((node) => node.id),
+    agents: [...removed.map((node) => node.id), ...backends.map(({ id }) => id)],
     ...(details.length === 0 ? {} : { detail: details.join(' ') }),
-    ...(only === undefined ? {} : { agent: only.id }),
+    ...(only === undefined && backends.length === 1 && backend !== undefined
+      ? { agent: backend.id }
+      : only === undefined
+        ? {}
+        : { agent: only.id }),
   };
 }
 

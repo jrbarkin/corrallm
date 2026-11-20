@@ -103,6 +103,18 @@ describe('drainsOf', () => {
     expect(drainsOf({ scope: 'canvas' }, { canvas: CANVAS, agent: 'helper' })).toEqual([]);
   });
 
+  it('drains a backend change only when you apply it, including an approved batch', () => {
+    const backend = { scope: 'canvas', drains: 'agents', rules: ['connection'] } as const;
+    const args = { canvas: CANVAS, agent: 'helper' };
+    expect(drainsOf(backend, args, {}, true)).toEqual([]);
+    expect(drainsOf(backend, args)).toEqual([['app', CANVAS, 'helper']]);
+    const batch = { scope: 'canvas', drains: 'agents' } as const;
+    const ops = { canvas: CANVAS, ops: [{ op: 'agent.setConnection', args: { agent: 'helper' } }] };
+    const surfaces = { 'agent.setConnection': backend };
+    expect(drainsOf(batch, ops, surfaces, true)).toEqual([]);
+    expect(drainsOf(batch, ops, surfaces)).toEqual([['app', CANVAS, 'helper']]);
+  });
+
   it('drains, for an op in the app’s scope, the canvas it replaces, and none when it replaces none', () => {
     const create = { scope: 'app', drains: 'canvas' } as const;
     expect(drainsOf(create, { replace: { canvas: CANVAS, discard: true } })).toEqual([

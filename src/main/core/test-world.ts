@@ -403,6 +403,12 @@ function controlConnector(): Connector<SessionMode> {
 }
 
 const NODES = [
+  ...['return-you', 'return-outside'].map((id) => ({
+    id,
+    connection: 'codex.app-server',
+    adapter: 'codex',
+    parent: 'lead',
+  })),
   {
     id: CONTROL_AGENT,
     adapter: CONTROL.adapter.id,
@@ -565,6 +571,19 @@ export async function startWorld(): Promise<{
                     : id === 'lead' || id === 'worker'
                       ? { queue: [REPORT] }
                       : {}),
+          ...(id.startsWith('return-')
+            ? {
+                fallback: {
+                  to: [{ adapter: 'codex', connection: 'codex.app-server' }],
+                  on: {
+                    step: 0,
+                    from: { adapter: 'claude-code', connection: 'claude-code.sdk' },
+                    why: 'usage-limit',
+                    at: 0,
+                  },
+                },
+              }
+            : {}),
           ...(connection === undefined ? {} : { connection }),
           ...(parent === undefined ? {} : { parent }),
         })),
@@ -1596,6 +1615,11 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
         request: request(55),
       },
     ],
+    by: {
+      'outside-write': [
+        { canvas: CANVAS, agent: 'stranger', fallback: null, request: controlRequest(503) },
+      ],
+    },
     fresh: ['revs'],
     invalid: [
       { agent: 'helper' },
@@ -1625,6 +1649,18 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       },
     },
   },
+  'agent.return': {
+    valid: [{ canvas: CANVAS, agent: 'return-you', request: controlRequest(501) }],
+    by: {
+      'outside-write': [{ canvas: CANVAS, agent: 'return-outside', request: controlRequest(502) }],
+    },
+    fresh: ['revs'],
+    invalid: [
+      { agent: '' },
+      { agent: 'worker', adapter: 'codex' },
+      { agent: 'worker', connection: 'codex.app-server' },
+    ],
+  },
   'agent.setHandoff': {
     valid: [
       {
@@ -1648,7 +1684,7 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     ],
     // Yours alone: no token is in its audience to refuse.
     meetsRule: {
-      connection: {
+      handoff: {
         canvas: CANVAS,
         agent: 'stranger',
         handoff: { off: true },

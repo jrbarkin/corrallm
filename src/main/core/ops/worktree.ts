@@ -120,18 +120,24 @@ export function worktreeOps({
       const tree = worktrees.workspaces.worktree(worktree);
       const name = tree === undefined ? undefined : worktrees.nameOf(id, tree.owner);
       const of = name === undefined ? 'a kept worktree' : `${name}’s kept worktree`;
-      const need = await proposals.raise(id, {
-        op: 'worktree.remove',
-        args: { canvas, worktree },
-        by: ctx.by,
-        touched: {},
-        lost: {
-          what: `remove ${of} and its branch`,
-          title: `Remove ${of}? It holds work.`,
-          detail: keptWords(outcome.asks),
+      const need = await proposals.raise(
+        id,
+        {
+          op: 'worktree.remove',
+          args: { canvas, worktree },
+          by: ctx.by,
+          touched: {},
+          lost: {
+            what: `remove ${of} and its branch`,
+            title: `Remove ${of}? It holds work.`,
+            detail: keptWords(outcome.asks),
+          },
+          trees: [outcome.asks],
         },
-        trees: [outcome.asks],
-      });
+        () => {
+          ctx.noReturn();
+        },
+      );
       throw new ProposedInstead(need);
     },
   };
