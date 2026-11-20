@@ -1024,11 +1024,7 @@ export class Engines {
     }
     if (strict && !kept) throw new Error(NO_FILE);
     // A draft that holds nothing is loaded only while it is live here, or open (a window shows it).
-    if (
-      !kept &&
-      documents.loaded(canvas) === undefined &&
-      !(await journal.openCanvases()).includes(canvas)
-    ) {
+    if (!kept && documents.loaded(canvas) === undefined && !journal.isOpen(canvas)) {
       throw new Error(NOT_KEPT);
     }
     // With its edits since, as the core keeps them: a file changed on disk meanwhile is never read
@@ -1404,7 +1400,7 @@ export class Engines {
       ...running.engine.checkpoint(),
       updatedAt: Date.now(),
     };
-    const problem = this.#deps.journal.keep(
+    const kept = this.#deps.journal.keep(
       running.document.id,
       running.token,
       checkpoint,
@@ -1412,7 +1408,7 @@ export class Engines {
     );
     return () => {
       running.saved = Math.max(running.saved, covered);
-      this.#deps.journal.kept(running.document.id, problem);
+      this.#deps.journal.kept(running.document.id, kept);
     };
   }
 

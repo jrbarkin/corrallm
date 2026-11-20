@@ -128,25 +128,92 @@ type Row = Record<string, unknown>;
 
 export interface MergeJournalDeps {
   store: Database;
+  /** A forgotten canvas's cached rows never belong to a later row of the same id. */
+  generation?: (canvas: CanvasId) => number;
   /** The time, in epoch ms. */
   now?: () => number;
 }
 
+interface LatestIndex {
+  rows: Map<string, Row>;
+  published: Map<string, number>;
+  generations: Map<string, number>;
+  changes: number;
+  error?: Error;
+}
+/** Several service readers of the same store share its one acknowledged view. */
+const LATEST = new WeakMap<Database, LatestIndex>();
+
 export class MergeJournal {
   readonly #store: Database;
   readonly #now: () => number;
+  readonly #generation: (canvas: CanvasId) => number;
+  /** Raw latest rows preserve selected-row validation without SQL on worktree publications. */
+  readonly #index: LatestIndex;
+  #changed: Set<string> | undefined;
 
-  constructor({ store, now = () => Date.now() }: MergeJournalDeps) {
+  constructor({ store, now = () => Date.now(), generation = () => 0 }: MergeJournalDeps) {
     this.#store = store;
     this.#now = now;
+    this.#generation = generation;
+    const known = LATEST.get(store);
+    if (known !== undefined) {
+      this.#index = known;
+      return;
+    }
+    this.#index = { rows: new Map(), published: new Map(), generations: new Map(), changes: 0 };
+    LATEST.set(store, this.#index);
+    try {
+      const statement = store.prepare('SELECT * FROM merge_job ORDER BY created_at, rowid');
+      statement.setReadBigInts(true);
+      for (const row of statement.all()) {
+        if (typeof row.workspace_id !== 'string') continue;
+        this.#index.rows.set(row.workspace_id, {
+          ...row,
+          created_at: Number(row.created_at),
+          updated_at: Number(row.updated_at),
+        });
+        if (isCanvasId(row.canvas_id))
+          this.#index.generations.set(row.workspace_id, generation(row.canvas_id));
+      }
+    } catch (error) {
+      this.#index.error = error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
    * Runs `run` in a write of its own: on disk once it resolves, with what it returned; rejects,
    * keeping nothing of it, if it threw or couldn't be written.
    */
-  write<T>(run: (journal: this) => T): Promise<T> {
-    return this.#store.writeBlocking(() => run(this));
+  async write<T>(run: (journal: this) => T): Promise<T> {
+    const rows = new Map<string, Row | undefined>();
+    const generations = new Map<string, number>();
+    let change = 0;
+    const value = await this.#store.writeBlocking(() => {
+      const changed = new Set<string>();
+      this.#changed = changed;
+      try {
+        const result = run(this);
+        for (const workspace of changed) {
+          const row = this.#latestRow(workspace);
+          rows.set(workspace, row);
+          if (isCanvasId(row?.canvas_id))
+            generations.set(workspace, this.#generation(row.canvas_id));
+        }
+        change = ++this.#index.changes;
+        return result;
+      } finally {
+        this.#changed = undefined;
+      }
+    });
+    for (const [workspace, row] of rows) {
+      if ((this.#index.published.get(workspace) ?? 0) >= change) continue;
+      this.#index.published.set(workspace, change);
+      this.#index.generations.set(workspace, generations.get(workspace) ?? 0);
+      if (row === undefined) this.#index.rows.delete(workspace);
+      else this.#index.rows.set(workspace, row);
+    }
+    return value;
   }
 
   job(id: string): MergeJob | undefined {
@@ -191,12 +258,24 @@ export class MergeJournal {
 
   /** The workspace's latest merge, if it has had one. */
   latest(workspace: string): MergeJob | undefined {
-    const row = this.#store
+    if (this.#index.error !== undefined) throw this.#index.error;
+    const row =
+      this.#changed === undefined ? this.#index.rows.get(workspace) : this.#latestRow(workspace);
+    if (
+      this.#changed === undefined &&
+      isCanvasId(row?.canvas_id) &&
+      this.#index.generations.get(workspace) !== this.#generation(row.canvas_id)
+    )
+      return undefined;
+    return row === undefined ? undefined : jobOf(row);
+  }
+
+  #latestRow(workspace: string): Row | undefined {
+    return this.#store
       .prepare(
         'SELECT * FROM merge_job WHERE workspace_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
       )
       .get(workspace);
-    return row === undefined ? undefined : jobOf(row);
   }
 
   /**
@@ -223,6 +302,7 @@ export class MergeJournal {
             "UPDATE merge_job SET outcome = 'superseded', updated_at = ? WHERE id = ? AND outcome = 'held'",
           )
           .run(at, held.id);
+        this.#changed?.add(held.workspace);
       }
     }
     const recorded: MergeJob = {
@@ -254,6 +334,7 @@ export class MergeJournal {
         at,
         at,
       );
+    this.#changed?.add(recorded.workspace);
     return recorded;
   }
 
@@ -268,6 +349,7 @@ export class MergeJournal {
     this.#store
       .prepare('UPDATE merge_job SET phase = ?, updated_at = ? WHERE id = ?')
       .run(to, next.updatedAt, id);
+    this.#changed?.add(next.workspace);
     return next;
   }
 
@@ -301,6 +383,7 @@ export class MergeJournal {
         'UPDATE merge_job SET phase = ?, outcome = ?, sentence = ?, updated_at = ? WHERE id = ?',
       )
       .run(next.phase, outcome, sentence, next.updatedAt, id);
+    this.#changed?.add(next.workspace);
     return next;
   }
 
@@ -315,6 +398,7 @@ export class MergeJournal {
     this.#store
       .prepare("UPDATE merge_job SET phase = 'done', updated_at = ? WHERE id = ?")
       .run(next.updatedAt, id);
+    this.#changed?.add(next.workspace);
     return next;
   }
 
@@ -329,6 +413,7 @@ export class MergeJournal {
     this.#store
       .prepare("UPDATE merge_job SET outcome = 'superseded', updated_at = ? WHERE id = ?")
       .run(next.updatedAt, id);
+    this.#changed?.add(next.workspace);
     return next;
   }
 

@@ -21,7 +21,6 @@ import { engineCatalog } from '../../shared/model/catalog';
 import { needs } from '../../shared/model/needs-selectors';
 import type { NeedsItem } from '../../shared/model/needs';
 import { agentName } from '../../shared/model/queries';
-import { nodeKey } from '../../shared/model/rows';
 import { MAX_CANVAS_BYTES } from '../../shared/canvas';
 import type { SessionMode } from '../../shared/session';
 import { CanvasFiles } from '../canvas';
@@ -477,19 +476,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     const nodes = documents.loaded(canvas)?.document.nodes;
     const id = ownerNode(owner);
     if (nodes?.some((node) => node.id === id) === true) return nameOf(nodes, id);
-    try {
-      const row = store
-        .prepare(
-          `SELECT before_data FROM change WHERE canvas_id = ? AND entity = ?
-             AND before_data IS NOT NULL ORDER BY rev DESC LIMIT 1`,
-        )
-        .get(canvas, nodeKey(id));
-      const before: unknown = row === undefined ? undefined : JSON.parse(String(row.before_data));
-      const label = (before as { label?: unknown } | undefined)?.label;
-      return typeof label === 'string' && label !== '' ? label : undefined;
-    } catch {
-      return undefined;
-    }
+    return documents.previousLabel(canvas, id);
   };
   // A tree no agent works in any more (B9a C7): removed with its last agent once safe, else kept
   // unless you discard it, its removal finished across restarts.
@@ -923,7 +910,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const merges = new MergeService({
     git: workspaceGit,
     workspaces: workspaceStore,
-    journal: new MergeJournal({ store }),
+    journal: new MergeJournal({ store, generation: (canvas) => memory.generation(canvas) }),
     queue: workspaceQueue,
     gate,
     projectRoot: (canvas) => projects.of(canvas),
@@ -1010,7 +997,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const states = new CanvasStates({
     documents,
     memory,
-    store,
+    journal,
     shownIn: (canvas) => windows.showing(canvas),
     running: () => engines.opened(),
     live: (canvas) => engines.canvas(canvas)?.engine.run.snapshot().running,
@@ -1085,9 +1072,9 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         console.error('Could not say what changed of the canvas:', error);
       });
   });
-  journal.subscribe((canvas) => {
+  journal.subscribe(() => {
     follow();
-    states.runChanged(canvas);
+    states.listChanged();
   });
   windows.subscribe(() => {
     follow();

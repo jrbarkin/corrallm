@@ -35,6 +35,7 @@ let store: Store;
 let memory: CanvasMemory;
 let documents: Documents;
 let states: CanvasStates;
+let journal: RunJournal;
 let disk: Connection;
 /** The clock CanvasStates reads. */
 let clock: number;
@@ -97,10 +98,11 @@ async function filed(document: CanvasDocument): Promise<string> {
 }
 function start(): void {
   documents = new Documents({ store, memory, catalog: CATALOG });
+  journal = new RunJournal({ store, memory, messages: messagesIn(store, memory) });
   states = new CanvasStates({
     documents,
     memory,
-    store,
+    journal,
     shownIn: (canvas) => shown.get(canvas) ?? [],
     running: () => [],
     now: () => clock,
@@ -344,6 +346,29 @@ describe('a canvas’s meta', () => {
 });
 
 describe('the list of canvases', () => {
+  it('lists loaded canvases and committed run flags without reading SQLite', async () => {
+    const canvas = newCanvasId();
+    await filed(canvasOf(canvas));
+    await states.read(canvas);
+    await journal.opened(canvas);
+    const { token } = await journal.get(canvas);
+    await journal.save(canvas, token, {
+      version: 2,
+      state: '{"version":2,"run":{"running":true}}',
+      messages: '{"version":1,"agents":[]}',
+      updatedAt: 1,
+    });
+    await states.list();
+    const reads = vi.spyOn(store, 'prepare').mockImplementation(() => {
+      throw new Error('The read connection is busy');
+    });
+    expect(await states.list()).toMatchObject([{ canvas, open: true, running: true }]);
+    await journal.save(canvas, token, null);
+    states.listChanged();
+    expect(await states.list()).toMatchObject([{ canvas, open: true, running: false }]);
+    expect(reads).not.toHaveBeenCalled();
+  });
+
   it('holds every canvas worth listing, the one used most recently first', async () => {
     const saved = newCanvasId();
     await filed(canvasOf(saved));

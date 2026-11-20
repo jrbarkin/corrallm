@@ -175,6 +175,73 @@ afterEach(async () => {
 });
 
 describe('a canvas’s document', () => {
+  it('reads previous node labels from memory after recovery, retaining only kept revisions', async () => {
+    const canvas = newCanvasId();
+    const original = canvasOf(canvas);
+    await made(canvas, original);
+    await commit(canvas, renamed(original, 'worker', 'Changed'));
+    const removed = {
+      ...original,
+      nodes: original.nodes.filter((node) => node.id !== 'worker'),
+      links: [],
+    };
+    await commit(canvas, removed);
+    await restart();
+    const reads = vi.spyOn(store, 'prepare').mockImplementation(() => {
+      throw new Error('The read connection is busy');
+    });
+    for (let i = 0; i < 10; i++) expect(documents.previousLabel(canvas, 'worker')).toBe('Changed');
+    expect(documents.previousLabel(canvas, 'absent')).toBeUndefined();
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
+    // The same retention rule as the persisted change history.
+    documents = new Documents({ store, memory, catalog: CATALOG, trim: { kept: 1, every: 1 } });
+    await documents.load(canvas);
+    await commit(canvas, renamed(removed, 'lead', 'Another lead'));
+    expect(documents.previousLabel(canvas, 'worker')).toBeUndefined();
+  });
+
+  it('publishes a previous label only when its document commit succeeds', async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    let holding = false;
+    await restart({
+      ...SYSTEM_DEPS,
+      flush: async (fd) => {
+        if (holding) {
+          entered.resolve(undefined);
+          await release.promise;
+        }
+        await SYSTEM_DEPS.flush(fd);
+      },
+    });
+    const canvas = newCanvasId();
+    const original = canvasOf(canvas);
+    await made(canvas, original);
+    const changed = renamed(original, 'worker', 'Changed');
+    await commit(canvas, changed);
+    const allow = await refuseWrites(store, 'change', 'not written');
+    try {
+      await expect(commit(canvas, renamed(changed, 'worker', 'Rejected'))).rejects.toThrow(
+        'not written',
+      );
+      expect(documents.previousLabel(canvas, 'worker')).toBe('Worker');
+    } finally {
+      await allow();
+    }
+    holding = true;
+    const writing = commit(canvas, renamed(changed, 'worker', 'Accepted'));
+    try {
+      await entered.promise;
+      expect(documents.previousLabel(canvas, 'worker')).toBe('Worker');
+    } finally {
+      holding = false;
+      release.resolve(undefined);
+      await writing;
+    }
+    expect(documents.previousLabel(canvas, 'worker')).toBe('Changed');
+  });
+
   it('is read from its file once it has none, then kept in rows under the canvas’s id', async () => {
     const canvas = newCanvasId();
     const document = canvasOf(canvas);

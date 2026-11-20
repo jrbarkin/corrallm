@@ -72,6 +72,7 @@ describe('CanvasMemory', () => {
         inProject({ codex: { a: { id: THREAD } } }),
       );
       expect(recovered.fileOf(OTHER)).toBeUndefined();
+      expect(await recovered.list()).toEqual([{ canvas: TEAM, file: '/work/team.corral' }]);
     }
     expect(reads).not.toHaveBeenCalled();
   });
@@ -660,7 +661,7 @@ describe('ensure, within a planned write', () => {
 
   it('gives no statement for a canvas it keeps, and a row for one it does not', async () => {
     const memory = new CanvasMemory(store);
-    const run = vi.spyOn(store, 'run');
+    const run = vi.spyOn(store, 'runReturning');
     await store.write(() => {
       memory.ensure(TEAM);
     });
@@ -706,7 +707,7 @@ describe('ensure, within a planned write', () => {
     // On disk once the second write resolves: its commit held the forgetting too.
     expect(rowsOf()).toEqual([{ id: OTHER }]);
     // And the canvas forgotten is a new one again.
-    const run = vi.spyOn(store, 'run');
+    const run = vi.spyOn(store, 'runReturning');
     await store.write(() => {
       memory.ensure(TEAM);
     });
@@ -723,7 +724,7 @@ describe('ensure, within a planned write', () => {
       }),
     ).rejects.toThrow('The write failed');
     expect(rowsOf()).toEqual([]);
-    const run = vi.spyOn(store, 'run');
+    const run = vi.spyOn(store, 'runReturning');
     await store.write(() => {
       memory.ensure(TEAM);
     });

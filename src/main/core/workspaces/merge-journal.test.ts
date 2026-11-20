@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasId } from '../../../shared/canvas';
 import { CanvasMemory } from '../../memory';
@@ -37,6 +37,7 @@ let store: Store;
 let now: number;
 let journal: MergeJournal;
 let reader: Connection;
+let memory: CanvasMemory;
 
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-merge-journal-'));
@@ -44,7 +45,7 @@ beforeEach(async () => {
   reader = onDisk(profile);
   now = 1000;
   journal = new MergeJournal({ store, now: () => now });
-  const memory = new CanvasMemory(store);
+  memory = new CanvasMemory(store);
   const workspaces = new WorkspaceStore({ store });
   await store.writeBlocking(() => {
     memory.ensure(CANVAS);
@@ -66,6 +67,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   reader.close();
   await store.close();
   await rm(profile, { recursive: true, force: true });
@@ -118,6 +120,67 @@ function job(changes: Partial<NewMergeJob> = {}): NewMergeJob {
 const rows = () => reader.prepare('SELECT * FROM merge_job ORDER BY created_at, id').all();
 
 describe('the merge journal', () => {
+  it('drops the latest merge view when its canvas is forgotten', async () => {
+    const index = new MergeJournal({ store, generation: (canvas) => memory.generation(canvas) });
+    await index.write((j) => j.record(job()));
+    expect(index.latest(WORKSPACE)?.id).toBe(J1);
+    await memory.forget(CANVAS);
+    expect(index.latest(WORKSPACE)).toBeUndefined();
+  });
+
+  it('reads the latest merge for a workspace from memory after recovery', async () => {
+    const kept = await journal.write((j) => j.record(job()));
+    reader.close();
+    await store.close();
+    store = await openTestStore(profile);
+    reader = onDisk(profile);
+    const recovered = new MergeJournal({ store });
+    const reads = vi.spyOn(store, 'prepare').mockImplementation(() => {
+      throw new Error('The read connection is busy');
+    });
+    for (let i = 0; i < 10; i++) expect(recovered.latest(WORKSPACE)).toEqual(kept);
+    expect(recovered.latest('not-kept')).toBeUndefined();
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it('shares the acknowledged merge view with other journal readers of the same store', async () => {
+    const other = new MergeJournal({ store });
+    expect(other.latest(WORKSPACE)).toBeUndefined();
+    const kept = await journal.write((j) => j.record(job()));
+    expect(other.latest(WORKSPACE)).toEqual(kept);
+    await other.write((j) => j.advance(J1, { from: 'installing', to: 'installed' }));
+    expect(journal.latest(WORKSPACE)).toMatchObject({ id: J1, phase: 'installed' });
+  });
+
+  it('publishes the latest merge only after acknowledgement and retains it after a rollback', async () => {
+    const entered = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const write = store.writeBlocking.bind(store);
+    const delayed = vi.spyOn(store, 'writeBlocking').mockImplementation(async (run, failed) => {
+      const value = await write(run, failed);
+      entered.resolve(undefined);
+      await release.promise;
+      return value;
+    });
+    const writing = journal.write((j) => j.record(job()));
+    try {
+      await entered.promise;
+      expect(journal.latest(WORKSPACE)).toBeUndefined();
+    } finally {
+      release.resolve(undefined);
+      await writing;
+      delayed.mockRestore();
+    }
+    expect(journal.latest(WORKSPACE)).toMatchObject({ id: J1, phase: 'installing' });
+    await expect(
+      journal.write((j) => {
+        j.advance(J1, { from: 'installing', to: 'installed' });
+        throw new Error('not written');
+      }),
+    ).rejects.toThrow('not written');
+    expect(journal.latest(WORKSPACE)).toMatchObject({ id: J1, phase: 'installing' });
+  });
+
   it('records a merge within a write, on disk once it resolves, installing and going on', async () => {
     const recorded = await journal.write((j) => j.record(job()));
     expect(recorded).toEqual({

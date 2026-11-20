@@ -14,7 +14,7 @@ import { mintTrustedPath } from './core/host';
 import type { Connection } from './core/store/sqlite';
 import { SYSTEM_DEPS, unopened } from './core/store/store';
 import type { Database, Store, StoreDeps } from './core/store/store';
-import { messagesIn, onDisk, openTestStore } from './core/store/test-store';
+import { messagesIn, onDisk, openTestStore, refuseWrites } from './core/store/test-store';
 import { CanvasMemory } from './memory';
 import { RunJournal } from './run-journal';
 
@@ -97,6 +97,120 @@ afterEach(async () => {
 });
 
 describe('RunJournal', () => {
+  it('reads open canvases and membership from memory after recovery, in their kept order', async () => {
+    const one = newCanvasId();
+    const two = newCanvasId();
+    const first = journal();
+    await first.opened(two);
+    await first.opened(one);
+    // Equal times retain the database's canvas-id tie break, including across a restart.
+    await store.write(() => {
+      store.run('UPDATE open_canvas SET opened_at = 10');
+    });
+    const recovered = journal();
+    const reads = vi.spyOn(store, 'prepare').mockImplementation(() => {
+      throw new Error('The read connection is busy');
+    });
+    for (let i = 0; i < 10; i++) {
+      expect(await recovered.openCanvases()).toEqual([one, two].sort());
+      expect(recovered.isOpen(one)).toBe(true);
+      expect(recovered.isOpen(newCanvasId())).toBe(false);
+    }
+    expect(await recovered.last()).toBe([one, two].sort()[1]);
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it('reads committed run flags and save problems from memory after recovery', async () => {
+    const canvas = newCanvasId();
+    const first = journal();
+    const { token } = await first.get(canvas);
+    await first.save(canvas, token, { ...checkpoint, state: '{"run":{"running":true}}' });
+    const recovered = journal();
+    const reads = vi.spyOn(store, 'prepare').mockImplementation(() => {
+      throw new Error('The read connection is busy');
+    });
+    expect(recovered.problem(canvas)).toBeUndefined();
+    expect(recovered.isRunning(canvas)).toBe(true);
+    expect(recovered.isRunning(newCanvasId())).toBe(false);
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it('keeps the latest committed run flag when an older publication arrives later', async () => {
+    const runs = journal();
+    const canvas = newCanvasId();
+    const { token } = await runs.get(canvas);
+    const messages = await messagesOf(canvas);
+    const first = await store.write(() =>
+      runs.keep(canvas, token, { ...checkpoint, state: '{"run":{"running":true}}' }, messages),
+    );
+    const second = await store.write(() => runs.keep(canvas, token, null, messages));
+    runs.kept(canvas, second);
+    runs.kept(canvas, first);
+    expect(runs.isRunning(canvas)).toBe(false);
+    expect(runs.isOpen(canvas)).toBe(true);
+  });
+
+  it.each(['open', 'close'] as const)(
+    'publishes a canvas %s only after its write is acknowledged',
+    async (action) => {
+      const entered = Promise.withResolvers<undefined>();
+      const release = Promise.withResolvers<undefined>();
+      let holding = false;
+      await reopen({
+        ...SYSTEM_DEPS,
+        flush: async (fd) => {
+          if (holding) {
+            entered.resolve(undefined);
+            await release.promise;
+          }
+          await SYSTEM_DEPS.flush(fd);
+        },
+      });
+      const runs = journal();
+      const canvas = newCanvasId();
+      if (action === 'close') await runs.opened(canvas);
+      const heard: boolean[] = [];
+      runs.subscribe(() => heard.push(runs.isOpen(canvas)));
+      holding = true;
+      const writing = action === 'open' ? runs.opened(canvas) : runs.close(canvas);
+      try {
+        await entered.promise;
+        expect(runs.isOpen(canvas)).toBe(action === 'close');
+        expect(heard).toEqual([]);
+      } finally {
+        holding = false;
+        release.resolve(undefined);
+        await writing;
+      }
+      expect(runs.isOpen(canvas)).toBe(action === 'open');
+      expect(heard).toEqual([action === 'open']);
+      expect((await runs.openCanvases()).includes(canvas)).toBe(action === 'open');
+    },
+  );
+
+  it('keeps open membership and last-used order when an open, save or close write fails', async () => {
+    const runs = journal();
+    const one = newCanvasId();
+    const two = newCanvasId();
+    const fresh = newCanvasId();
+    await runs.opened(one);
+    await runs.opened(two);
+    const allow = await refuseWrites(store, 'open_canvas', 'not written');
+    const heard = vi.fn();
+    runs.subscribe(heard);
+    try {
+      await expect(runs.opened(fresh)).rejects.toThrow('not written');
+      await expect(runs.saved(one)).rejects.toThrow('not written');
+      await expect(runs.close(two)).rejects.toThrow('not written');
+      expect(await runs.openCanvases()).toEqual([one, two]);
+      expect(runs.isOpen(fresh)).toBe(false);
+      expect(runs.isOpen(two)).toBe(true);
+      expect(heard).not.toHaveBeenCalled();
+    } finally {
+      await allow();
+    }
+  });
+
   it.each([
     ['state', 'depth'],
     ['state', 'nodes'],
