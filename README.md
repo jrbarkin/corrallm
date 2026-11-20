@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="build/icons/corrallm-mark.svg" width="96" alt="corrallm logo">
+</p>
+
 # corrallm
 
 **Run coding agents together, in workflows you can read and change.**
