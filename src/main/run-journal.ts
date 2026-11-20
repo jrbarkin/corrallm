@@ -23,6 +23,13 @@ interface Entry {
   /** Whether what the store said as it opened is in its warning yet. */
   said?: boolean;
 }
+/** A planned run write, published by its owner only after acknowledgement. */
+interface KeptRun {
+  problem: string | undefined;
+  opened: () => void;
+  running?: boolean;
+  change: number;
+}
 /**
  * Where each party has read to in a canvas's message store, by party: the place of the last message
  * its `wait` returned (API Spec §7.7).
@@ -77,6 +84,19 @@ export class RunJournal {
   readonly #deps: JournalDeps;
   readonly #entries = new Map<CanvasId, Entry>();
   readonly #problems = new Map<CanvasId, string | undefined>();
+  readonly #running = new Map<CanvasId, boolean>();
+  readonly #plannedRunning = new Map<CanvasId, boolean>();
+  readonly #publishedRuns = new Map<CanvasId, number>();
+  #runChanges = 0;
+  readonly #runErrors = new Map<CanvasId, Error>();
+  readonly #runsError: Error | undefined;
+  /** Acknowledged open canvases; the separate planned state follows the store's FIFO lane. */
+  readonly #open = new Map<CanvasId, bigint>();
+  readonly #plannedOpen = new Map<string, bigint>();
+  readonly #publishedOpen = new Map<CanvasId, number>();
+  readonly #openError: Error | undefined;
+  #latestOpen: bigint | undefined;
+  #openChanges = 0;
   /** What opening the database found to say, with each canvas's run restored. */
   #said: string | undefined;
   /** Every write asked for so far, written or failed. */
@@ -88,6 +108,38 @@ export class RunJournal {
     this.#deps = deps;
     this.#said =
       deps.said === undefined || deps.said.length === 0 ? undefined : deps.said.join(' ');
+    try {
+      const statement = deps.store.prepare('SELECT canvas_id, opened_at FROM open_canvas');
+      statement.setReadBigInts(true);
+      for (const { canvas_id: id, opened_at: at } of statement.all()) {
+        const time = BigInt(String(at));
+        this.#plannedOpen.set(String(id), time);
+        if (this.#latestOpen === undefined || time > this.#latestOpen) this.#latestOpen = time;
+        if (isCanvasId(id)) this.#open.set(id, time);
+      }
+    } catch (error) {
+      this.#openError = error instanceof Error ? error : new Error(String(error));
+    }
+    try {
+      for (const row of deps.store
+        .prepare(
+          `SELECT canvas_id, json_valid(state) AS valid,
+             CASE WHEN json_valid(state) THEN json_extract(state, '$.saveError') END AS error,
+             CASE WHEN json_valid(state) THEN json_extract(state, '$.run.run.running') = 1 END AS running
+           FROM run`,
+        )
+        .all()) {
+        if (!isCanvasId(row.canvas_id)) continue;
+        if (row.valid !== 1) this.#runErrors.set(row.canvas_id, new Error('malformed JSON'));
+        else {
+          this.#problems.set(row.canvas_id, typeof row.error === 'string' ? row.error : undefined);
+          this.#running.set(row.canvas_id, row.running === 1);
+          this.#plannedRunning.set(row.canvas_id, row.running === 1);
+        }
+      }
+    } catch (error) {
+      this.#runsError = error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
@@ -96,13 +148,8 @@ export class RunJournal {
    */
   async last(): Promise<CanvasId> {
     await this.flush();
-    const id = this.#deps.store
-      .prepare('SELECT canvas_id FROM open_canvas ORDER BY opened_at DESC LIMIT 1')
-      .get()?.canvas_id;
-    const canvas = isCanvasId(id) ? id : newCanvasId();
-    await this.#write(() => {
-      this.#markOpen(canvas);
-    });
+    const canvas = (await this.openCanvases()).at(-1) ?? newCanvasId();
+    await this.open(canvas);
     return canvas;
   }
 
@@ -112,10 +159,16 @@ export class RunJournal {
    */
   async openCanvases(): Promise<CanvasId[]> {
     await this.flush();
-    return this.#deps.store
-      .prepare('SELECT canvas_id FROM open_canvas ORDER BY opened_at, canvas_id')
-      .all()
-      .flatMap(({ canvas_id: id }) => (isCanvasId(id) ? [id] : []));
+    if (this.#openError !== undefined) throw this.#openError;
+    return [...this.#open]
+      .sort(([a, at], [b, bt]) => (at < bt ? -1 : at > bt ? 1 : a < b ? -1 : a > b ? 1 : 0))
+      .map(([canvas]) => canvas);
+  }
+
+  /** Whether the last acknowledged write leaves the canvas open; no SQL or pending-write wait. */
+  isOpen(canvas: CanvasId): boolean {
+    if (this.#openError !== undefined) throw this.#openError;
+    return this.#open.has(canvas);
   }
 
   /**
@@ -134,6 +187,12 @@ export class RunJournal {
          WHERE c.id = ?`,
       )
       .get(canvas);
+    if (row?.ran === undefined || row.ran === null) {
+      this.#running.delete(canvas);
+      this.#plannedRunning.delete(canvas);
+      this.#problems.delete(canvas);
+      this.#runErrors.delete(canvas);
+    }
     // Said with every canvas restored, once each: the core runs every canvas open as it starts (B11
     // Design §2), so the first restored need not be the one a window shows.
     if (this.#said !== undefined && entry.said !== true) {
@@ -157,6 +216,10 @@ export class RunJournal {
         await this.#write(() => {
           this.#deps.store.run('DELETE FROM run WHERE canvas_id = ?', canvas);
         });
+        this.#running.delete(canvas);
+        this.#plannedRunning.delete(canvas);
+        this.#problems.delete(canvas);
+        this.#runErrors.delete(canvas);
         const why = error instanceof Error ? error.message : String(error);
         entry.warning = [
           entry.warning,
@@ -223,9 +286,10 @@ export class RunJournal {
     this.check(canvas, token);
     const messages = await this.#deps.messages(canvas);
     let written: Staged | undefined;
-    const problem = await this.#write(
+    let opened: (() => void) | undefined;
+    const kept = await this.#write(
       () => {
-        this.#markOpen(canvas);
+        opened = this.#markOpen(canvas);
         const kept = this.keep(canvas, token, checkpoint, messages);
         written = messages.changes();
         return kept;
@@ -235,8 +299,9 @@ export class RunJournal {
       },
     );
     written?.reveal();
-    this.kept(canvas, problem);
-    if (problem !== undefined) throw new RangeError(problem);
+    opened?.();
+    this.kept(canvas, kept);
+    if (kept.problem !== undefined) throw new RangeError(kept.problem);
   }
 
   /**
@@ -251,40 +316,60 @@ export class RunJournal {
     token: string,
     checkpoint: RunCheckpoint | null,
     messages: MessageStore,
-  ): string | undefined {
+  ): KeptRun {
     if (this.#entries.get(canvas)?.token !== token) throw new Error(EARLIER);
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
-    this.#markOpen(canvas, false);
+    const opened = this.#markOpen(canvas, false);
     if (checkpoint === null) {
       store.run('DELETE FROM run WHERE canvas_id = ?', canvas);
-      return;
+      return this.#stageRun(canvas, opened, undefined, false);
     }
     if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') > MAX_RUN_BYTES) {
       // A size limit is not a drive failure. Retain the last good run and commit this marker
       // with its messages, rather than rolling messages back or sending without their record.
-      return this.#refused(canvas, checkpoint, TOO_LARGE);
+      return this.#stageRun(canvas, opened, this.#refused(canvas, checkpoint, TOO_LARGE));
     }
     let parsed: RunCheckpoint;
     try {
       parsed = parseRunCheckpoint(checkpoint);
     } catch (error) {
-      if (error instanceof RangeError) return this.#refused(canvas, checkpoint, TOO_COMPLEX);
+      if (error instanceof RangeError)
+        return this.#stageRun(canvas, opened, this.#refused(canvas, checkpoint, TOO_COMPLEX));
       throw error;
     }
     const { state, updatedAt } = parsed;
     // Its submission records, read before anything is written.
     const submissions = recordsIn(parsed.messages);
     // Its state is a JSON text (parseRunCheckpoint read it): kept as it is.
-    store.run(
+    const kept = this.#stageRun(canvas, opened, undefined);
+    store.runReturning(
       `INSERT INTO run (canvas_id, state, updated_at) VALUES (?, ?, ?)
-         ON CONFLICT (canvas_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
-      canvas,
-      `{"format":3,"run":${state}}`,
-      updatedAt,
+         ON CONFLICT (canvas_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at
+         RETURNING json_extract(state, '$.run.run.running') AS running`,
+      [canvas, `{"format":3,"run":${state}}`, updatedAt],
+      (rows) => {
+        kept.running = rows[0]?.running === 1;
+        this.#plannedRunning.set(canvas, kept.running);
+      },
     );
     keepSubmissions(messages, submissions, Date.now());
-    return undefined;
+    return kept;
+  }
+
+  #stageRun(
+    canvas: CanvasId,
+    opened: () => void,
+    problem: string | undefined,
+    running = this.#plannedRunning.get(canvas) ?? false,
+  ): KeptRun {
+    const before = this.#plannedRunning.get(canvas);
+    this.#deps.store.undo(() => {
+      if (before === undefined) this.#plannedRunning.delete(canvas);
+      else this.#plannedRunning.set(canvas, before);
+    });
+    this.#plannedRunning.set(canvas, running);
+    return { problem, opened, running, change: ++this.#runChanges };
   }
 
   /** Keep the last good checkpoint and this bound's marker in the containing message write. */
@@ -302,7 +387,12 @@ export class RunJournal {
   }
 
   /** Called only after the containing write is durable, including a bound refusal's marker. */
-  kept(canvas: CanvasId, problem: string | undefined): void {
+  kept(canvas: CanvasId, { problem, opened, running, change }: KeptRun): void {
+    opened();
+    if ((this.#publishedRuns.get(canvas) ?? 0) >= change) return;
+    this.#publishedRuns.set(canvas, change);
+    if (running !== undefined) this.#running.set(canvas, running);
+    this.#runErrors.delete(canvas);
     const before = this.#problems.get(canvas);
     this.#problems.set(canvas, problem);
     if (before !== problem) this.#deps.problemChanged?.(canvas);
@@ -311,13 +401,16 @@ export class RunJournal {
 
   /** The persisted size or complexity refusal, cached until another run write lands. */
   problem(canvas: CanvasId): string | undefined {
-    if (!this.#problems.has(canvas)) {
-      const value = this.#deps.store
-        .prepare("SELECT json_extract(state, '$.saveError') AS error FROM run WHERE canvas_id = ?")
-        .get(canvas)?.error;
-      this.#problems.set(canvas, typeof value === 'string' ? value : undefined);
-    }
+    if (this.#runsError !== undefined) throw this.#runsError;
+    const error = this.#runErrors.get(canvas);
+    if (error !== undefined) throw error;
     return this.#problems.get(canvas);
+  }
+
+  /** A run's last acknowledged running flag, for canvases without a live engine. */
+  isRunning(canvas: CanvasId): boolean {
+    this.problem(canvas);
+    return this.#running.get(canvas) ?? false;
   }
 
   /** A canvas-wide hold: no answer can make an unbounded checkpoint durable. */
@@ -361,16 +454,14 @@ export class RunJournal {
    */
   async opened(canvas: CanvasId, warning?: string): Promise<void> {
     this.#entries.set(canvas, { token: randomUUID(), ...(warning ? { warning } : {}) });
-    await this.#write(() => {
-      this.#markOpen(canvas);
-    });
+    await this.open(canvas);
   }
 
   /** The canvas is open until closed; background initialization does not change last-used order. */
   async open(canvas: CanvasId, used = true): Promise<void> {
-    await this.#write(() => {
-      this.#markOpen(canvas, used);
-    });
+    const publish = await this.#write(() => this.#markOpen(canvas, used));
+    publish();
+    this.#tell(canvas);
   }
 
   /**
@@ -378,14 +469,17 @@ export class RunJournal {
    * used last. One closed stays closed.
    */
   async saved(canvas: CanvasId): Promise<void> {
-    await this.#write(() => {
+    const publish = await this.#write(() => {
+      const time = this.#plannedOpen.has(canvas) ? this.#nextOpen() : undefined;
       this.#deps.store.run(
-        `UPDATE open_canvas SET opened_at = ${NEXT_OPEN} WHERE canvas_id = ?`,
-        Date.now(),
+        'UPDATE open_canvas SET opened_at = ? WHERE canvas_id = ?',
+        time ?? 0n,
         canvas,
       );
-      this.#tell(canvas);
+      return this.#stageOpen(canvas, time);
     });
+    publish();
+    this.#tell(canvas);
   }
 
   /**
@@ -394,10 +488,12 @@ export class RunJournal {
    * What is kept of it stays. On disk once it resolves.
    */
   async close(canvas: CanvasId): Promise<void> {
-    await this.#write(() => {
+    const publish = await this.#write(() => {
       this.#deps.store.run('DELETE FROM open_canvas WHERE canvas_id = ?', canvas);
-      this.#tell(canvas);
+      return this.#stageOpen(canvas, undefined);
     });
+    publish();
+    this.#tell(canvas);
   }
 
   /** Resolves once every write asked for so far is done. */
@@ -422,16 +518,52 @@ export class RunJournal {
   }
 
   /** Within a write: keep the canvas open, advancing last-used order only for explicit use. */
-  #markOpen(canvas: CanvasId, used = true): void {
+  #markOpen(canvas: CanvasId, used = true): () => void {
     const { store, memory } = this.#deps;
     memory.ensure(canvas);
+    const time = used ? this.#nextOpen() : (this.#plannedOpen.get(canvas) ?? this.#nextOpen());
     store.run(
-      `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ${NEXT_OPEN})
+      `INSERT INTO open_canvas (canvas_id, opened_at) VALUES (?, ?)
          ON CONFLICT (canvas_id) ${used ? 'DO UPDATE SET opened_at = excluded.opened_at' : 'DO NOTHING'}`,
       canvas,
-      Date.now(),
+      time,
     );
-    this.#tell(canvas);
+    return this.#stageOpen(canvas, time);
+  }
+
+  #nextOpen(): bigint {
+    const now = BigInt(Date.now());
+    const next = this.#latestOpen === undefined ? 0n : this.#latestOpen + 1n;
+    return now > next ? now : next;
+  }
+
+  /** Follow SQL planning with undo; expose only the acknowledged write, never an older callback. */
+  #stageOpen(canvas: CanvasId, time: bigint | undefined): () => void {
+    const before = this.#plannedOpen.get(canvas);
+    const latest = this.#latestOpen;
+    this.#deps.store.undo(() => {
+      if (before === undefined) this.#plannedOpen.delete(canvas);
+      else this.#plannedOpen.set(canvas, before);
+      this.#latestOpen = latest;
+    });
+    if (time === undefined) {
+      this.#plannedOpen.delete(canvas);
+      if (before === this.#latestOpen)
+        this.#latestOpen = [...this.#plannedOpen.values()].reduce<bigint | undefined>(
+          (a, b) => (a === undefined || b > a ? b : a),
+          undefined,
+        );
+    } else {
+      this.#plannedOpen.set(canvas, time);
+      if (this.#latestOpen === undefined || time > this.#latestOpen) this.#latestOpen = time;
+    }
+    const change = ++this.#openChanges;
+    return () => {
+      if ((this.#publishedOpen.get(canvas) ?? 0) >= change) return;
+      this.#publishedOpen.set(canvas, change);
+      if (time === undefined) this.#open.delete(canvas);
+      else this.#open.set(canvas, time);
+    };
   }
 
   /** Tells what hears it of `canvas`. */
@@ -445,13 +577,6 @@ export class RunJournal {
     }
   }
 }
-
-/**
- * When a canvas opened now was opened, in a statement (so that a write reads nothing): the time it
- * is given, unless another canvas was opened at or after it (in the same millisecond, or by a clock
- * set back since), then just after that one.
- */
-const NEXT_OPEN = 'max(?, coalesce((SELECT max(opened_at) FROM open_canvas) + 1, 0))';
 
 function isAbsolute(value: unknown): value is string {
   return typeof value === 'string' && path.isAbsolute(value);

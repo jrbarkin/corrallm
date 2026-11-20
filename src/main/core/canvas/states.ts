@@ -8,8 +8,8 @@ import { META } from '../../../shared/model/rows';
 import type { EntityKey, MetaRow, Row } from '../../../shared/model/rows';
 import type { Entities, Entity, MetaEntity, ProjectOf } from '../../../shared/model/state';
 import type { CanvasMemory } from '../../memory';
+import type { RunJournal } from '../../run-journal';
 import { OpFailure } from '../call';
-import type { Database } from '../store/store';
 import type { Commit, Documents } from './documents';
 
 /*
@@ -73,8 +73,7 @@ export interface CanvasStatesDeps {
     'load' | 'loaded' | 'live' | 'hasRows' | 'edited' | 'between' | 'bump' | 'subscribe'
   >;
   memory: Pick<CanvasMemory, 'get' | 'list' | 'keeps'>;
-  /** The profile's database: which canvases are open, and their runs. */
-  store: Pick<Database, 'prepare'>;
+  journal: Pick<RunJournal, 'openCanvases' | 'isRunning'>;
   /** The windows showing a canvas. */
   shownIn: (canvas: CanvasId) => number[];
   /** The canvases the core runs. */
@@ -108,8 +107,6 @@ export class CanvasStates {
   /** The canvases being followed, until they are. */
   readonly #following = new Map<CanvasId, Promise<Feed>>();
   readonly #listeners = new Set<StatesListener>();
-  /** Each canvas's run as last read, invalidated by every journal save, not its wall-clock time. */
-  readonly #runs = new Map<CanvasId, boolean>();
   readonly #stop: () => void;
   #closed = false;
 
@@ -169,37 +166,21 @@ export class CanvasStates {
    * shown that holds nothing).
    */
   async list(): Promise<Listed[]> {
-    const { memory, store, shownIn, running } = this.#deps;
+    const { memory, journal, shownIn, running, documents } = this.#deps;
     const kept = await memory.list();
-    const rows = new Set(
-      store
-        .prepare('SELECT canvas_id FROM document')
-        .all()
-        .map(({ canvas_id: id }) => String(id)),
-    );
-    const open = new Set([
-      ...store
-        .prepare('SELECT canvas_id FROM open_canvas')
-        .all()
-        .map(({ canvas_id: id }) => String(id)),
-      ...running(),
-    ]);
-    const runs = this.#running();
+    const open = new Set([...(await journal.openCanvases()), ...running()]);
     const items: Listed[] = [];
     for (const { canvas, file, project } of kept) {
+      const rows = documents.hasRows(canvas);
       const shown = shownIn(canvas);
       const listed =
-        file !== undefined ||
-        project !== undefined ||
-        rows.has(canvas) ||
-        open.has(canvas) ||
-        shown.length > 0;
+        file !== undefined || project !== undefined || rows || open.has(canvas) || shown.length > 0;
       if (!listed) continue;
       items.push({
         canvas,
         name: file === undefined ? null : path.basename(file),
-        edited: rows.has(canvas) ? await this.#edited(canvas) : false,
-        running: this.#deps.live?.(canvas) ?? runs.get(canvas) ?? false,
+        edited: rows ? await this.#edited(canvas) : false,
+        running: this.#deps.live?.(canvas) ?? journal.isRunning(canvas),
         open: open.has(canvas) || shown.length > 0,
         project: project === undefined ? null : projectOf(project),
         shownIn: shown,
@@ -227,12 +208,6 @@ export class CanvasStates {
   listChanged(): void {
     if (this.#closed) return;
     for (const listener of this.#listeners) listener.list?.();
-  }
-
-  /** The journal wrote this canvas: its timestamp can equal the preceding save's. */
-  runChanged(canvas: CanvasId): void {
-    this.#runs.delete(canvas);
-    this.listChanged();
   }
 
   close(): void {
@@ -385,34 +360,6 @@ export class CanvasStates {
       // A document that can't be read is said so where it is opened.
       return false;
     }
-  }
-
-  /**
-   * Whether each canvas's run is running, as last journaled: its saved run state's (B9 Design §7),
-   * read again after every journal notification. A canvas the core runs says its live run's instead
-   * (`live`).
-   */
-  #running(): Map<CanvasId, boolean> {
-    const { store } = this.#deps;
-    const running = new Map<CanvasId, boolean>();
-    for (const { canvas_id: id } of store.prepare('SELECT canvas_id FROM run').all()) {
-      const canvas = String(id) as CanvasId;
-      const known = this.#runs.get(canvas);
-      if (known !== undefined) {
-        running.set(canvas, known);
-        continue;
-      }
-      const state = store
-        .prepare(
-          `SELECT json_extract(state, '$.run.run.running') AS running FROM run
-          WHERE canvas_id = ?`,
-        )
-        .get(canvas);
-      const now = state?.running === 1;
-      this.#runs.set(canvas, now);
-      running.set(canvas, now);
-    }
-    return running;
   }
 }
 

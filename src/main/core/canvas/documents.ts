@@ -215,6 +215,11 @@ interface Creating {
   count: number;
 }
 
+interface PreviousLabel {
+  rev: number;
+  label: string | undefined;
+}
+
 /** A canvas's document as the core has it now. */
 export interface LiveDocument {
   readonly document: CanvasDocument;
@@ -290,6 +295,8 @@ export class Documents {
   /** Committed ownership, including canvases whose full document isn't loaded. */
   readonly #owners = new Map<CanvasId, PartyId | undefined>();
   readonly #agents = new Map<CanvasId, ReadonlyMap<string, PartyId>>();
+  /** The last retained before-row label, for a worktree whose owner was deleted. */
+  readonly #previousLabels = new Map<CanvasId, Map<string, PreviousLabel>>();
   readonly #ownersError: Error | undefined;
   readonly #agentsError: Error | undefined;
 
@@ -321,22 +328,56 @@ export class Documents {
     } catch (error) {
       this.#agentsError = error instanceof Error ? error : new Error(String(error));
     }
+    // Only startup reads change history; worktree publications read the committed index.
+    try {
+      for (const row of deps.store
+        .prepare(
+          `SELECT canvas_id, entity, before_data, rev FROM change
+           WHERE entity LIKE 'node/%' AND before_data IS NOT NULL ORDER BY rev`,
+        )
+        .all()) {
+        const canvas = String(row.canvas_id) as CanvasId;
+        const labels = this.#previousLabels.get(canvas) ?? new Map<string, PreviousLabel>();
+        let label: unknown;
+        try {
+          label = (JSON.parse(String(row.before_data)) as { label?: unknown } | null)?.label;
+        } catch {
+          // A malformed previous row has no display name, as the historical lookup did.
+        }
+        labels.set(String(row.entity), {
+          rev: Number(row.rev),
+          label: typeof label === 'string' && label !== '' ? label : undefined,
+        });
+        this.#previousLabels.set(canvas, labels);
+      }
+    } catch {
+      // Historical display names are optional; a failed lookup has always returned no name.
+      this.#previousLabels.clear();
+    }
     deps.memory.whenForgotten((canvas) => {
       const had = this.#owners.has(canvas);
       const owner = this.#owners.get(canvas);
       const agents = this.#agents.get(canvas);
+      const labels = this.#previousLabels.get(canvas);
       deps.store.undo(() => {
         if (had) this.#owners.set(canvas, owner);
         if (agents !== undefined) this.#agents.set(canvas, agents);
+        if (labels !== undefined) this.#previousLabels.set(canvas, labels);
       });
       this.#owners.delete(canvas);
       this.#agents.delete(canvas);
+      this.#previousLabels.delete(canvas);
     });
     // Canvas memory forgets the canvases used least recently with all it keeps of them: the
     // document loaded of one goes too, once its document is done with what it was doing.
     deps.memory.subscribe((canvas) => {
       if (canvas === undefined) this.#letGoOfForgotten();
     });
+  }
+
+  /** The node's label in the last retained change with a preceding row. */
+  previousLabel(canvas: CanvasId, id: string): string | undefined {
+    return this.#previousLabels.get(canvas)?.get(nodeKey(id))?.label;
   }
 
   /** Drops the live document of every canvas kept in rows that canvas memory no longer keeps. */
@@ -1146,6 +1187,7 @@ export class Documents {
       staged?.undo();
       throw new CommitFailed(error);
     }
+    this.#keepPreviousLabels(live, changed, rev);
     live.document = next;
     live.rows = rows;
     for (const key of changed) {
@@ -1191,6 +1233,23 @@ export class Documents {
     if (live.generation !== this.#deps.memory.generation(canvas)) return;
     this.#owners.set(canvas, live.createdBy);
     this.#agents.set(canvas, live.creators);
+  }
+
+  /** Follow the acknowledged change history and the same revision-retention boundary. */
+  #keepPreviousLabels(live: Live, changed: readonly EntityKey[], rev: number): void {
+    const canvas = live.document.id;
+    if (live.generation !== this.#deps.memory.generation(canvas)) return;
+    const labels = this.#previousLabels.get(canvas) ?? new Map<string, PreviousLabel>();
+    for (const key of changed) {
+      if (entityOf(key) !== 'node') continue;
+      const before = live.rows[key] as NodeRow | undefined;
+      if (before === undefined) continue;
+      labels.set(key, { rev, label: before.label === '' ? undefined : before.label });
+    }
+    const { kept, every } = this.#deps.trim ?? { kept: REVISIONS_KEPT, every: TRIM_EVERY };
+    if (rev % every === 0)
+      for (const [key, before] of labels) if (before.rev <= rev - kept) labels.delete(key);
+    this.#previousLabels.set(canvas, labels);
   }
 
   /**

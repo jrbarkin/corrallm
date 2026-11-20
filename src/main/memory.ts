@@ -73,6 +73,12 @@ export function roleFingerprint(role: string | undefined): string {
 }
 
 const NOTHING: Remembered = { conversations: {} };
+interface ListedMemory {
+  canvas: CanvasId;
+  used: bigint;
+  file?: TrustedPath;
+  project?: TrustedPath;
+}
 /**
  * How many canvases it keeps with a file, folder or conversations, the ones used most recently, and
  * how many drafts besides.
@@ -122,6 +128,7 @@ const OWNS_WORKSPACE = 'EXISTS (SELECT 1 FROM worktree WHERE worktree.canvas_id 
  */
 export class CanvasMemory {
   readonly #store: Database;
+  readonly #listed = new Map<CanvasId, ListedMemory>();
   readonly #limit: number;
   /** Whether a canvas holds what forgetting it would lose: edits not saved. */
   readonly #spare: (canvas: CanvasId) => boolean;
@@ -176,9 +183,17 @@ export class CanvasMemory {
     this.#conversationId = conversationId;
     this.#forgotten = forgotten;
     try {
-      for (const { id } of store.prepare('SELECT id FROM canvas').all()) {
+      for (const { id, file, project, used } of store
+        .prepare('SELECT id, file, project, CAST(used_at AS TEXT) AS used FROM canvas')
+        .all()) {
         if (!isCanvasId(id)) continue;
         this.#rows.add(id);
+        this.#listed.set(id, {
+          canvas: id,
+          used: BigInt(String(used)),
+          ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
+          ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
+        });
         try {
           this.#remembered.set(id, this.#read(id));
         } catch (error) {
@@ -217,21 +232,16 @@ export class CanvasMemory {
    */
   async list(): Promise<{ canvas: CanvasId; file?: TrustedPath; project?: TrustedPath }[]> {
     await this.#writing;
+    if (this.#rowsError !== undefined) throw this.#rowsError;
     const changed = [...this.#unwritten].reverse();
-    const kept = this.#store
-      .prepare('SELECT id, file, project FROM canvas ORDER BY used_at DESC')
-      .all()
-      .flatMap(({ id, file, project }) =>
-        isCanvasId(id) && !this.#unwritten.has(id)
-          ? [
-              {
-                canvas: id,
-                ...(isAbsolute(file) ? { file: mintTrustedPath(file) } : {}),
-                ...(isAbsolute(project) ? { project: mintTrustedPath(project) } : {}),
-              },
-            ]
-          : [],
-      );
+    const kept = [...this.#listed.values()]
+      .filter(({ canvas }) => !this.#unwritten.has(canvas))
+      .sort((a, b) => (a.used > b.used ? -1 : a.used < b.used ? 1 : 0))
+      .map(({ canvas, file, project }) => ({
+        canvas,
+        ...(file === undefined ? {} : { file }),
+        ...(project === undefined ? {} : { project }),
+      }));
     return [
       ...changed.map(
         ([
@@ -310,10 +320,14 @@ export class CanvasMemory {
    */
   ensure(canvas: CanvasId): void {
     if (this.#rows.has(canvas)) return;
-    this.#store.run(
-      `INSERT INTO canvas (id, used_at) VALUES (?, ${NEXT_USE}) ON CONFLICT (id) DO NOTHING`,
-      canvas,
-      Date.now(),
+    const listing = this.#listingChange(canvas);
+    this.#store.runReturning(
+      `INSERT INTO canvas (id, used_at) VALUES (?, ${NEXT_USE}) ON CONFLICT (id) DO NOTHING
+         RETURNING CAST(used_at AS TEXT) AS used`,
+      [canvas, Date.now()],
+      (rows) => {
+        if (rows[0] !== undefined) listing({ canvas, used: BigInt(String(rows[0].used)) });
+      },
     );
     this.#add(canvas);
     this.#tell(undefined);
@@ -341,6 +355,7 @@ export class CanvasMemory {
       this.#rows.add(canvas);
     });
     this.#rows.delete(canvas);
+    this.#listingChange(canvas)(undefined);
     this.#remember(canvas, undefined);
     this.#generations.set(canvas, this.generation(canvas) + 1);
     this.#forgotten(canvas);
@@ -548,13 +563,20 @@ export class CanvasMemory {
    * so that what a newer corrallm keeps beside them stays).
    */
   #keep(canvas: CanvasId, { file, project, conversations }: Remembered): void {
+    const used = this.#nextUse();
     this.#store
       .prepare(
         `INSERT INTO canvas (id, file, project, used_at) VALUES (?, ?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET
            file = excluded.file, project = excluded.project, used_at = excluded.used_at`,
       )
-      .run(canvas, file ?? null, project ?? null, this.#nextUse());
+      .run(canvas, file ?? null, project ?? null, used);
+    this.#listingChange(canvas)({
+      canvas,
+      used: BigInt(used),
+      ...(file === undefined ? {} : { file }),
+      ...(project === undefined ? {} : { project }),
+    });
     this.#add(canvas);
     const kept = this.#store
       .prepare('SELECT workspace_key, adapter, agent_id FROM conversation WHERE canvas_id = ?')
@@ -595,6 +617,19 @@ export class CanvasMemory {
       }
     }
     this.#remember(canvas, rememberedOf({ file, project }, rows, this.#conversationId));
+  }
+
+  /** Stage list metadata with the row, restoring it on every rollback path. */
+  #listingChange(canvas: CanvasId): (next: ListedMemory | undefined) => void {
+    const before = this.#listed.get(canvas);
+    this.#store.undo(() => {
+      if (before === undefined) this.#listed.delete(canvas);
+      else this.#listed.set(canvas, before);
+    });
+    return (next) => {
+      if (next === undefined) this.#listed.delete(canvas);
+      else this.#listed.set(canvas, next);
+    };
   }
 
   /**
