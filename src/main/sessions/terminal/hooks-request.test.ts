@@ -25,6 +25,7 @@ vi.mock('node:http', () => ({
 const registrations: HookRegistration[] = [];
 afterEach(() => {
   for (const registration of registrations.splice(0)) registration.release();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -96,11 +97,31 @@ it('answers a held request only before its deadline, even before a delayed timer
   const first = listener.mock.calls[0]?.[1];
   const second = listener.mock.calls[1]?.[1];
   if (first === undefined || second === undefined) throw new Error('No held requests');
+  vi.spyOn(performance, 'now').mockReturnValue(19_999);
   vi.setSystemTime(19_999);
   expect(first.answer({ decision: 'allow' })).toBe(true);
   expect(early.response.end).toHaveBeenCalledWith('{"decision":"allow"}');
   vi.setSystemTime(20_000);
+  vi.spyOn(performance, 'now').mockReturnValue(20_000);
   expect(second.answer({ decision: 'allow' })).toBe(false);
   expect(late.response.end).toHaveBeenCalledExactlyOnceWith('{}');
   expect(second.ended).toBe('deadline');
+});
+
+it('accepts an answer within the hold’s elapsed budget after a forward wall-clock jump', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const server = new HookServer({ heldMs: 20_000 });
+  const listener = vi.fn<(event: HookEvent, hold?: HookHold) => void>();
+  const registration = await server.register(listener, undefined, () => true);
+  registrations.push(registration);
+  const pending = begin(registration, '/hook');
+  pending.finish();
+  const hold = listener.mock.calls[0]?.[1];
+  if (hold === undefined) throw new Error('No held request');
+  vi.setSystemTime(60_000);
+  expect(hold.deadline).toBe(20_000);
+  expect(hold.answer({ decision: 'allow' })).toBe(true);
+  expect(hold.ended).toBe('answered');
+  expect(pending.response.end).toHaveBeenCalledExactlyOnceWith('{"decision":"allow"}');
 });

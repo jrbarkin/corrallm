@@ -255,11 +255,13 @@ class Hold implements HookHold {
   readonly #response: ServerResponse;
   readonly #timer: ReturnType<typeof setTimeout>;
   readonly #done: () => void;
+  readonly #expires: number;
 
   constructor(response: ServerResponse, ms: number, done: () => void) {
     this.#response = response;
     this.#done = done;
     this.deadline = this.received + ms;
+    this.#expires = performance.now() + ms;
     this.#timer = setTimeout(() => {
       this.#write('deadline', '{}');
     }, ms);
@@ -294,7 +296,7 @@ class Hold implements HookHold {
 
   #write(how: HoldEnd, text: string): boolean {
     if (this.#ended !== undefined) return false;
-    if (how !== 'deadline' && Date.now() >= this.deadline) {
+    if (how !== 'deadline' && performance.now() >= this.#expires) {
       this.#write('deadline', '{}');
       return false;
     }

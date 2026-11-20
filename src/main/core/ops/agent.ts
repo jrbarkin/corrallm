@@ -32,7 +32,7 @@ export function agentOps(
       if (canvas === undefined || context.fallback === undefined)
         throw new OpFailure('unavailable', 'This core cannot return an agent.');
       const id = canvas as string as CanvasId;
-      const rev = await context.fallback.returnOwn(id, agent, {
+      await context.fallback.returnOwn(id, agent, {
         by: ctx.by,
         authorized: () => {
           ctx.recheck();
@@ -42,8 +42,7 @@ export function agentOps(
         },
         signal: ctx.signal,
       });
-      ctx.reached(id, rev);
-      return {};
+      return { accepted: true };
     },
     'agent.setType': ({ canvas, agent, adapter, connection }, ctx) =>
       ctx.commit(canvas, (doc) => {

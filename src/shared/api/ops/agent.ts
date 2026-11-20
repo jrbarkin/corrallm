@@ -57,9 +57,9 @@ export const agentOps = {
   }),
   'agent.return': define('agent.return', {
     summary:
-      'Returns a fallen-back agent to its own kept endpoint once its turn ends, if that endpoint can take work. No endpoint or mode can be supplied.',
+      'Accepts a return to a fallen-back agent’s own kept endpoint once its turn ends, if that endpoint can take work. Follow progress through status, agents and wait. No endpoint or mode can be supplied.',
     input: z.strictObject({ canvas: OpCanvas, agent: AgentId }),
-    output: z.strictObject({}),
+    output: z.strictObject({ accepted: z.literal(true) }),
   }),
   'agent.setHandoff': define('agent.setHandoff', {
     summary:

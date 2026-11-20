@@ -2,20 +2,23 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Dispatcher } from './call';
 import { toFile } from '../../shared/model/file';
 import type { CanvasDocument } from '../../shared/model/canvas';
 import { fakeConnector } from '../sessions/test-fake';
+import { SessionManager } from '../sessions/manager';
 import { createCore } from './core';
 import type { Core } from './core';
+import { FallbackService } from './fallback';
 import { keepCanvases } from './store/test-store';
 import { legacyDirectories } from './workspaces/test-directories';
 import { CALLERS, CANVAS, NO_DESKTOP, OTHER_CANVAS } from './test-registry';
 
 let core: Core;
 let profile: string;
+const FALLEN = ['fallen', ...Array.from({ length: 7 }, (_, i) => `fallen-${String(i + 1)}`)];
 beforeEach(async () => {
   profile = await mkdtemp(path.join(tmpdir(), 'corrallm-backend-changes-'));
   const project = path.join(profile, 'project');
@@ -53,6 +56,9 @@ beforeEach(async () => {
       },
     ],
   };
+  const fallen = document.nodes[1];
+  if (fallen?.type !== 'agent') throw new Error('No fallback agent');
+  for (const id of FALLEN.slice(1)) document.nodes.push({ ...fallen, id });
   await writeFile(file, toFile(document));
   await keepCanvases(profile, { [CANVAS]: { file, project } });
   core = await createCore(
@@ -76,6 +82,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await core.close();
+  vi.restoreAllMocks();
   await rm(profile, { recursive: true, force: true });
 });
 const data = () => core.engines.canvas(CANVAS)?.document.nodes[0]?.data;
@@ -95,6 +102,64 @@ async function propose(op: string, args: object) {
 }
 const answer = (to: string, choice = 'allow', caller = CALLERS.you) =>
   core.call('reply', { canvas: CANVAS, to, answer: { choice } }, caller);
+
+it('accepts pending returns without holding the token’s call slots or cancelling them on disconnect', async () => {
+  const ready = Promise.withResolvers<{ ready: true }>();
+  const waiting = Promise.withResolvers<undefined>();
+  let remaining = FALLEN.length;
+  vi.spyOn(SessionManager.prototype, 'availability').mockImplementation(() => {
+    if (--remaining === 0) waiting.resolve(undefined);
+    return ready.promise;
+  });
+  const returns = vi.spyOn(FallbackService.prototype, 'returnOwn');
+  const controllers = FALLEN.map(() => new AbortController());
+  const calls = FALLEN.map((agent, i) =>
+    core.call(
+      'agent.return',
+      { canvas: CANVAS, agent },
+      CALLERS['outside-write'],
+      controllers[i]?.signal,
+    ),
+  );
+  try {
+    await waiting.promise;
+    const answered: unknown[] = [];
+    for (const call of calls) void call.then((result) => answered.push(result));
+    // Receipt publication still belongs to admission; none may wait on the native-work gate.
+    await vi.waitFor(
+      () => {
+        expect(answered).toHaveLength(FALLEN.length);
+      },
+      { timeout: 3000 },
+    );
+    expect(await core.call('status', { canvas: CANVAS }, CALLERS['outside-write'])).toMatchObject({
+      ok: true,
+    });
+    for (const result of await Promise.all(calls)) {
+      expect(result).toMatchObject({ ok: true, value: { accepted: true } });
+      if (!result.ok) throw new Error(JSON.stringify(result));
+      expect(result.value.revs).not.toHaveProperty(`canvas:${CANVAS}`);
+    }
+    for (const controller of controllers) controller.abort();
+    ready.resolve({ ready: true });
+    const accepted = await Promise.all(
+      returns.mock.results.map((result) => {
+        if (result.type !== 'return') throw new Error('The return was not accepted');
+        return result.value;
+      }),
+    );
+    await Promise.all(accepted.map(({ settled }) => settled));
+    for (const id of FALLEN) {
+      expect(
+        core.engines.canvas(CANVAS)?.document.nodes.find((node) => node.id === id)?.data,
+      ).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.sdk' });
+    }
+  } finally {
+    for (const controller of controllers) controller.abort();
+    ready.resolve({ ready: true });
+    await Promise.all(calls);
+  }
+});
 
 describe('backend changes proposed by an outside orchestrator', () => {
   it.each([
@@ -187,7 +252,12 @@ it('lets an outside writer return an agent it did not create, and accepts no oth
   );
   expect(result, JSON.stringify(result)).toMatchObject({
     ok: true,
-    value: { revs: { [`canvas:${CANVAS}`]: expect.any(Number) as unknown } },
+    value: { accepted: true },
+  });
+  await vi.waitFor(() => {
+    expect(
+      core.engines.canvas(CANVAS)?.document.nodes.find(({ id }) => id === 'fallen')?.data,
+    ).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.sdk' });
   });
   const returned = core.engines.canvas(CANVAS)?.document.nodes.find(({ id }) => id === 'fallen');
   expect(returned?.data).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.sdk' });

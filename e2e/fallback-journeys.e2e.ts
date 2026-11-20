@@ -457,11 +457,15 @@ test('an outside orchestrator returns a fallen-back agent only to its own endpoi
         timeout: 30_000,
       })
       .toBe(true);
-    await world.call('agent.return', { canvas: world.canvas, agent: WORKER });
-    expect(
-      (await world.worker())?.data,
-      'A token’s return must restore exactly the endpoint the chain kept',
-    ).toMatchObject({ adapter: 'claude-code', connection: 'claude-code.terminal' });
+    expect(await world.call('agent.return', { canvas: world.canvas, agent: WORKER })).toMatchObject(
+      { accepted: true },
+    );
+    await expect
+      .poll(async () => (await world.worker())?.data, {
+        message: 'An accepted return must restore exactly the endpoint the chain kept',
+        timeout: 20_000,
+      })
+      .toMatchObject({ adapter: 'claude-code', connection: 'claude-code.terminal' });
     expect(
       (await world.worker())?.data.fallback?.on,
       'The return must clear the fallback position',

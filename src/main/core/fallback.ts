@@ -107,7 +107,7 @@ interface Target {
   step: number | null;
 }
 
-/** Authority kept with a requested return, rechecked at every await and before its commit. */
+/** Authority rechecked until source close; caller cancellation applies only to admission. */
 export interface ReturnRequest {
   by: PartyId;
   authorized(): void;
@@ -143,6 +143,8 @@ interface Lane {
   stop?: Abandoned;
   unsubscribe: () => void;
   request?: ReturnRequest;
+  /** Caller authority is final before teardown; only core barriers may abandon it afterwards. */
+  requestFinal?: true;
   committed?: number;
 }
 
@@ -215,7 +217,11 @@ export class FallbackService {
   }
 
   /** A requested return uses exactly the automatic return lane, without changing its opt-in. */
-  async returnOwn(canvas: CanvasId, agent: string, request: ReturnRequest): Promise<number> {
+  async returnOwn(
+    canvas: CanvasId,
+    agent: string,
+    request: ReturnRequest,
+  ): Promise<{ settled: Promise<number> }> {
     request.authorized();
     request.signal.throwIfAborted();
     if (this.switching(canvas, agent))
@@ -246,15 +252,19 @@ export class FallbackService {
     );
     const lane = this.#lanes.get(keyOf(canvas, agent));
     if (lane === undefined) throw new OpFailure('refused', 'This agent cannot return now.');
-    try {
-      await lane.settled.promise;
-      if (lane.committed === undefined)
-        throw new OpFailure('unavailable', 'The return was not saved.');
-      return lane.committed;
-    } catch (error) {
-      if (error instanceof Abandoned) throw new OpFailure('refused', error.message);
-      throw error;
-    }
+    const settled = lane.settled.promise
+      .then(() => {
+        if (lane.committed === undefined)
+          throw new OpFailure('unavailable', 'The return was not saved.');
+        return lane.committed;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Abandoned) throw new OpFailure('refused', error.message);
+        throw error;
+      });
+    // The lane reports its own failure even when its accepted caller no longer waits for it.
+    void settled.catch(() => undefined);
+    return Promise.resolve({ settled });
   }
 
   /**
@@ -506,9 +516,7 @@ export class FallbackService {
         if (commit.canvas === canvas) wake();
       }),
     ];
-    request?.signal.addEventListener('abort', wake);
     lane.unsubscribe = () => {
-      request?.signal.removeEventListener('abort', wake);
       for (const stop of stops) stop();
     };
     this.#lanes.set(keyOf(canvas, node.id), lane);
@@ -545,6 +553,10 @@ export class FallbackService {
     const availability = await sessions.availability(canvas, agent);
     this.#check(lane);
     if (!availability.ready) throw new Abandoned(availability.sentence, true);
+    // Final authority/reach check before the first native effect. An accepted request's client
+    // may leave; after this boundary, later revocation cannot leave its session half-closed.
+    lane.request?.committing();
+    lane.requestFinal = true;
     // Close the source: the engine's driver, then any session the manager runs for it.
     await runtime.engine.sessions.close(agent);
     this.#check(lane);
@@ -612,11 +624,12 @@ export class FallbackService {
    * take work. Throws, abandoning the switch, if any fails.
    */
   #check(lane: Lane): void {
-    if (lane.request?.signal.aborted === true) throw new Abandoned('This return was cancelled.');
-    try {
-      lane.request?.authorized();
-    } catch {
-      throw new Abandoned('This return is no longer authorized.');
+    if (lane.requestFinal !== true) {
+      try {
+        lane.request?.authorized();
+      } catch {
+        throw new Abandoned('This return is no longer authorized.');
+      }
     }
     if (lane.stop) throw lane.stop;
     if (this.#closed || this.#deps.stopping())
@@ -671,9 +684,8 @@ export class FallbackService {
           if (safety.propose !== undefined) throw new Abandoned(safety.propose, true);
           return safety.removals;
         },
-        committing: () => {
-          lane.request?.committing();
-        },
+        // Requested returns finalized caller authority before teardown, not during this write.
+        committing: () => undefined,
         within: () => {
           const carry = deps.carry?.(canvas, agent, lane.id) ?? NOTHING;
           let record: Staged | undefined;
