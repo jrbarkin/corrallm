@@ -58,7 +58,8 @@ The app and `corrallm serve` expose the same local MCP server. corrallm's agents
 
 ## Requirements
 
-- **The CLIs.** Claude Code, Codex or both, installed and logged in. The [Claude Code](docs/architecture/claude-code.md) and [Codex](docs/architecture/codex.md) connection docs list version requirements and recorded behavior. You can use one CLI throughout or combine them.
+- **The CLIs.** Claude Code, Codex or both, installed and logged in. Codex needs 0.160.0 or newer. The [Claude Code](docs/architecture/claude-code.md) and [Codex](docs/architecture/codex.md) connection docs give the versions each behaviour was recorded with. You can use one CLI throughout or combine them.
+- **Git.** 2.36 or newer, since agents work in Git worktrees of your project; merging a branch locally needs 2.39 or newer.
 - **Logins.** Both Terminal connections work with any login, a Claude or ChatGPT subscription included. The Agent SDK connection needs an Anthropic API key or a cloud provider (Bedrock, Vertex, Foundry or a gateway): Anthropic doesn't allow other products to use subscription logins through the Agent SDK. Codex's App Server works with an API key, or with your ChatGPT plan once you allow it.
 - **Costs.** corrallm is free and open source. Your agents' work is billed to, or counted against, your own accounts, as when you run the CLIs yourself.
 
@@ -67,7 +68,7 @@ The app and `corrallm serve` expose the same local MCP server. corrallm's agents
 1. [Build and run corrallm](#build-from-source): `pnpm dev`, or the app `pnpm package` builds in `out/`.
 2. In **Start a session**, pick a template, for example **TDD relay**, fill in what it asks (what to build, and the test framework), and choose an agent and connection for every role. A known saved default prefills the roles. Press **Create canvas**.
 3. On the new canvas, use **Choose a project folder…** to pick a Git repository's top-level folder, with at least one commit. Agents work in worktrees forked from the last commit, one each or one per group, so changes you haven't committed aren't in them.
-4. Press **Run**. Review each new worktree's setup in **Needs you**: approve its command, such as installing dependencies, or **Skip** it. Open an agent to watch it. **All queues** shows every queue; **Needs you** lists what waits for you.
+4. Press **Run**. Open **Needs you** (the bell) to review each new worktree's setup: choose **Run** for its command, such as installing dependencies, **Always for this repository**, or **Skip**. Open an agent to watch it. The dock's **All queues** button shows every queue side by side, and **Needs you** lists what waits for you.
 
 Queue progress and unsaved canvases survive a restart. Save the canvas to keep it as a file.
 
@@ -117,11 +118,11 @@ See [Headless](docs/architecture/headless.md) for every command and option.
 
 ## Build from source
 
-| Tool    | Version                              | Notes                                                    |
-| ------- | ------------------------------------ | -------------------------------------------------------- |
-| Node.js | 24.22.1 (pinned in `.nvmrc`)         | Use the pinned version for reproducible builds           |
-| pnpm    | 12.11.2 (pinned in `packageManager`) | pnpm switches itself to the pinned version automatically |
-| Git     | 2.32+                                | Required by the pre-commit hooks                         |
+| Tool    | Version                              | Notes                                                                      |
+| ------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| Node.js | 24.22.1 (pinned in `.nvmrc`)         | Use the pinned version for reproducible builds                             |
+| pnpm    | 12.11.2 (pinned in `packageManager`) | pnpm switches itself to the pinned version automatically                   |
+| Git     | 2.39+                                | Worktrees need 2.36 and local merges 2.39; corrallm won't use an older Git |
 
 ```sh
 git clone https://github.com/jrbarkin/corrallm.git
