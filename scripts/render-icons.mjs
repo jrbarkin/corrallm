@@ -1,4 +1,4 @@
-// Remakes build/icons/*.png and corrallm.icns from build/icons/corrallm.svg:
+// Remakes build/icons/*.png and corrallm.icns from corrallm-small.svg (16/32 px) and corrallm.svg:
 //   node scripts/render-icons.mjs
 // Uses only what the repository already has: Playwright's Chromium to rasterize, and macOS's
 // iconutil for the .icns. The renders are committed, so a build needs neither.
@@ -12,6 +12,7 @@ import { chromium } from '@playwright/test';
 
 const folder = path.join(path.dirname(fileURLToPath(import.meta.url)), '../build/icons');
 const svg = readFileSync(path.join(folder, 'corrallm.svg'), 'utf8');
+const small = readFileSync(path.join(folder, 'corrallm-small.svg'), 'utf8');
 const SIZES = [16, 32, 64, 128, 256, 512, 1024];
 
 const browser = await chromium.launch(
@@ -23,7 +24,7 @@ try {
   for (const size of SIZES) {
     await page.setViewportSize({ width: size, height: size });
     await page.setContent(
-      `<!doctype html><style>html,body{margin:0;background:transparent}svg{display:block;width:${size}px;height:${size}px}</style>${svg}`,
+      `<!doctype html><style>html,body{margin:0;background:transparent}svg{display:block;width:${size}px;height:${size}px}</style>${size <= 32 ? small : svg}`,
     );
     png.set(size, await page.screenshot({ omitBackground: true, type: 'png' }));
   }
