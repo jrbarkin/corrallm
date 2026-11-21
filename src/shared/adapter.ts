@@ -89,7 +89,8 @@ export interface AdapterDescriptor {
    * Its command to register an outside HTTP MCP server whose headers a command prints each time it
    * connects, so a token renewed in the file that command reads needs no restart: `{server}` and
    * `{url}` as for `registerMcp`, and `{helper}` in place of that command, as a JSON string's
-   * contents (holding no single quote). None where its CLI has no such helper.
+   * contents. A command template keeps that slot inside a single-quoted shell word; a file
+   * template keeps it inside its basic quoted string. None where its CLI has no such helper.
    */
   registerMcpHelper?: string;
   /**

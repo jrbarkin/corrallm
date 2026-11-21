@@ -1878,6 +1878,12 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         tokens,
         keptCanvas: (file) => keptCanvas(file, memory, 'reached'),
         fileOf: async (canvas) => (await memory.get(canvas)).file,
+        helperRoots: async () => [
+          profile,
+          ...(await memory.list()).flatMap(({ project }) =>
+            project === undefined ? [] : [project],
+          ),
+        ],
         url,
         ...(unserved === undefined ? {} : { unserved }),
       }),
@@ -1957,8 +1963,7 @@ async function keptCanvas(
 /**
  * Answers what `corrallm token` asks (Build Plan B30) of a profile no corrallm owns: under
  * core.lock, taken for the moment as `token` and let go once its stores are written, over the
- * profile's own stores, as `corrallm serve --new-token` writes them; only a new token, which names
- * canvases by their files, opens the database, to read canvas memory. Its URL is where the
+ * profile's own stores, as `corrallm serve --new-token` writes them; creation and file-based helper checks open the database to read canvas memory. Its URL is where the
  * profile's server will listen (the port it keeps), if it keeps one. Rejects with ProfileLocked
  * while another process holds the profile. A profile that isn't there is never made.
  */
@@ -1985,7 +1990,7 @@ export async function answerUnowned(profile: string, request: TokenRequest): Pro
     let store: Awaited<ReturnType<typeof openStore>>['store'];
     try {
       let memory: CanvasMemory | undefined;
-      if (request.op === 'new') {
+      if (request.op === 'new' || (request.op === 'renew' && request.helperFiles !== undefined)) {
         // A profile with no database keeps no canvas, and gets none from a token.
         if (!existsSync(path.join(profile, STORE_FILE))) {
           return {
@@ -2006,6 +2011,15 @@ export async function answerUnowned(profile: string, request: TokenRequest): Pro
             ? Promise.reject(new Error('No canvas memory.'))
             : keptCanvas(file, memory, 'reached'),
         fileOf: async (canvas) => (await memory?.get(canvas))?.file,
+        helperRoots: async () => {
+          if (memory === undefined) throw new Error('No canvas memory.');
+          return [
+            profile,
+            ...(await memory.list()).flatMap(({ project }) =>
+              project === undefined ? [] : [project],
+            ),
+          ];
+        },
         url,
       });
       await tokens.flush();

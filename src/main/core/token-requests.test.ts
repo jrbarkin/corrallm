@@ -54,7 +54,7 @@ afterEach(async () => {
 function newToken(
   canvases = [file],
   access: Extract<TokenRequest, { op: 'new' }>['access'] = 'read',
-): TokenRequest {
+): Extract<TokenRequest, { op: 'new' }> {
   return { version: 1, op: 'new', name: 'bot', hours: 2, access, canvases };
 }
 
@@ -72,6 +72,26 @@ function tokenOf(answer: TokenAnswer): string {
 }
 
 describe('a token request the core that owns the profile answers', () => {
+  it('keeps the live token when a helper would run code from any canvas project folder', async () => {
+    const owner = await start();
+    const host = { owner: 'app', url: null } as const;
+    const old = tokenOf(await owner.tokenRequest(newToken(), host));
+    const helper = path.join(dir, 'another-project', 'build', 'header.cjs');
+    await mkdir(path.dirname(helper), { recursive: true });
+    await writeFile(helper, '');
+    const other = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b02';
+    // Its canvas need not be within the token's reach.
+    await owner.close();
+    core = undefined;
+    await keepCanvases(profile, { [other]: { project: path.join(dir, 'another-project') } });
+    const reopened = await start();
+    const answer = await reopened.tokenRequest({ ...newToken(), helperFiles: [helper] }, host);
+    expect(answer).toMatchObject({
+      ok: false,
+      sentence: expect.stringContaining('project folder') as string,
+    });
+    expect(reopened.clientOf(old)).toMatchObject({ name: 'bot' });
+  });
   it('makes a token for the canvases its files hold, working at once, keeping only its hash', async () => {
     const owner = await start();
     const url = 'http://127.0.0.1:47000/mcp';
@@ -161,6 +181,36 @@ describe('a token request the core that owns the profile answers', () => {
 });
 
 describe('a token request with no owner', () => {
+  it('checks a renewing helper before replacing the live token without an owner', async () => {
+    const old = tokenOf(await answerUnowned(profile, newToken()));
+    const helper = path.join(dir, 'project', 'header.cjs');
+    await writeFile(helper, '');
+    const answer = await answerUnowned(profile, {
+      version: 1,
+      op: 'renew',
+      name: 'bot',
+      hours: 2,
+      helperFiles: [helper],
+    });
+    expect(answer).toMatchObject({
+      ok: false,
+      sentence: expect.stringContaining('project folder') as string,
+    });
+    const owner = await start();
+    expect(owner.clientOf(old)).toMatchObject({ name: 'bot' });
+  });
+
+  it('leaves the token store unchanged when refusing a temporary helper location', async () => {
+    await answerUnowned(profile, newToken());
+    const before = await readFile(path.join(profile, 'tokens.json'), 'utf8');
+    const helper = path.join(dir, 'temporary-helper.cjs');
+    await writeFile(helper, '');
+    expect(await answerUnowned(profile, { ...newToken(), helperFiles: [helper] })).toMatchObject({
+      ok: false,
+      sentence: expect.stringContaining('temporary folder') as string,
+    });
+    expect(await readFile(path.join(profile, 'tokens.json'), 'utf8')).toBe(before);
+  });
   it('refuses an unsafe profile before taking its lock or changing its token store', async () => {
     await chmod(profile, 0o777);
     await expect(answerUnowned(profile, newToken())).rejects.toThrow(/folder/);

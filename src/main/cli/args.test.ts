@@ -178,7 +178,15 @@ describe('parseCommand', () => {
     });
   });
 
-  it('refuses what token doesn’t take: never a token, nor an --into a command can’t name', () => {
+  it('keeps token-file path characters literal for the quoted helper', () => {
+    for (const into of ["it's", 'a"b', 'a\\b', '$HOME/t', '`t`']) {
+      expect(parseCommand(['token', 'new', '--canvas', 'a.corral', '--into', into])).toMatchObject({
+        into,
+      });
+    }
+  });
+
+  it('refuses what token doesn’t take: never a token, nor an invalid token-file path', () => {
     const refused = (args: string[], why: RegExp) => {
       expect(() => parseCommand(args)).toThrow(UsageError);
       expect(() => parseCommand(args)).toThrow(why);
@@ -206,7 +214,7 @@ describe('parseCommand', () => {
       refused(['token', 'renew', '--name', name], /--name/);
     }
     // Its path goes in the command that reads the token from it.
-    for (const into of ["it's", 'a"b', 'a\\b', '$HOME/t', '`t`', 'a\nb', '']) {
+    for (const into of ['a\nb', '', 'a'.repeat(4097), 'a\u2028b', '\ud800']) {
       refused(['token', 'new', '--canvas', 'a.corral', '--into', into], /--into/);
     }
     refused(['token', 'header'], /--from/);

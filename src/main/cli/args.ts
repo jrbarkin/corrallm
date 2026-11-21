@@ -18,7 +18,7 @@ import {
  * TrustedPath. `wait` takes no token: an orchestrator's token comes only from its environment.
  * Nor does `token`: it makes, renews and revokes tokens, and names canvases by their files, as
  * `serve` does; `--into` names the file a new token is written to, whose path goes into the
- * command that reads it back (`token header`), so it holds no character a shell would read.
+ * command that reads it back (`token header`), quoted so every character stays literal.
  */
 
 const HOURS = `<1-${String(MAX_TOKEN_HOURS)}>`;
@@ -240,18 +240,19 @@ function tokenHours(given: string | undefined): number {
 }
 
 /**
- * Whether a path can be named in the command that reads a token back: none of a shell's quotes,
- * escapes or expansions, nor a control character (`--into`, which `token` checks again once it is
- * absolute).
+ * A bounded, single-line token-file name. Shell metacharacters stay literal through quoting;
+ * token checks again once it resolves the name to an absolute path.
  */
 export function nameableFile(file: string): boolean {
-  return file !== '' && !/['"\\$`\p{Cc}]/u.test(file);
+  return (
+    file !== '' && file.length <= 4096 && file.isWellFormed() && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(file)
+  );
 }
 
 function intoFile(into: string): string {
   if (!nameableFile(into)) {
     throw new UsageError(
-      `--into is a file whose path has no quote, backslash, $, backtick or control character (a command names it), not “${into}”.`,
+      '--into is a nonempty, well-formed single-line file path of at most 4096 characters.',
     );
   }
   return into;

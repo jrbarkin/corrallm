@@ -133,7 +133,12 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
     expect(await askTokenOwner(profile, NEW)).toEqual(made(NEW));
     const renew: TokenRequest = { version: 1, op: 'renew', name: 'orchestrator', hours: 12 };
     expect(await askTokenOwner(profile, renew)).toEqual(made(renew));
-    expect(asked).toEqual([NEW, renew]);
+    const helper: TokenRequest = {
+      ...NEW,
+      helperFiles: ['/home/user/node', '/work/corrallm/build/header.cjs'],
+    };
+    expect(await askTokenOwner(profile, helper)).toEqual(made(helper));
+    expect(asked).toEqual([NEW, renew, helper]);
 
     // Closed, it is gone, and nothing owns the profile for its client.
     await socket.close();
@@ -258,6 +263,9 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
     await refused(`${JSON.stringify({ ...NEW, canvases: [] })}\n`);
     await refused(`${JSON.stringify({ ...NEW, canvases: ['relative.corral'] })}\n`);
     await refused(`${JSON.stringify({ ...NEW, canvases: Array(33).fill('/a.corral') })}\n`);
+    await refused(`${JSON.stringify({ ...NEW, helperFiles: [] })}\n`);
+    await refused(`${JSON.stringify({ ...NEW, helperFiles: ['relative.cjs'] })}\n`);
+    await refused(`${JSON.stringify({ ...NEW, helperFiles: ['/a', '/b', '/c'] })}\n`);
     await refused(`${JSON.stringify({ ...NEW, token: 'mine' })}\n`);
     await refused(`${JSON.stringify({ version: 1, op: 'revoke', name: 'x', hours: 1 })}\n`);
     // A request too long to be one is answered before it is all read, and the connection ends.

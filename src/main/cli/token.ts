@@ -11,12 +11,19 @@ import { accessText } from '../core/tokens';
 import type { TokenAnswer, TokenOwner, TokenRequest } from '../core/token-socket';
 import { agentEnvironment, loginShellEnvironment } from '../sessions/environment';
 import { installedClis } from '../sessions/installed';
+import { CATALOG } from '../sessions/adapters';
 import { writeWhole } from '../whole-file';
 import { nameableFile } from './args';
 import type { TokenCommand } from './args';
 import { shown } from './output';
-import { helperProblem, registrationLines, registrations, SERVER_NAME } from './register';
-import type { Registration } from './register';
+import {
+  helperInvocation,
+  registrationLines,
+  registrations,
+  SERVER_NAME,
+  shellPath,
+} from './register';
+import type { HelperInvocation, Registration } from './register';
 import { readTokenFile } from './token-file';
 import { TOKEN_FILE_VARIABLE, TOKEN_VARIABLE, URL_VARIABLE } from './wait';
 
@@ -63,6 +70,8 @@ export interface TokenIO {
   loginEnv?: Readonly<Record<string, string>>;
   /** This command's launcher (`commandLauncher`); none for a build that ships no launcher. */
   launcher?: string;
+  /** The running Node and CLI bundle, not any client's PATH lookup. */
+  invocation?: { node: string; bundle: string };
 }
 
 const IN_AN_AGENT =
@@ -96,7 +105,34 @@ export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<
       return 1;
     }
   }
-  const request = requestOf(command, io.cwd);
+  let login: Readonly<Record<string, string>> | undefined;
+  let installed: Readonly<Record<string, boolean>> | undefined;
+  let helper: HelperInvocation | undefined;
+  if (into !== undefined) {
+    try {
+      login = io.loginEnv ?? (await loginShellEnvironment({ env: io.env }));
+      installed = await installedClis(agentEnvironment(login));
+      if (
+        CATALOG.adapters.some(
+          (adapter) => installed?.[adapter.id] === true && adapter.registerMcpHelper !== undefined,
+        )
+      )
+        helper = helperInvocation({
+          searchPath: login.PATH ?? '',
+          ...(io.launcher === undefined ? {} : { launcher: io.launcher }),
+          ...(io.invocation ?? { node: process.execPath, bundle: process.argv[1] ?? '' }),
+        });
+    } catch {
+      say(
+        'corrallm token: the running command’s executable paths could not be resolved for its credential helper.',
+      );
+      return 1;
+    }
+  }
+  const request = {
+    ...requestOf(command, io.cwd),
+    ...(helper === undefined ? {} : { helperFiles: helper.files }),
+  };
   let answer: TokenAnswer;
   try {
     answer = await ask(profile, request, {
@@ -130,15 +166,14 @@ export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<
       written = undefined;
     }
   }
-  const login = io.loginEnv ?? (await loginShellEnvironment({ env: io.env }));
-  const installed = await installedClis(agentEnvironment(login));
+  login ??= io.loginEnv ?? (await loginShellEnvironment({ env: io.env }));
+  installed ??= await installedClis(agentEnvironment(login));
   const otherProfile = profile !== path.resolve(appProfile({ env: io.env }));
-  const problem = written === undefined ? undefined : helperProblem(login.PATH ?? '', io.launcher);
   for (const line of madeText(answer, request, {
     into: written,
     installed,
     otherProfile,
-    helperProblem: problem,
+    helper: written === undefined ? undefined : helper,
   })) {
     say(line);
   }
@@ -216,7 +251,7 @@ function unanswered(holder: LockHolder | undefined): string {
 /** Why `--into` can't take a token, if it can't: checked before one is made. */
 async function intoProblem(file: string): Promise<string | undefined> {
   if (!nameableFile(file)) {
-    return `--into names ${file}, whose path has a quote, backslash, $, backtick or control character, which the command that reads it can’t name: choose another.`;
+    return '--into needs a well-formed single-line absolute path of at most 4096 characters.';
   }
   const folder = path.dirname(file);
   if (!(await stat(folder).catch(() => undefined))?.isDirectory()) {
@@ -244,13 +279,12 @@ function madeText(
     into,
     installed,
     otherProfile,
-    helperProblem,
+    helper,
   }: {
     into: string | undefined;
     installed: Readonly<Record<string, boolean>>;
     otherProfile: boolean;
-    /** Why the headers helper wouldn't run as `corrallm` in a client's shell, if it wouldn't. */
-    helperProblem: string | undefined;
+    helper: HelperInvocation | undefined;
   },
 ): string[] {
   const hours = request.op === 'revoke' ? 0 : request.hours;
@@ -278,7 +312,7 @@ function madeText(
     );
     return lines;
   }
-  const { byFile, byVariable } = registrations(installed, url, into);
+  const { byFile, byVariable } = registrations(installed, url, into, helper?.command);
   const anyClient = `  ${url}, as the MCP server ${SERVER_NAME}, with the header Authorization: Bearer <the token, from ${TOKEN_VARIABLE}>`;
   if (into === undefined) {
     lines.push(
@@ -292,18 +326,18 @@ function madeText(
   } else {
     if (byFile.length > 0) {
       lines.push(...byFileLines(byFile));
-      if (helperProblem !== undefined) lines.push(helperProblem, '');
+      if (helper?.note !== undefined) lines.push(helper.note, '');
     }
     if (byVariable.length > 0 || byFile.length === 0) {
       lines.push(
-        `A client that reads the token only from a variable, as it starts, takes it from the file (export ${TOKEN_VARIABLE}="$(cat "${into}")"), and must start again after a renewal:`,
+        `A client that reads the token only from a variable, as it starts, takes it from the file (export ${TOKEN_VARIABLE}="$(cat ${shellPath(into)})"), and must start again after a renewal:`,
         '',
         ...(byVariable.length > 0 ? registrationLines(byVariable) : [anyClient]),
         '',
       );
     }
     lines.push(
-      `corrallm wait reads the token from the file afresh at each wait: export ${TOKEN_FILE_VARIABLE}="${into}" where your orchestrator runs.`,
+      `corrallm wait reads the token from the file afresh at each wait: export ${TOKEN_FILE_VARIABLE}=${shellPath(into)} where your orchestrator runs.`,
       '',
     );
   }

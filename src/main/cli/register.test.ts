@@ -1,6 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { headersHelper, registrationLines, registrations } from './register';
+import {
+  commandLauncher,
+  headersHelper,
+  helperInvocation,
+  registrationLines,
+  registrations,
+} from './register';
 
 /*
  * How corrallm tells a person to register its MCP server in each installed CLI (Build Plan B30),
@@ -14,7 +32,123 @@ const URL = 'http://127.0.0.1:4100/mcp';
 
 const SNIPPET = `[mcp_servers.corrallm-server]\nurl = "${URL}"\nbearer_token_env_var = "CORRALLM_OUTSIDE_TOKEN"`;
 
+let folder: string;
+beforeEach(() => {
+  folder = realpathSync(mkdtempSync(path.join(tmpdir(), 'register-')));
+});
+afterEach(() => {
+  rmSync(folder, { recursive: true, force: true });
+});
+function file(relative: string): string {
+  const at = path.join(folder, relative);
+  mkdirSync(path.dirname(at), { recursive: true });
+  writeFileSync(at, '');
+  chmodSync(at, 0o755);
+  return at;
+}
+
 describe('registrations', () => {
+  it.skipIf(process.platform === 'win32')(
+    'uses the current absolute Node and bundle when a checkout has no command on PATH',
+    () => {
+      const node = file('node bin/node');
+      const bundle = file('checkout/dist-cli/corrallm.cjs');
+      expect(helperInvocation({ searchPath: '', node, bundle })).toMatchObject({
+        command: [node, bundle],
+        files: [node, bundle],
+        note: expect.stringContaining('absolute') as string,
+      });
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'does not infer a packaged launcher from a source checkout’s sibling bin folder',
+    () => {
+      const bundle = file('checkout/dist-cli/corrallm.cjs');
+      file('checkout/bin/corrallm');
+      expect(commandLauncher(bundle)).toBeUndefined();
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'uses the absolute launcher when a relative PATH entry precedes its installed name',
+    () => {
+      const node = file('app/cli/node');
+      const bundle = file('app/cli/corrallm.cjs');
+      const launcher = file('app/bin/corrallm');
+      const found = helperInvocation({
+        searchPath: `.${path.delimiter}${path.dirname(launcher)}`,
+        node,
+        bundle,
+        launcher,
+      });
+      expect(found.command).toEqual([launcher]);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'uses the packaged launcher when PATH resolves another command, and keeps its own installed name',
+    () => {
+      const node = file('app/cli/node');
+      const bundle = file('app/cli/corrallm.cjs');
+      const launcher = file('app/bin/corrallm');
+      const other = file('other/corrallm');
+      expect(commandLauncher(bundle)).toBe(launcher);
+      expect(
+        helperInvocation({ searchPath: path.dirname(other), node, bundle, launcher }),
+      ).toMatchObject({
+        command: [launcher],
+        files: [launcher],
+        note: expect.stringContaining('absolute') as string,
+      });
+      mkdirSync(path.join(folder, 'bin'));
+      symlinkSync(launcher, path.join(folder, 'bin/corrallm'));
+      const installed = helperInvocation({
+        searchPath: path.join(folder, 'bin'),
+        node,
+        bundle,
+        launcher,
+      });
+      expect(installed).toEqual({ command: ['corrallm'], files: [launcher] });
+      expect(registrations({ codex: true }, URL, '/home/me/token', installed.command)).toEqual(
+        registrations({ codex: true }, URL, '/home/me/token'),
+      );
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps spaces, quotes and shell characters literal in both registration formats',
+    () => {
+      const command = [
+        '/home/user/Node \'one\' "$PATH" $&/node',
+        '/work/corrallm \'two\' "build" $`/dist-cli/corrallm.cjs',
+      ];
+      const tokenFile = '/home/user/My \'Tokens\' "$HOME" `literal` \\ path/corrallm';
+      const { byFile } = registrations(
+        { 'claude-code': true, codex: true },
+        URL,
+        tokenFile,
+        command,
+      );
+      const shell = byFile.find(({ name }) => name === 'Claude Code')?.text ?? '';
+      // Parse the command as shell arguments without invoking a native CLI.
+      const json = execFileSync('/bin/sh', ['-c', `set -- ${shell}; printf '%s' "$5"`], {
+        encoding: 'utf8',
+      });
+      const a = (JSON.parse(json) as { headersHelper: string }).headersHelper;
+      const toml = byFile.find(({ name }) => name === 'Codex')?.text ?? '';
+      const b = JSON.parse(toml.split('http_headers_helper = ')[1] ?? '') as string;
+      expect(a).toBe(b);
+      for (const helper of [a, b]) {
+        const words = execFileSync('/bin/sh', ['-c', `set -- ${helper}; printf '%s\\n' "$@"`], {
+          encoding: 'utf8',
+        })
+          .trimEnd()
+          .split('\n');
+        expect(words).toEqual([...command, 'token', 'header', '--from', tokenFile]);
+      }
+    },
+  );
   it('registers corrallm in each installed CLI that says how, by the token’s variable: a command, or text for a file in the orchestrator’s folder', () => {
     expect(registrations({ codex: true }, URL)).toEqual({
       byFile: [],
@@ -75,7 +209,7 @@ describe('registrations', () => {
     expect(headersHelper('/home/me/My Tokens/corrallm')).toBe(
       'corrallm token header --from "/home/me/My Tokens/corrallm"',
     );
-    expect(() => headersHelper('/home/me/$(touch x)')).toThrow(RangeError);
+    expect(() => headersHelper('/home/me/a\nb')).toThrow(RangeError);
     expect(() => headersHelper('relative/token')).toThrow(RangeError);
   });
 });

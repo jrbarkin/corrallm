@@ -12,6 +12,8 @@ import { keepCanvases } from '../core/store/test-store';
 import type { TokenCommand } from './args';
 import { byFileLines, tokenCommand } from './token';
 import type { TokenIO } from './token';
+import { headersHelper } from './register';
+import { execFileSync } from 'node:child_process';
 
 /*
  * What `corrallm token` says and refuses (Build Plan B30), called directly with nothing owning the
@@ -145,6 +147,55 @@ describe.skipIf(process.platform === 'win32')('corrallm token in a corrallm agen
 });
 
 describe.skipIf(process.platform === 'win32')('what corrallm token says to register', () => {
+  it('preserves literal token-file names in its shell export instructions', async () => {
+    vi.stubEnv('CORRALLM_AGENT_PATHS', '{}');
+    const into = path.join(dir, 'My \'tokens\' "$HOME" `literal` $(printf marker)');
+    const code = await tokenCommand(
+      command({ into }),
+      io(
+        {},
+        {
+          loginEnv: { PATH: '', CORRALLM_AGENT_PATHS: '{}' },
+        },
+      ),
+    );
+    expect(code).toBe(0);
+    const assignment =
+      /export CORRALLM_OUTSIDE_TOKEN_FILE=(.+) where your orchestrator runs\./.exec(said)?.[1];
+    if (assignment === undefined) throw new Error('Expected the token-file export instruction.');
+    expect(
+      execFileSync('/bin/sh', ['-c', `set -- ${assignment}; printf '%s' "$1"`], {
+        encoding: 'utf8',
+      }),
+    ).toBe(into);
+    const tokenExport = said
+      .split('takes it from the file (')[1]
+      ?.split('), and must start again')[0];
+    if (tokenExport === undefined) throw new Error('Expected the variable export instruction.');
+    expect(
+      execFileSync('/bin/sh', ['-c', `${tokenExport}; printf '%s' "$CORRALLM_OUTSIDE_TOKEN"`], {
+        encoding: 'utf8',
+      }),
+    ).toBe('A'.repeat(43));
+    expect(said).not.toContain('A'.repeat(43));
+  });
+  it('does not request executable helper paths when no installed client declares a file helper', async () => {
+    vi.stubEnv('CORRALLM_AGENT_PATHS', '{}');
+    const code = await tokenCommand(
+      command({ into: path.join(dir, 't') }),
+      io(
+        {},
+        {
+          loginEnv: { PATH: '', CORRALLM_AGENT_PATHS: '{}' },
+        },
+      ),
+    );
+    expect(code).toBe(0);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).not.toHaveProperty('helperFiles');
+    expect(said).not.toContain('headers_helper');
+    expect(said).not.toContain('headersHelper');
+  });
   it('puts Codex in the orchestrator’s folder as text by the token’s file, never as a command, and says no client must start again', async () => {
     const into = path.join(dir, 'orchestrator.token');
     const code = await tokenCommand(command({ into }), io({}, { loginEnv: await login(dir) }));
@@ -154,7 +205,9 @@ describe.skipIf(process.platform === 'win32')('what corrallm token says to regis
       'Codex: in your orchestrator’s folder, add this to .codex/config.toml (corrallm doesn’t write it):',
     );
     expect(said).toContain('[mcp_servers.corrallm-server]');
-    expect(said).toContain(`http_headers_helper = "corrallm token header --from \\"${into}\\""`);
+    expect(said).toContain(
+      `http_headers_helper = ${JSON.stringify(headersHelper(into, [await realpath(process.execPath), await realpath(process.argv[1] ?? '')]))}`,
+    );
     expect(said).not.toContain('bearer_token_env_var');
     // Both helpers run again after a renewal (Codex's recorded in B30 E1): nothing must start again.
     expect(said).toContain('claude mcp add-json corrallm-server');
@@ -175,25 +228,32 @@ describe.skipIf(process.platform === 'win32')('what corrallm token says to regis
     expect(byFileLines([stays]).join('\n')).not.toContain('needs no restart');
   });
 
-  it('tells you to install the command when no corrallm is on the login PATH', async () => {
+  it('says that the printed helper uses this absolute invocation when PATH has no corrallm', async () => {
     await tokenCommand(
       command({ into: path.join(dir, 't') }),
       io({}, { loginEnv: await login(dir) }),
     );
     expect(said).toContain(
-      'Your PATH has no corrallm command, so this helper can’t run: install it from a packaged corrallm’s Settings first.',
+      'Your PATH has no verified corrallm command; the registration uses this command’s absolute invocation instead.',
     );
+    expect(asked[0]).toMatchObject({
+      helperFiles: [await realpath(process.execPath), await realpath(process.argv[1] ?? '')],
+    });
   });
 
-  it('names another program on the PATH that would run as the helper', async () => {
+  it('prints this launcher’s absolute helper when another command comes first', async () => {
     const launcher = await executable(path.join(dir, 'app', 'bin', 'corrallm'));
     const other = await executable(path.join(dir, 'other', 'corrallm'));
     await tokenCommand(
       command({ into: path.join(dir, 't') }),
       io({}, { loginEnv: await login(path.dirname(other)), launcher }),
     );
-    expect(said).toContain(`\`corrallm\` on your PATH is another program (`);
-    expect(said).toContain('so this helper would run that');
+    expect(said).toContain(
+      'The corrallm on PATH is not this command; the registration uses this command’s absolute invocation instead.',
+    );
+    expect(said).toContain(
+      'http_headers_helper = ' + JSON.stringify(headersHelper(path.join(dir, 't'), [launcher])),
+    );
   });
 
   it('says nothing more when this command’s own link is first on the PATH', async () => {

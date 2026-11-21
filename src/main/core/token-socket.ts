@@ -71,8 +71,15 @@ const TokenRequestSchema = z.discriminatedUnion('op', [
     hours: Hours,
     access: Access,
     canvases: z.array(CanvasFile).min(1).max(MAX_TOKEN_CANVASES),
+    helperFiles: z.array(CanvasFile).min(1).max(2).optional(),
   }),
-  z.strictObject({ version: z.literal(1), op: z.literal('renew'), name: Name, hours: Hours }),
+  z.strictObject({
+    version: z.literal(1),
+    op: z.literal('renew'),
+    name: Name,
+    hours: Hours,
+    helperFiles: z.array(CanvasFile).min(1).max(2).optional(),
+  }),
   z.strictObject({ version: z.literal(1), op: z.literal('revoke'), name: Name }),
 ]);
 

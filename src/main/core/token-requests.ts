@@ -1,6 +1,7 @@
 import type { CanvasId } from '../../shared/canvas';
 import type { TokenAnswer, TokenOwner, TokenRequest } from './token-socket';
 import type { TokenStore } from './tokens';
+import { helperLocationRefusal } from './helper-location';
 
 /*
  * What the owner of a profile does with a request of `corrallm token` (Build Plan B30), whether it
@@ -21,6 +22,8 @@ export interface TokenRequestServices {
   keptCanvas: (file: string) => Promise<CanvasId>;
   /** The file corrallm keeps a canvas in, to name it by. */
   fileOf: (canvas: CanvasId) => Promise<string | undefined>;
+  /** All project folders in the profile, plus the profile itself; never disclosed to the CLI. */
+  helperRoots?: () => Promise<readonly string[]>;
   /** Where the owner's MCP server listens, or will: null when none does. */
   url: string | null;
   /** Why the owner's MCP server doesn't listen, when it knows (its port taken): with `url` null. */
@@ -33,6 +36,27 @@ export async function answerTokenRequest(
   services: TokenRequestServices,
 ): Promise<TokenAnswer> {
   const { owner, tokens } = services;
+  if (request.op !== 'revoke' && request.helperFiles !== undefined) {
+    try {
+      if (services.helperRoots === undefined)
+        return {
+          ok: false,
+          sentence:
+            'This profile owner cannot check credential helper locations. Update corrallm and try again.',
+        };
+      const problem = await helperLocationRefusal(
+        request.helperFiles,
+        await services.helperRoots(),
+      );
+      if (problem !== undefined) return { ok: false, sentence: problem };
+    } catch {
+      return {
+        ok: false,
+        sentence:
+          'The credential helper code locations could not be checked. Keep Node and the corrallm build in protected permanent folders and try again.',
+      };
+    }
+  }
   switch (request.op) {
     case 'new': {
       const canvases: CanvasId[] = [];

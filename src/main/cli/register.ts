@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CORRALLM_MCP_SERVER } from '../../shared/session';
 
@@ -23,13 +23,20 @@ export const SERVER_NAME = CORRALLM_MCP_SERVER;
 
 /**
  * The command that prints a token's Authorization header from `file`, for a client to run in a
- * shell: `file` absolute, with no character a shell would read in double quotes (`nameableFile`).
+ * shell: its absolute token-file path is quoted as one literal word.
  */
-export function headersHelper(file: string): string {
+export function headersHelper(file: string, command: readonly string[] = ['corrallm']): string {
   if (!path.isAbsolute(file) || !nameableFile(file)) {
-    throw new RangeError(`A token file a command names is absolute and plain, not “${file}”.`);
+    throw new RangeError('A token-file path is absolute, bounded and on one line.');
   }
-  return `corrallm token header --from "${file}"`;
+  const bare = command.length === 1 && command[0] === 'corrallm';
+  if (
+    !bare &&
+    (command.length < 1 || command.length > 2 || command.some((part) => !plainPath(part)))
+  )
+    throw new RangeError('A credential helper uses absolute executable paths.');
+  const invocation = bare ? 'corrallm' : command.map(shellWord).join(' ');
+  return `${invocation} token header --from ${shellPath(file)}`;
 }
 
 /** One way to register corrallm in one CLI: a command to run, or text for a file in a folder. */
@@ -60,8 +67,10 @@ export function registrations(
   installed: Readonly<Record<string, boolean>>,
   url: string,
   file?: string,
+  command?: readonly string[],
 ): Registrations {
-  const helper = file === undefined ? undefined : JSON.stringify(headersHelper(file)).slice(1, -1);
+  const helper =
+    file === undefined ? undefined : JSON.stringify(headersHelper(file, command)).slice(1, -1);
   const fill = (template: string) =>
     template.replaceAll('{server}', SERVER_NAME).replaceAll('{url}', url);
   const result: Registrations = { byFile: [], byVariable: [] };
@@ -76,7 +85,11 @@ export function registrations(
     if (helper !== undefined && registerMcpHelper !== undefined) {
       result.byFile.push({
         ...base,
-        text: fill(registerMcpHelper).replaceAll('{helper}', helper),
+        // Command templates place the JSON contents inside a single-quoted shell word; file
+        // templates keep them as string contents. The adapter owns the surrounding format.
+        text: fill(registerMcpHelper).replaceAll('{helper}', () =>
+          adapter.registerMcpIn === undefined ? helper.replaceAll("'", "'\\''") : helper,
+        ),
       });
     } else if (registerMcp !== undefined) {
       // By its variable, a client reads the token only as it starts, whatever else it can do.
@@ -116,6 +129,7 @@ export function registrationLines(list: readonly Registration[]): string[] {
  * for a checkout's build, which ships no launcher.
  */
 export function commandLauncher(bundle: string): string | undefined {
+  if (path.basename(path.dirname(bundle)) !== 'cli') return undefined;
   try {
     const launcher = realpathSync(path.join(path.dirname(bundle), '..', 'bin', 'corrallm'));
     return statSync(launcher).isFile() ? launcher : undefined;
@@ -127,9 +141,11 @@ export function commandLauncher(bundle: string): string | undefined {
 /** The first `corrallm` on `searchPath` (absolute folders only), as a real path. */
 function firstOnPath(searchPath: string): string | undefined {
   for (const folder of searchPath.split(path.delimiter)) {
-    if (!path.isAbsolute(folder)) continue;
+    // A client may run in another folder: an earlier relative entry cannot be resolved here.
+    if (!path.isAbsolute(folder)) return undefined;
     try {
       const found = realpathSync(path.join(folder, 'corrallm'));
+      accessSync(found, constants.X_OK);
       if (statSync(found).isFile()) return found;
     } catch {
       // Not in this folder.
@@ -138,19 +154,58 @@ function firstOnPath(searchPath: string): string | undefined {
   return undefined;
 }
 
-/**
- * Why the helper the by-file registrations name, `corrallm token header`, wouldn't run as
- * `corrallm` in the client's shell, if it wouldn't: said in words, and never fixed. `launcher` is
- * this command's (`commandLauncher`).
- */
-export function helperProblem(
-  searchPath: string,
-  launcher: string | undefined,
-): string | undefined {
+export interface HelperInvocation {
+  command: string[];
+  /** Canonical code paths for the profile owner's location check, even when the name is bare. */
+  files: string[];
+  note?: string;
+}
+
+/** Select this running command, never another program named corrallm on the client's PATH. */
+export function helperInvocation({
+  searchPath,
+  launcher,
+  node,
+  bundle,
+}: {
+  searchPath: string;
+  launcher?: string;
+  node: string;
+  bundle: string;
+}): HelperInvocation {
+  const files =
+    launcher === undefined
+      ? [codePath(node, constants.X_OK), codePath(bundle, constants.R_OK)]
+      : [codePath(launcher, constants.X_OK)];
   const first = firstOnPath(searchPath);
-  if (first === undefined) {
-    return `Your PATH has no corrallm command, so this helper can’t run: install it from ${launcher === undefined ? 'a packaged corrallm’s' : 'corrallm’s'} Settings first.`;
-  }
-  if (launcher === undefined || first === launcher) return undefined;
-  return `\`corrallm\` on your PATH is another program (${first}), so this helper would run that: install corrallm’s from its Settings, or put it first.`;
+  if (launcher !== undefined && first === files[0]) return { command: ['corrallm'], files };
+  return {
+    command: files,
+    files,
+    note:
+      first === undefined
+        ? 'Your PATH has no verified corrallm command; the registration uses this command’s absolute invocation instead.'
+        : 'The corrallm on PATH is not this command; the registration uses this command’s absolute invocation instead.',
+  };
+}
+
+function plainPath(file: string): boolean {
+  return path.isAbsolute(file) && nameableFile(file);
+}
+function codePath(file: string, permission: number): string {
+  if (!plainPath(file))
+    throw new Error('A credential helper needs an absolute, single-line code path.');
+  const canonical = realpathSync(file);
+  if (!plainPath(canonical) || !statSync(canonical).isFile())
+    throw new Error('The credential helper code is not a regular file.');
+  accessSync(canonical, permission);
+  return canonical;
+}
+function shellWord(word: string): string {
+  return `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+/** A path in a shell command or export, preserving the existing spelling for plain names. */
+export function shellPath(file: string): string {
+  return `"${file.replace(/[\\"$`]/g, (character) => `\\${character}`)}"`;
 }

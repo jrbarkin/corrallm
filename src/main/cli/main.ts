@@ -139,7 +139,9 @@ async function run(command: Command): Promise<number> {
         cwd: process.cwd(),
         stderr: process.stderr,
         // The shipped command's launcher, to check the helper's `corrallm` resolves to it.
-        ...launcherOption(commandLauncher(process.argv[1] ?? '')),
+        // The pnpm wrapper requires this bundle; argv[1] still names that wrapper.
+        ...launcherOption(commandLauncher(__filename)),
+        invocation: { node: process.execPath, bundle: __filename },
         // Opened only by `token header`, the one that prints there.
         stdout: {
           write: (text) => process.stdout.write(text),
