@@ -116,7 +116,7 @@ If you are the coding agent, ask the person to do steps 1â€“3; then do steps 4â€
 
    `timeoutSeconds` is required; keep MCP waits under two minutes. A timeout ends the wait, not the work: wait again for the same id, or use `next` as `after` to read on. **Run is optional:** a token's message reaches an idle agent while the run is held, provided setup, permissions and other delivery holds allow it. `status {canvas}` and `messages {canvas}` show progress and notices.
 
-To review work, call `branch_diff {canvas, agent}`; page with its `next` as `after`. `worktree_list {canvas}` identifies the trees. An outside writer without `--no-merge` can call `branch_merge`: pass the reviewed `source: {ref, oid}` and `into: {ref, oid}`, a fresh UUID `request`, and, for uncommitted work, choose `leave` or `commit` with the reviewed digest as its schema describes. This is a local merge installed by fast-forward, with no push; changed pins or conflicts require review again.
+To review work, call `branch_diff {canvas, agent}`; page with its `next` as `after`. `worktree_list {canvas}` identifies the trees. An outside writer without `--no-merge` can call `branch_merge {canvas, agent, source, into, request}`: pass the reviewed `source: {ref, oid}` and `into: {ref, oid}`, a fresh UUID `request`, and, for uncommitted work, choose `leave` or `commit` with the reviewed digest as its schema describes. This is a local merge installed by fast-forward, with no push; changed pins or conflicts require review again.
 
 For longer waits, run this in your shell, in the background if your shell tool has a shorter time limit. Replace the URL and message id with the printed URL and the id from `message`:
 
