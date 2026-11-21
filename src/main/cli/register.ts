@@ -1,4 +1,4 @@
-import { accessSync, constants, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { CORRALLM_MCP_SERVER } from '../../shared/session';
 
@@ -132,21 +132,44 @@ export function commandLauncher(bundle: string): string | undefined {
   if (path.basename(path.dirname(bundle)) !== 'cli') return undefined;
   try {
     const launcher = realpathSync(path.join(path.dirname(bundle), '..', 'bin', 'corrallm'));
+    const runtime = path.resolve(path.dirname(launcher), '..', 'cli');
+    const pairedBundle = path.join(runtime, 'corrallm.cjs');
+    const pairedNode = path.join(runtime, 'node');
+    // An indirect runtime path could be replaced independently of the protected launcher.
+    if (
+      realpathSync(pairedBundle) !== pairedBundle ||
+      realpathSync(pairedNode) !== pairedNode ||
+      pairedBundle !== realpathSync(bundle)
+    )
+      return undefined;
     return statSync(launcher).isFile() ? launcher : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** The first `corrallm` on `searchPath` (absolute folders only), as a real path. */
-function firstOnPath(searchPath: string): string | undefined {
-  for (const folder of searchPath.split(path.delimiter)) {
+/** A lookup that another user cannot shadow, including folders preceding the command. */
+function firstOnPath(searchPath: string): { file: string; directories: string[] } | undefined {
+  const directories: string[] = [];
+  const folders = searchPath.split(path.delimiter);
+  if (folders.length > 128) return undefined;
+  for (const folder of folders) {
     // A client may run in another folder: an earlier relative entry cannot be resolved here.
-    if (!path.isAbsolute(folder)) return undefined;
+    // Node normalizes '..' before resolving links; a shell's PATH lookup does the reverse.
+    if (!plainPath(folder) || path.resolve(folder) !== folder) return undefined;
+    if (!protectedDirectory(folder)) return undefined;
+    directories.push(folder);
     try {
-      const found = realpathSync(path.join(folder, 'corrallm'));
+      const candidate = path.join(folder, 'corrallm');
+      const found = realpathSync(candidate);
+      if (lstatSync(candidate).isSymbolicLink()) {
+        // The installed link may name the canonical launcher directly, never a replaceable hop.
+        const target = readlinkSync(candidate);
+        if (!plainPath(target) || path.resolve(target) !== target || target !== found)
+          return undefined;
+      }
       accessSync(found, constants.X_OK);
-      if (statSync(found).isFile()) return found;
+      if (statSync(found).isFile()) return { file: found, directories };
     } catch {
       // Not in this folder.
     }
@@ -154,10 +177,33 @@ function firstOnPath(searchPath: string): string | undefined {
   return undefined;
 }
 
+function protectedDirectory(folder: string): boolean {
+  try {
+    // Check both spellings: a protected target doesn't protect a replaceable directory link.
+    for (const start of new Set([path.resolve(folder), realpathSync(folder)])) {
+      for (let at = start; ; at = path.dirname(at)) {
+        const entry = lstatSync(at);
+        if (
+          !entry.isDirectory() ||
+          (entry.uid !== process.getuid?.() && entry.uid !== 0) ||
+          (entry.mode & 0o022) !== 0
+        )
+          return false;
+        if (path.dirname(at) === at) break;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface HelperInvocation {
   command: string[];
   /** Canonical code paths for the profile owner's location check, even when the name is bare. */
   files: string[];
+  /** Only for a bare command: the owner checks every searched directory against project roots. */
+  directories?: string[];
   note?: string;
 }
 
@@ -173,14 +219,27 @@ export function helperInvocation({
   node: string;
   bundle: string;
 }): HelperInvocation {
-  const files =
-    launcher === undefined
-      ? [codePath(node, constants.X_OK), codePath(bundle, constants.R_OK)]
-      : [codePath(launcher, constants.X_OK)];
+  const currentBundle = codePath(bundle, constants.R_OK);
+  const candidate = launcher === undefined ? undefined : codePath(launcher, constants.X_OK);
+  const executable = candidate === commandLauncher(bundle) ? candidate : undefined;
+  const runtime =
+    executable === undefined
+      ? [codePath(node, constants.X_OK), currentBundle]
+      : [
+          codePath(path.join(path.dirname(executable), '..', 'cli', 'node'), constants.X_OK),
+          codePath(
+            path.join(path.dirname(executable), '..', 'cli', 'corrallm.cjs'),
+            constants.R_OK,
+          ),
+        ];
+  if (runtime[1] !== currentBundle)
+    throw new Error('The credential helper launcher does not run this bundle.');
+  const files = executable === undefined ? runtime : [executable, ...runtime];
   const first = firstOnPath(searchPath);
-  if (launcher !== undefined && first === files[0]) return { command: ['corrallm'], files };
+  if (executable !== undefined && first?.file === executable)
+    return { command: ['corrallm'], files, directories: first.directories };
   return {
-    command: files,
+    command: executable === undefined ? runtime : [executable],
     files,
     note:
       first === undefined

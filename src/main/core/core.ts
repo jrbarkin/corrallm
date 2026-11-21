@@ -1880,6 +1880,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
         fileOf: async (canvas) => (await memory.get(canvas)).file,
         helperRoots: async () => [
           profile,
+          ...workspaceStore.repositories().map(({ ownedRoot }) => ownedRoot),
           ...(await memory.list()).flatMap(({ project }) =>
             project === undefined ? [] : [project],
           ),
@@ -1990,7 +1991,12 @@ export async function answerUnowned(profile: string, request: TokenRequest): Pro
     let store: Awaited<ReturnType<typeof openStore>>['store'];
     try {
       let memory: CanvasMemory | undefined;
-      if (request.op === 'new' || (request.op === 'renew' && request.helperFiles !== undefined)) {
+      let helperWorkspaces: WorkspaceStore | undefined;
+      if (
+        request.op === 'new' ||
+        (request.op === 'renew' &&
+          (request.helperFiles !== undefined || request.helperDirectories !== undefined))
+      ) {
         // A profile with no database keeps no canvas, and gets none from a token.
         if (!existsSync(path.join(profile, STORE_FILE))) {
           return {
@@ -2002,6 +2008,8 @@ export async function answerUnowned(profile: string, request: TokenRequest): Pro
         store = opened.store;
         if (store === undefined) return { ok: false, sentence: opened.said.join(' ') };
         memory = new CanvasMemory(store, undefined, () => false, isConversationId);
+        if (request.helperFiles !== undefined || request.helperDirectories !== undefined)
+          helperWorkspaces = new WorkspaceStore({ store });
       }
       const answer = await answerTokenRequest(request, {
         owner: 'none',
@@ -2015,6 +2023,7 @@ export async function answerUnowned(profile: string, request: TokenRequest): Pro
           if (memory === undefined) throw new Error('No canvas memory.');
           return [
             profile,
+            ...(helperWorkspaces?.repositories().map(({ ownedRoot }) => ownedRoot) ?? []),
             ...(await memory.list()).flatMap(({ project }) =>
               project === undefined ? [] : [project],
             ),

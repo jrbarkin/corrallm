@@ -23,6 +23,7 @@ export async function helperLocationRefusal(
     uid: process.getuid?.(),
     temporary: [tmpdir(), '/tmp', '/var/tmp'],
   },
+  kind: 'file' | 'directory' = 'file',
 ): Promise<string | undefined> {
   const roots = await Promise.all(
     projects.map(async (root) => [
@@ -50,26 +51,28 @@ export async function helperLocationRefusal(
   const projectIds = await identities(roots.flat());
   const temporaryIds = await identities(temporary);
   const projectProblem =
-    'A credential helper cannot run from a canvas project folder or the corrallm profile. Move the build outside those folders and try again.';
+    'A credential helper cannot use code or PATH directories in a canvas project folder, worktree or the corrallm profile. Move the code or remove those PATH entries and try again.';
   const temporaryProblem =
-    'A credential helper cannot run from a temporary folder. Move Node and the corrallm build to a protected permanent folder and try again.';
+    'A credential helper cannot use code or PATH directories in a temporary folder. Keep its code and command lookup in protected permanent folders and try again.';
   for (const file of files) {
     const canonical = await deps.realpath(file);
     if (roots.flat().some((root) => inside(root, file) || inside(root, canonical)))
       return projectProblem;
     if (temporary.some((root) => inside(root, canonical))) return temporaryProblem;
-    for (let at = canonical; ; at = path.dirname(at)) {
-      const entry = await deps.stat(at);
-      // Directory identity covers case and normalization aliases on the host filesystem too.
-      if (projectIds.has(identity(entry))) return projectProblem;
-      if (temporaryIds.has(identity(entry))) return temporaryProblem;
-      if (
-        (at === canonical ? !entry.isFile() : !entry.isDirectory()) ||
-        (entry.uid !== deps.uid && entry.uid !== 0) ||
-        (entry.mode & 0o022) !== 0
-      )
-        return 'A credential helper needs code and parent folders owned by you or root, with no write access for other users.';
-      if (path.dirname(at) === at) break;
+    for (const start of new Set([path.resolve(file), canonical])) {
+      for (let at = start; ; at = path.dirname(at)) {
+        const entry = await deps.stat(at);
+        // Directory identity covers case and normalization aliases on the host filesystem too.
+        if (projectIds.has(identity(entry))) return projectProblem;
+        if (temporaryIds.has(identity(entry))) return temporaryProblem;
+        if (
+          (at === start && kind === 'file' ? !entry.isFile() : !entry.isDirectory()) ||
+          (entry.uid !== deps.uid && entry.uid !== 0) ||
+          (entry.mode & 0o022) !== 0
+        )
+          return 'A credential helper needs code and parent folders owned by you or root, with no write access for other users.';
+        if (path.dirname(at) === at) break;
+      }
     }
   }
   return undefined;

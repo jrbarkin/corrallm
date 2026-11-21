@@ -24,6 +24,7 @@ import { execFileSync } from 'node:child_process';
 
 const CANVAS = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01';
 let dir: string;
+let codeDir: string;
 let profile: string;
 let file: string;
 let said: string;
@@ -34,6 +35,9 @@ const URL = 'http://127.0.0.1:4100/mcp';
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'ct-'));
+  const probes = path.resolve('node_modules/.cache/probes');
+  await mkdir(probes, { recursive: true });
+  codeDir = await realpath(await mkdtemp(path.join(probes, 'token-text-')));
   profile = path.join(dir, 'profile');
   await mkdir(profile, { mode: 0o700 });
   const project = path.join(dir, 'project');
@@ -72,6 +76,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await owner.close();
   await rm(dir, { recursive: true, force: true });
+  await rm(codeDir, { recursive: true, force: true });
 });
 
 /** An executable file at `where`. */
@@ -80,6 +85,16 @@ async function executable(where: string): Promise<string> {
   await writeFile(where, '#!/bin/sh\n');
   await chmod(where, 0o755);
   return realpath(where);
+}
+
+async function packaged(): Promise<Pick<TokenIO, 'launcher' | 'invocation'>> {
+  return {
+    launcher: await executable(path.join(codeDir, 'app/bin/corrallm')),
+    invocation: {
+      node: await executable(path.join(codeDir, 'app/cli/node')),
+      bundle: await executable(path.join(codeDir, 'app/cli/corrallm.cjs')),
+    },
+  };
 }
 
 function io(env: Record<string, string>, extra: Partial<TokenIO> = {}): TokenIO {
@@ -242,11 +257,12 @@ describe.skipIf(process.platform === 'win32')('what corrallm token says to regis
   });
 
   it('prints this launcher’s absolute helper when another command comes first', async () => {
-    const launcher = await executable(path.join(dir, 'app', 'bin', 'corrallm'));
-    const other = await executable(path.join(dir, 'other', 'corrallm'));
+    const helper = await packaged();
+    const launcher = helper.launcher ?? '';
+    const other = await executable(path.join(codeDir, 'other', 'corrallm'));
     await tokenCommand(
       command({ into: path.join(dir, 't') }),
-      io({}, { loginEnv: await login(path.dirname(other)), launcher }),
+      io({}, { loginEnv: await login(path.dirname(other)), ...helper }),
     );
     expect(said).toContain(
       'The corrallm on PATH is not this command; the registration uses this command’s absolute invocation instead.',
@@ -257,14 +273,17 @@ describe.skipIf(process.platform === 'win32')('what corrallm token says to regis
   });
 
   it('says nothing more when this command’s own link is first on the PATH', async () => {
-    const launcher = await executable(path.join(dir, 'app', 'bin', 'corrallm'));
-    await mkdir(path.join(dir, 'bin'));
-    await symlink(launcher, path.join(dir, 'bin', 'corrallm'));
+    const helper = await packaged();
+    const launcher = helper.launcher ?? '';
+    await mkdir(path.join(codeDir, 'bin'));
+    await symlink(launcher, path.join(codeDir, 'bin', 'corrallm'));
     await tokenCommand(
       command({ into: path.join(dir, 't') }),
-      io({}, { loginEnv: await login(path.join(dir, 'bin')), launcher }),
+      io({}, { loginEnv: await login(path.join(codeDir, 'bin')), ...helper }),
     );
     expect(said).toContain('claude mcp add-json');
     expect(said).not.toContain('this helper');
+    expect(said).not.toContain('absolute invocation');
+    expect(asked[0]).toMatchObject({ helperDirectories: [path.join(codeDir, 'bin')] });
   });
 });

@@ -132,6 +132,7 @@ export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<
   const request = {
     ...requestOf(command, io.cwd),
     ...(helper === undefined ? {} : { helperFiles: helper.files }),
+    ...(helper?.directories === undefined ? {} : { helperDirectories: helper.directories }),
   };
   let answer: TokenAnswer;
   try {

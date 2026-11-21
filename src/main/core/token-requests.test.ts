@@ -11,7 +11,9 @@ import { PARTIES, SURFACE } from '../../shared/api/surface';
 import { answerUnowned, createCore } from './core';
 import type { Core } from './core';
 import { lockProfile, ProfileLocked } from './lock';
-import { keepCanvases } from './store/test-store';
+import { keepCanvases, openTestStore } from './store/test-store';
+import { askTokenOwner, serveTokenSocket } from './token-socket';
+import { WorkspaceStore } from './workspaces/store';
 import { NO_DESKTOP } from './test-registry';
 import type { TokenAnswer, TokenRequest } from './token-socket';
 
@@ -32,7 +34,8 @@ let file: string;
 let core: Core | undefined;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'corrallm-token-requests-'));
+  // Leave room for token.sock under macOS's long per-user temporary root.
+  dir = await mkdtemp(path.join(tmpdir(), 'ctr-'));
   profile = path.join(dir, 'profile');
   await mkdir(profile, { mode: 0o700 });
   const project = path.join(dir, 'project');
@@ -72,6 +75,99 @@ function tokenOf(answer: TokenAnswer): string {
 }
 
 describe('a token request the core that owns the profile answers', () => {
+  it('keeps retained worktrees outside credential helper locations after a project change', async () => {
+    const probes = path.resolve('node_modules/.cache/probes');
+    await mkdir(probes, { recursive: true });
+    const previous = await mkdtemp(path.join(probes, 'previous-project-'));
+    try {
+      const ownedRoot = path.join(previous, '.corral/worktrees/profile');
+      const helper = path.join(ownedRoot, 'tree/header.cjs');
+      await mkdir(path.dirname(helper), { recursive: true });
+      await writeFile(helper, '');
+      const store = await openTestStore(profile);
+      try {
+        const workspaces = new WorkspaceStore({ store });
+        await workspaces.write((w) =>
+          w.addRepository({
+            id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b02',
+            pickedRoot: previous,
+            realRoot: previous,
+            commonDir: path.join(previous, '.git'),
+            identity: 'previous-repository',
+            rootKind: 'project',
+            ownedRoot,
+          }),
+        );
+      } finally {
+        await store.close();
+      }
+      // Canvas memory already names the new project. The old repository's workspaces remain.
+      const old = tokenOf(await answerUnowned(profile, newToken()));
+      expect(await answerUnowned(profile, { ...newToken(), helperFiles: [helper] })).toMatchObject({
+        ok: false,
+        sentence: expect.stringContaining('project folder') as string,
+      });
+      const owner = await start();
+      expect(
+        await owner.tokenRequest(
+          { version: 1, op: 'renew', name: 'bot', hours: 2, helperFiles: [helper] },
+          { owner: 'app', url: null },
+        ),
+      ).toMatchObject({
+        ok: false,
+        sentence: expect.stringContaining('project folder') as string,
+      });
+      expect(owner.clientOf(old)).toMatchObject({ name: 'bot' });
+    } finally {
+      await rm(previous, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'applies the helper location policy through the owner’s socket',
+    async () => {
+      const owner = await start();
+      const host = { owner: 'app', url: null } as const;
+      const old = tokenOf(await owner.tokenRequest(newToken(), host));
+      const helper = path.join(dir, 'project/.corral/worktrees/profile/tree/header.cjs');
+      await mkdir(path.dirname(helper), { recursive: true });
+      await writeFile(helper, '');
+      const socket = await serveTokenSocket({
+        profile,
+        answer: (request) => owner.tokenRequest(request, host),
+      });
+      try {
+        const answer = await askTokenOwner(profile, { ...newToken(), helperFiles: [helper] });
+        expect(answer).toMatchObject({
+          ok: false,
+          sentence: expect.stringContaining('project folder') as string,
+        });
+        expect(owner.clientOf(old)).toMatchObject({ name: 'bot' });
+      } finally {
+        await socket.close();
+      }
+    },
+  );
+
+  it('checks every searched helper directory before replacing a live token', async () => {
+    const owner = await start();
+    const host = { owner: 'app', url: null } as const;
+    const old = tokenOf(await owner.tokenRequest(newToken(), host));
+    const before = await readFile(path.join(profile, 'tokens.json'), 'utf8');
+    const helperDirectories = [path.join(dir, 'project')];
+    for (const request of [
+      { ...newToken(), helperFiles: [process.execPath], helperDirectories },
+      { version: 1, op: 'renew', name: 'bot', hours: 2, helperDirectories } as const,
+    ]) {
+      expect(await owner.tokenRequest(request, host)).toMatchObject({
+        ok: false,
+        sentence: expect.stringContaining('project folder') as string,
+      });
+      expect(await readFile(path.join(profile, 'tokens.json'), 'utf8')).toBe(before);
+    }
+    expect(owner.clientOf(old)).toMatchObject({ name: 'bot' });
+  });
+
   it('keeps the live token when a helper would run code from any canvas project folder', async () => {
     const owner = await start();
     const host = { owner: 'app', url: null } as const;
@@ -181,6 +277,22 @@ describe('a token request the core that owns the profile answers', () => {
 });
 
 describe('a token request with no owner', () => {
+  it('checks searched helper directories on renewal without an owner', async () => {
+    const old = tokenOf(await answerUnowned(profile, newToken()));
+    const before = await readFile(path.join(profile, 'tokens.json'), 'utf8');
+    expect(
+      await answerUnowned(profile, {
+        version: 1,
+        op: 'renew',
+        name: 'bot',
+        hours: 2,
+        helperDirectories: [path.join(dir, 'project')],
+      }),
+    ).toMatchObject({ ok: false, sentence: expect.stringContaining('project folder') as string });
+    expect(await readFile(path.join(profile, 'tokens.json'), 'utf8')).toBe(before);
+    expect((await start()).clientOf(old)).toMatchObject({ name: 'bot' });
+  });
+
   it('checks a renewing helper before replacing the live token without an owner', async () => {
     const old = tokenOf(await answerUnowned(profile, newToken()));
     const helper = path.join(dir, 'project', 'header.cjs');

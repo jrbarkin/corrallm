@@ -22,7 +22,7 @@ export interface TokenRequestServices {
   keptCanvas: (file: string) => Promise<CanvasId>;
   /** The file corrallm keeps a canvas in, to name it by. */
   fileOf: (canvas: CanvasId) => Promise<string | undefined>;
-  /** All project folders in the profile, plus the profile itself; never disclosed to the CLI. */
+  /** Projects, recorded workspace roots and the profile; never disclosed to the CLI. */
   helperRoots?: () => Promise<readonly string[]>;
   /** Where the owner's MCP server listens, or will: null when none does. */
   url: string | null;
@@ -36,7 +36,10 @@ export async function answerTokenRequest(
   services: TokenRequestServices,
 ): Promise<TokenAnswer> {
   const { owner, tokens } = services;
-  if (request.op !== 'revoke' && request.helperFiles !== undefined) {
+  if (
+    request.op !== 'revoke' &&
+    (request.helperFiles !== undefined || request.helperDirectories !== undefined)
+  ) {
     try {
       if (services.helperRoots === undefined)
         return {
@@ -44,10 +47,15 @@ export async function answerTokenRequest(
           sentence:
             'This profile owner cannot check credential helper locations. Update corrallm and try again.',
         };
-      const problem = await helperLocationRefusal(
-        request.helperFiles,
-        await services.helperRoots(),
-      );
+      const roots = await services.helperRoots();
+      // Check searched folders first: a bare command must not be shadowed by project text.
+      const problem =
+        (await helperLocationRefusal(
+          request.helperDirectories ?? [],
+          roots,
+          undefined,
+          'directory',
+        )) ?? (await helperLocationRefusal(request.helperFiles ?? [], roots));
       if (problem !== undefined) return { ok: false, sentence: problem };
     } catch {
       return {
