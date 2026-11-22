@@ -10,6 +10,74 @@ import { parseCommand, UsageError } from './args';
 const ID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
 
 describe('parseCommand', () => {
+  it('reads shell agent commands without a token value or a mode', () => {
+    expect(parseCommand(['wait', '--token-file', '/private/token'])).toMatchObject({
+      command: 'wait',
+      tokenFile: '/private/token',
+    });
+    expect(
+      parseCommand(['agents', '--canvas', 'work.corral', '--token-file', '/private/token']),
+    ).toMatchObject({ command: 'agents', canvas: 'work.corral', tokenFile: '/private/token' });
+    expect(
+      parseCommand([
+        'agent',
+        'add',
+        '--canvas',
+        ID,
+        '--cli',
+        'zed',
+        '--connection',
+        'zed.acp',
+        '--model',
+        'm1',
+        '--effort',
+        'high',
+        '--role-file',
+        'role.md',
+      ]),
+    ).toMatchObject({
+      command: 'agent',
+      action: 'add',
+      canvas: ID,
+      adapter: 'zed',
+      connection: 'zed.acp',
+      model: 'm1',
+      effort: 'high',
+      roleFile: 'role.md',
+    });
+    expect(
+      parseCommand(['agent', 'set', '--canvas', ID, '--agent', 'Builder', '--model', '']),
+    ).toMatchObject({ action: 'set', agent: 'Builder', model: null });
+    expect(parseCommand(['send', '--canvas', ID, '--to', 'Builder', '-'])).toMatchObject({
+      command: 'send',
+      brief: '-',
+    });
+    expect(
+      parseCommand([
+        'ask',
+        '--canvas',
+        ID,
+        '--to',
+        'Builder',
+        '--brief',
+        'task.md',
+        '--timeout',
+        '30',
+      ]),
+    ).toMatchObject({ command: 'ask', brief: 'task.md', timeout: 30 });
+    for (const argv of [
+      ['agent', 'add', '--canvas', ID],
+      ['agent', 'set', '--canvas', ID, '--agent', 'a'],
+      ['agent', 'rm', '--canvas', ID, '--agent', 'a', '--model', 'x'],
+      ['agent', 'set', '--canvas', ID, '--agent', 'a', '--mode', 'auto'],
+      ['agents', '--token', 'secret'],
+      ['send', '--canvas', ID, '--to', 'a'],
+      ['send', '--canvas', ID, '--to', 'a', '--brief', 'task', '-'],
+      ['agent', 'set', '--canvas', ID, '--agent', 'a', '--model=-flag'],
+      ['ask', '--canvas', ID, '--to', 'a', '-', '--timeout', '3601'],
+    ])
+      expect(() => parseCommand(argv), argv.join(' ')).toThrow(UsageError);
+  });
   it('reads a read-only dump of the app profile or an explicit profile', () => {
     expect(parseCommand(['dump'])).toEqual({ command: 'dump' });
     expect(parseCommand(['dump', '--profile', '/a profile'])).toEqual({

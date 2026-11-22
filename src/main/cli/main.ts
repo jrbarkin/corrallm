@@ -10,6 +10,7 @@ import { commandLauncher } from './register';
 import { serveCommand } from './serve';
 import { tokenCommand } from './token';
 import { waitCommand } from './wait';
+import { agentCommand } from './agents';
 
 /*
  * `corrallm`, one Node CLI on the same code as the app's core, run under plain Node rather than
@@ -90,6 +91,20 @@ function stopSignal(again: () => void): Promise<NodeJS.Signals> {
 
 async function run(command: Command): Promise<number> {
   switch (command.command) {
+    case 'agents':
+    case 'agent':
+    case 'send':
+    case 'ask':
+      return agentCommand(command, {
+        env: process.env,
+        cwd: process.cwd(),
+        print: (line) => {
+          process.stdout.write(`${line}\n`);
+        },
+        say: (line) => {
+          process.stderr.write(`${line}\n`);
+        },
+      });
     case 'dump':
       return dumpCommand(command, {
         env: process.env,
@@ -164,6 +179,11 @@ function printedBy(command: Command): Printed {
       return command.action === 'header' ? BOTH : ['stderr'];
     case 'wait':
       return ['stdout'];
+    case 'agents':
+    case 'agent':
+    case 'send':
+    case 'ask':
+      return BOTH;
   }
 }
 
@@ -180,12 +200,13 @@ if (process.env.CORRALLM_NATIVE_SELFTEST === '1') {
     if (!(error instanceof UsageError)) throw error;
     console.error(`corrallm: ${error.message}\n\n${USAGE}`);
     // `wait`'s one line, for an orchestrator that reads it rather than stderr.
-    if (process.argv[2] === 'wait') {
+    const json = ['wait', 'agents', 'agent', 'send', 'ask'].includes(process.argv[2] ?? '');
+    if (json) {
       process.stdout.write(
         `${JSON.stringify({ error: { code: 'invalid', sentence: error.message } })}\n`,
       );
     }
-    exit(USAGE_ERROR, process.argv[2] === 'wait' ? BOTH : ['stderr']);
+    exit(USAGE_ERROR, json ? BOTH : ['stderr']);
   }
   if (command) {
     const printed = (): Printed => printedBy(command);

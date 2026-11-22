@@ -356,12 +356,31 @@ describe('needs, status and the needs topic', () => {
     for (const caller of [...REACHED, PARENT]) {
       const who = JSON.stringify(caller);
       // `status` is outside tokens' alone.
-      const status =
+      const statusView =
         caller.kind === 'outside'
-          ? (await ok<{ waitingForYou: NeedsItem[] }>(core, 'status', {}, caller)).waitingForYou
+          ? await ok<{
+              waitingForYou: NeedsItem[];
+              agents: { id: string; waitingForYou: NeedsItem[] }[];
+            }>(core, 'status', {}, caller)
           : undefined;
+      const status = statusView?.waitingForYou;
+      const statusAgent = statusView?.agents.find(({ id }) => id === 'b')?.waitingForYou;
+      const agentRows = (
+        await ok<{ agents: { id: string; waitingForYou: NeedsItem[] }[] }>(
+          core,
+          'agents',
+          {},
+          caller,
+        )
+      ).agents;
+      const agentWaits = agentRows.find(({ id }) => id === 'b')?.waitingForYou;
+      if (caller === PARENT) expect(agentRows.map(({ id }) => id)).not.toContain('b');
       const boundaries: [string, NeedsItem[]][] = [
         ['needs', (await needsOf(core, caller)).filter(({ agent }) => agent === 'b')],
+        ...(agentWaits === undefined ? [] : [['agents', agentWaits] as [string, NeedsItem[]]]),
+        ...(statusAgent === undefined
+          ? []
+          : [['status agent', statusAgent] as [string, NeedsItem[]]]),
         ...(status === undefined
           ? []
           : [['status', status.filter(({ agent }) => agent === 'b')] as [string, NeedsItem[]]]),
@@ -417,6 +436,36 @@ describe('needs, status and the needs topic', () => {
 });
 
 describe('the counts agents and session.get give', () => {
+  it('reports saved model and effort to reached readers before a native session starts', async () => {
+    const core = await start(raising([]).connector);
+    await ok(core, 'agent.setSettings', {
+      agent: 'b',
+      adapter: 'claude-code',
+      settings: { model: 'chosen', effort: 'high' },
+    });
+    for (const caller of [YOU, ...REACHED]) {
+      const view = await ok<{ agents: { id: string }[] }>(core, 'agents', {}, caller);
+      expect(view.agents.find(({ id }) => id === 'b')).toMatchObject({
+        model: 'chosen',
+        effort: 'high',
+        modelSource: 'agent',
+        effortSource: 'agent',
+        waitingForYou: [],
+      });
+    }
+    const status = await ok<{ agents: { id: string }[] }>(core, 'status', {}, ORCHESTRATOR);
+    expect(status.agents.find(({ id }) => id === 'b')).toMatchObject({
+      model: 'chosen',
+      effort: 'high',
+      modelSource: 'agent',
+      effortSource: 'agent',
+    });
+    expect(
+      (await ok<{ agents: { id: string }[] }>(core, 'agents', {}, STRANGER)).agents.map(
+        ({ id }) => id,
+      ),
+    ).not.toContain('b');
+  });
   it('count each prompt the owner holds once, for whoever reaches its agent', async () => {
     const core = await start(raising([approval, screen]).connector);
     await ok(core, 'message', { to: 'b', body: 'Clean up' });
