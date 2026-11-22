@@ -559,7 +559,14 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
             title: 'Orchestrator request',
             body: 'An agent asks to use a project folder. Review its request in Needs you.',
           })
-          .then((result) => { notifier?.record(result); }, () => { notifier?.record('failed'); });
+          .then(
+            (result) => {
+              notifier?.record(result);
+            },
+            () => {
+              notifier?.record('failed');
+            },
+          );
     },
     unnotify: (id) => {
       host.unnotify(id);
@@ -1412,7 +1419,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ? undefined
       : new Notifier({
           needs: (canvas) => waitingFor(canvas),
-            run: (canvas) => engines.canvas(canvas)?.engine.run,
+          run: (canvas) => engines.canvas(canvas)?.engine.run,
           runs: (canvas) => engines.canvas(canvas) !== undefined,
           agentName: (canvas, agent) =>
             agentName(engines.canvas(canvas)?.document.nodes ?? [], agent),
@@ -1744,7 +1751,10 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       // refused at its next seam once it no longer does.
       current: (caller) => {
         if (caller.kind === 'outside')
-          return tokens.revoked(caller.token) || (orchestrators.isName(caller.name) && orchestrators.canvas(caller.name) === undefined) ? TOKEN_REPLACED : undefined;
+          return tokens.revoked(caller.token) ||
+            (orchestrators.isName(caller.name) && orchestrators.canvas(caller.name) === undefined)
+            ? TOKEN_REPLACED
+            : undefined;
         return authority.current(caller) || config.sessions?.callers?.(caller) === true
           ? undefined
           : SESSION_ENDED;

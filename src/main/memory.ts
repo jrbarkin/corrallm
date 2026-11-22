@@ -216,7 +216,9 @@ export class CanvasMemory {
   }
 
   /** Its kept project association from memory, including the current staged write. */
-  projectOf(canvas: CanvasId): TrustedPath | undefined { return this.#current(canvas).project; }
+  projectOf(canvas: CanvasId): TrustedPath | undefined {
+    return this.#current(canvas).project;
+  }
 
   /** Its file association now, including changes in the write currently being applied. */
   fileOf(canvas: CanvasId): TrustedPath | undefined {

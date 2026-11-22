@@ -90,14 +90,18 @@ export class Orchestrators {
   }
   /** Begin maintenance only once the owner has finished composing the core. */
   async start(): Promise<void> {
-    await this.renew(false).catch(() => { console.error('Approved orchestrator credentials could not be refreshed.'); });
+    await this.renew(false).catch(() => {
+      console.error('Approved orchestrator credentials could not be refreshed.');
+    });
     this.#timer ??= setInterval(() => {
       void this.renew(false).catch(() => {
         console.error('An approved orchestrator credential could not be renewed.');
       });
     }, 60_000).unref();
   }
-  suppressNotifications(): void { for (const id of this.#pending.keys()) this.#deps.unnotify?.(id); }
+  suppressNotifications(): void {
+    for (const id of this.#pending.keys()) this.#deps.unnotify?.(id);
+  }
   pendingCount(): number {
     return this.#pending.size;
   }
@@ -119,7 +123,10 @@ export class Orchestrators {
   /** A grant bearer is confined to this canvas, even if ordinary tokens can create canvases. */
   canvas(name: string): CanvasId | undefined {
     const row = [...this.#kept.values()].find((one) => nameOf(one.id) === name);
-    return row?.revoked === null && this.#deps.current?.(row.canvas as CanvasId, row.folder) !== false ? (row.canvas as CanvasId) : undefined;
+    return row?.revoked === null &&
+      this.#deps.current?.(row.canvas as CanvasId, row.folder) !== false
+      ? (row.canvas as CanvasId)
+      : undefined;
   }
   keeps(canvas: CanvasId): boolean {
     return [...this.#kept.values()].some((row) => row.canvas === canvas && row.revoked === null);
@@ -178,12 +185,20 @@ export class Orchestrators {
           throw new Error('Choose this approval’s existing private file.');
       }
       if (known?.revoked === null && known.identity === folderIdentity) {
-        if (this.#deps.current?.(known.canvas as CanvasId, canonical) === false) throw new Error('The approved canvas no longer uses this folder. Revoke its approval in Settings and request another.');
+        if (this.#deps.current?.(known.canvas as CanvasId, canonical) === false)
+          throw new Error(
+            'The approved canvas no longer uses this folder. Revoke its approval in Settings and request another.',
+          );
         await this.#queue(async () => {
           const current = this.#kept.get(known.id);
           if (current?.revoked !== null || this.#stopped()) throw new Error(ENDED);
           const live = this.#deps.tokens.grant(nameOf(current.id));
-          if (exists === undefined || live === undefined || !this.#deps.tokens.matchesHash(nameOf(current.id), current.fileHash) || live.expires - Date.now() <= 15 * 60_000)
+          if (
+            exists === undefined ||
+            live === undefined ||
+            !this.#deps.tokens.matchesHash(nameOf(current.id), current.fileHash) ||
+            live.expires - Date.now() <= 15 * 60_000
+          )
             await this.#issue(current);
         });
         return {
@@ -287,7 +302,10 @@ export class Orchestrators {
         const canvas = await this.#deps.trusted(
           id,
           trusted,
-          previous !== undefined && this.#deps.current?.(previous.canvas as CanvasId, folder) !== false ? previous.canvas as CanvasId : undefined,
+          previous !== undefined &&
+            this.#deps.current?.(previous.canvas as CanvasId, folder) !== false
+            ? (previous.canvas as CanvasId)
+            : undefined,
         );
         const created = Date.now();
         const row: Kept = {
@@ -346,10 +364,13 @@ export class Orchestrators {
           !this.#deps.tokens.matchesHash(nameOf(row.id), row.fileHash) ||
           live.expires - Date.now() <= 15 * 60_000
         ) {
-          try { await this.#issue(row); }
-          catch {
+          try {
+            await this.#issue(row);
+          } catch {
             await this.#deps.tokens.revoke(nameOf(row.id)).catch(() => undefined);
-            console.error('An approved orchestrator credential could not be renewed; its bearer is refused.');
+            console.error(
+              'An approved orchestrator credential could not be renewed; its bearer is refused.',
+            );
           }
         }
       }
@@ -458,8 +479,13 @@ export class Orchestrators {
     const next = new Map(this.#kept);
     if (row !== undefined) next.set(row.id, row);
     if (next.size > 256) {
-      const past = [...next.values()].filter((one) => one.revoked !== null && one.id !== row?.id).sort((a, b) => a.created - b.created);
-      for (const old of past) { if (next.size <= 256) break; next.delete(old.id); }
+      const past = [...next.values()]
+        .filter((one) => one.revoked !== null && one.id !== row?.id)
+        .sort((a, b) => a.created - b.created);
+      for (const old of past) {
+        if (next.size <= 256) break;
+        next.delete(old.id);
+      }
     }
     await writeWhole(
       this.#deps.file,

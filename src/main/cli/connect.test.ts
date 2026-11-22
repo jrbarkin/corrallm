@@ -5,7 +5,9 @@ import { afterEach, beforeEach, expect, it as test, vi } from 'vitest';
 const it = test.skipIf(process.platform === 'win32');
 import { connectCommand, parseConnect } from './connect';
 const git = vi.hoisted(() => vi.fn());
-vi.mock('node:child_process', () => ({ execFile: Object.assign(() => undefined, { [Symbol.for('nodejs.util.promisify.custom')]: git }) }));
+vi.mock('node:child_process', () => ({
+  execFile: Object.assign(() => undefined, { [Symbol.for('nodejs.util.promisify.custom')]: git }),
+}));
 import { askTokenOwner } from '../core/token-socket';
 vi.mock('../core/token-socket', () => ({ askTokenOwner: vi.fn() }));
 vi.mock('../sessions/installed', () => ({ installedClis: () => Promise.resolve({}) }));
@@ -81,12 +83,24 @@ it('bounds timeout and strictly parses its paths and flags', () => {
     expect(() => parseConnect(args)).toThrow();
 });
 
-
 it('keeps a Git top-level folder’s trailing space when choosing the default', async () => {
   const project = path.join(home, 'spaced project ');
   await mkdir(project);
   git.mockResolvedValue({ stdout: `${project}\n` });
   vi.mocked(askTokenOwner).mockResolvedValue(undefined);
-  await connectCommand(parseConnect([]), { env: {}, cwd: folder, home, say: () => undefined, loginEnv: {} });
-  expect(askTokenOwner).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ folder: project, into: path.join(home, '.corrallm', 'spaced project .token') }), expect.any(Object));
+  await connectCommand(parseConnect([]), {
+    env: {},
+    cwd: folder,
+    home,
+    say: () => undefined,
+    loginEnv: {},
+  });
+  expect(askTokenOwner).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({
+      folder: project,
+      into: path.join(home, '.corrallm', 'spaced project .token'),
+    }),
+    expect.any(Object),
+  );
 });

@@ -343,8 +343,13 @@ function serveOne(
     }
     state.busy = true;
     const controller = new AbortController();
-    if (request.op === 'connect') state.cancel = () => { controller.abort(); };
-    socket.once('close', () => { controller.abort(); });
+    if (request.op === 'connect')
+      state.cancel = () => {
+        controller.abort();
+      };
+    socket.once('close', () => {
+      controller.abort();
+    });
     answer(request, controller.signal)
       .then(reply, (error: unknown) => {
         refuse(error instanceof Error ? error.message : String(error));

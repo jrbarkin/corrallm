@@ -84,7 +84,9 @@ export function settingsOps({
         const intent = args.orchestrator;
         try {
           if (intent.action === 'revoke') {
-            const changed = await orchestrators.revoke(intent.id, () => { ctx.noReturn(); });
+            const changed = await orchestrators.revoke(intent.id, () => {
+              ctx.noReturn();
+            });
             if (changed) ctx.published('settings');
             return { orchestrator: { changed } };
           } else
@@ -92,7 +94,9 @@ export function settingsOps({
               intent.id,
               intent.action,
               intent.action === 'allow' && intent.withoutApprovals,
-              () => { ctx.noReturn(); },
+              () => {
+                ctx.noReturn();
+              },
             );
         } catch {
           throw new OpFailure(

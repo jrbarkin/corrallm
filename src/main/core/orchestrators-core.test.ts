@@ -128,9 +128,11 @@ it('refuses a request on a serve-only owner without raising a card', async () =>
   expect(view.ok && view.value.orchestrators?.pending).toEqual([]);
 });
 
-
 it('ends access when the approved canvas chooses another project folder', async () => {
-  const answer = core.tokenRequest({ version: 1, op: 'connect', folder, into, timeout: 60 }, { owner: 'app', url: 'http://127.0.0.1:47104/mcp' });
+  const answer = core.tokenRequest(
+    { version: 1, op: 'connect', folder, into, timeout: 60 },
+    { owner: 'app', url: 'http://127.0.0.1:47104/mcp' },
+  );
   let id = '';
   await vi.waitFor(async () => {
     const read = await core.call('settings.get', {}, human);
@@ -138,7 +140,13 @@ it('ends access when the approved canvas chooses another project folder', async 
     id = read.value.orchestrators?.pending[0]?.id ?? '';
     expect(id).not.toBe('');
   });
-  expect(await core.call('settings.set', { orchestrator: { action: 'allow', id, withoutApprovals: false } }, human)).toMatchObject({ ok: true });
+  expect(
+    await core.call(
+      'settings.set',
+      { orchestrator: { action: 'allow', id, withoutApprovals: false } },
+      human,
+    ),
+  ).toMatchObject({ ok: true });
   const approved = await answer;
   if (!approved.ok || approved.op !== 'connect') throw new Error('No approval');
   const bearer = (await readFile(into, 'utf8')).trim();
@@ -146,6 +154,8 @@ it('ends access when the approved canvas chooses another project folder', async 
   const other = path.join(root, 'other-project');
   await mkdir(other);
   pickFolder.mockResolvedValue(mintTrustedPath(other));
-  expect(await core.call('project.choose', { canvas: approved.canvas }, asHuman(1))).toMatchObject({ ok: true });
+  expect(await core.call('project.choose', { canvas: approved.canvas }, asHuman(1))).toMatchObject({
+    ok: true,
+  });
   expect(core.clientOf(bearer)).toBeUndefined();
 });
