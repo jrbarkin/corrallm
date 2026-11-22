@@ -251,6 +251,7 @@ describe('createCore', () => {
         notifications: { enabled: true, lastDelivery: null },
         links: { state: 'ready', sites: [], builtIn: ['https://github.com'] },
         command: NO_COMMAND,
+        orchestrators: { approved: [], pending: [] },
       },
     });
   });
@@ -741,6 +742,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
         notifications: { enabled: false, lastDelivery: null },
         links: { state: 'ready', sites: [SECRET, LOCAL], builtIn: ['https://github.com'] },
         command: NO_COMMAND,
+        orchestrators: { approved: [], pending: [] },
       },
     });
     for (const party of READERS) {
@@ -782,6 +784,7 @@ describe('settings, yours alone (B22a C1, C2, C6)', () => {
               sentence: 'corrallm couldn’t read the sites you said to open without asking.',
             },
             command: NO_COMMAND,
+            orchestrators: { approved: [], pending: [] },
           },
         });
         expect(await started.call('settings.get', {}, CALLERS['outside-read'])).toEqual({
