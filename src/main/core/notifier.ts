@@ -254,6 +254,9 @@ export class Notifier {
   }
 
   /** How the last notification went (C9), without values: none yet, if none was attempted. */
+  /** A profile-wide request uses the same value-free delivery status. */
+  record(result: NotificationResult): void { if (!this.#closed) this.#settle(result); }
+
   status(): NotificationResult | undefined {
     return this.#status;
   }

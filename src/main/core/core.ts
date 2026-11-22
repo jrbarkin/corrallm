@@ -57,6 +57,7 @@ import { agentEnvironment, loginShellEnvironment } from '../sessions/environment
 import { ConversationClaims } from '../sessions/claims';
 import { SessionManager } from '../sessions/manager';
 import { Settings } from '../settings';
+import { Orchestrators, OPEN_APP } from './orchestrators';
 import { UsageReadings } from '../usage';
 import { committer, refusalOf } from './canvas/commit';
 import { Documents } from './canvas/documents';
@@ -294,6 +295,7 @@ export interface Core extends Dispatcher {
   tokenRequest(
     request: TokenRequest,
     host: { owner: 'app' | 'serve'; url: string | null; unserved?: string },
+    signal?: AbortSignal,
   ): Promise<TokenAnswer>;
   /** What the user chose for corrallm as a whole: the port its API server keeps, here. */
   settings: Pick<Settings, 'apiPort' | 'keepApiPort'>;
@@ -410,6 +412,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       countPresence({
         canvases: () => engines.opened().flatMap((canvas) => engines.canvas(canvas) ?? []),
         needs: (canvas) => waitingFor(canvas),
+        globalNeeds: () => orchestrators.pendingCount(),
         jobs: () => setups.jobs() + workspaceQueue.size,
         notify: () => notifying,
       }),
@@ -433,7 +436,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const memory: CanvasMemory = new CanvasMemory(
     store,
     undefined,
-    (canvas: CanvasId): boolean => documents.unsaved(canvas),
+    (canvas: CanvasId): boolean => documents.unsaved(canvas) || orchestrators.keeps(canvas),
     isConversationId,
     // A canvas deleted takes its project link with it, which the workspace store keeps in memory.
     (canvas: CanvasId): void => {
@@ -535,6 +538,46 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       });
     },
   });
+  const orchestrators = new Orchestrators({
+    file: path.join(profile, 'orchestrators.json'),
+    current: (canvas, folder) => memory.projectOf(canvas) === folder,
+    tokens,
+    changed: (canvas) => {
+      topics.changed('settings', 'you');
+      presence.changed();
+      if (canvas !== undefined)
+        void states.refresh(canvas).catch(() => {
+          console.error('The approved canvas metadata could not be refreshed.');
+        });
+    },
+    notify: (id) => {
+      if (notifying)
+        void host
+          .notify({
+            handle: id,
+            cue: 'orchestrator-request',
+            title: 'Orchestrator request',
+            body: 'An agent asks to use a project folder. Review its request in Needs you.',
+          })
+          .then((result) => { notifier?.record(result); }, () => { notifier?.record('failed'); });
+    },
+    unnotify: (id) => {
+      host.unnotify(id);
+    },
+    trusted: async (id, folder, previous) => {
+      const canvas = previous ?? (id as CanvasId);
+      if (previous === undefined || !memory.keeps(canvas)) {
+        documents.create(canvas, 'you');
+        await documents.keep(canvas);
+      } else await documents.load(canvas);
+      await memory.update(canvas, (kept) => ({ ...kept, project: folder }));
+      await projects.restore(canvas);
+      await journal.open(canvas);
+      await engines.open(canvas);
+      return canvas;
+    },
+  });
+  await orchestrators.load();
   const settings = new Settings(path.join(profile, 'settings.json'));
   /** Whether OS notifications are on (B14 C11), as the settings say now: read again as they change. */
   let notifying = await settings.notificationsEnabled();
@@ -995,6 +1038,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   // What the core says of each canvas it keeps: its `canvas:<c>` topic, from each commit, and the
   // list of them, which changes as canvas memory, the journal and the windows do.
   const states = new CanvasStates({
+    name: (canvas) => orchestrators.name(canvas),
     documents,
     memory,
     journal,
@@ -1098,6 +1142,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   const notificationsChanged = (on: boolean) => {
     preference += 1;
     notifying = on;
+    if (!on) orchestrators.suppressNotifications();
     notifier?.preferenceChanged();
     // Main asks the OS for authorization only while it is on: told whenever it changes.
     presenceChanged();
@@ -1367,7 +1412,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       ? undefined
       : new Notifier({
           needs: (canvas) => waitingFor(canvas),
-          run: (canvas) => engines.canvas(canvas)?.engine.run,
+            run: (canvas) => engines.canvas(canvas)?.engine.run,
           runs: (canvas) => engines.canvas(canvas) !== undefined,
           agentName: (canvas, agent) =>
             agentName(engines.canvas(canvas)?.document.nodes ?? [], agent),
@@ -1598,6 +1643,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
           directories,
           files,
           settings,
+          orchestrators,
           command,
           api: () => api,
           links,
@@ -1698,7 +1744,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       // refused at its next seam once it no longer does.
       current: (caller) => {
         if (caller.kind === 'outside')
-          return tokens.revoked(caller.token) ? TOKEN_REPLACED : undefined;
+          return tokens.revoked(caller.token) || (orchestrators.isName(caller.name) && orchestrators.canvas(caller.name) === undefined) ? TOKEN_REPLACED : undefined;
         return authority.current(caller) || config.sessions?.callers?.(caller) === true
           ? undefined
           : SESSION_ENDED;
@@ -1760,6 +1806,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     observer.close();
     closing = true;
     fallback.close();
+    await orchestrators.close();
     presence.close();
     notifier?.close();
     sessionViews.close();
@@ -1807,6 +1854,7 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
   };
   // Composed: what main shows of it, its first snapshot sent now, so main never guesses.
   presence.start();
+  await orchestrators.start();
   return {
     surface: dispatcher.surface,
     ops: dispatcher.ops,
@@ -1814,6 +1862,18 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
     project: (projection, raw, caller, signal) =>
       dispatcher.project(projection, raw, caller, signal),
     call: <N extends OpName>(name: N, raw: unknown, caller: Caller, signal?: AbortSignal) => {
+      if (
+        name === 'canvas.create' &&
+        caller.kind === 'outside' &&
+        orchestrators.isName(caller.name)
+      )
+        return Promise.resolve({
+          ok: false as const,
+          error: {
+            code: 'refused' as const,
+            sentence: 'This orchestrator approval reaches its own canvas only.',
+          },
+        });
       const refused = stopping(name);
       if (refused) return Promise.resolve(refused);
       return children.run(() => dispatcher.call(name, raw, caller, signal)) as Promise<
@@ -1866,16 +1926,28 @@ export async function createCore(config: CoreConfig, host: HostServices): Promis
       if (agent !== undefined) return agent;
       const caller = tokens.clientOf(token);
       if (caller === undefined) return undefined;
+      if (orchestrators.isName(caller.name)) {
+        const canvas = orchestrators.canvas(caller.name);
+        if (canvas === undefined) return undefined;
+        orchestrators.used(caller.name);
+        return { ...caller, canvases: [canvas] };
+      }
       const made = documents.createdBy(`outside:${caller.name}`);
       return { ...caller, canvases: [...new Set([...caller.canvases, ...made])] };
     },
     listed: (caller) => {
       authority.listed(caller);
     },
-    tokenRequest: (request, { owner, url, unserved }) =>
+    tokenRequest: (request, { owner, url, unserved }, signal) =>
       answerTokenRequest(request, {
         owner,
         tokens,
+        connect: async (input) => {
+          if (closing || barrier !== undefined || url === null)
+            return { ok: false, sentence: OPEN_APP };
+          const answer = await orchestrators.request(input, signal);
+          return answer.ok ? { ...answer, url } : answer;
+        },
         keptCanvas: (file) => keptCanvas(file, memory, 'reached'),
         fileOf: async (canvas) => (await memory.get(canvas)).file,
         helperRoots: async () => [

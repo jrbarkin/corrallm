@@ -149,6 +149,10 @@ export async function tokenCommand(command: TokenCommand, io: TokenIO): Promise<
     say(`corrallm token: ${answer.sentence}`);
     return 1;
   }
+  if (answer.op === 'connect') {
+    say('corrallm token: the owner answered another kind of request.');
+    return 1;
+  }
   if (answer.op === 'revoke') {
     say(
       `corrallm token: the token "${answer.name}" is revoked, by ${BY[answer.owner]}: its next call is refused, and a call it has going ends.`,
@@ -288,7 +292,7 @@ function madeText(
     helper: HelperInvocation | undefined;
   },
 ): string[] {
-  const hours = request.op === 'revoke' ? 0 : request.hours;
+  const hours = request.op === 'revoke' || request.op === 'connect' ? 0 : request.hours;
   const reach = answer.canvases
     .map(({ id, file }) => `${file === undefined ? 'a canvas' : path.basename(file)} (${id})`)
     .join(', ');

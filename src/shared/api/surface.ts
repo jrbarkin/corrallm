@@ -159,7 +159,7 @@ export const SURFACE = {
     kind: 'read',
     scope: 'none',
     reads: 'settings',
-    varies: ['notifications', 'links', 'command'],
+    varies: ['notifications', 'links', 'command', 'orchestrators'],
   },
   // B12 C2, B22a C1: your settings are yours alone to set (the consent deviation, Core Server D8).
   'settings.set': { access: Y, kind: 'command', scope: 'none' },

@@ -82,6 +82,18 @@ An outside coding agent or script can use corrallm's local MCP server, registere
 
 ### Using corrallm from an agent
 
+With the command installed (**Settings → The corrallm command → Install**), start from your own shell in the project folder, with corrallm's app open:
+
+```sh
+corrallm connect
+```
+
+No terminal or MCP registration is needed. Ask the person: “Please review my orchestrator request in Needs you and choose Allow.” The card shows the real folder, what access permits and a separate unticked allowance box. You can name another folder with `--folder`, a private file outside it with `--into`, and an answer budget with `--timeout` (300 seconds by default, at most 3600). Your approval lasts until revoked in **Settings → Approved orchestrators**; revoking keeps the canvas and its agents. Corrallm creates a kept canvas for the folder and writes the credential to `~/.corrallm/<folder-basename>.token` (0600), rotating it while it runs. A later connect to that folder and file reuses the approval. It never prints the credential.
+
+Use the environment lines and canvas id it prints to run `corrallm agents`, `corrallm agent add|set|rm`, `corrallm send` or `corrallm ask` from your shell. They use the existing outside-writer rules: backend changes and deletion can still need your approval, and setup and private prompts remain yours. MCP registration is optional; tools load only at a client's session start. Connect prints the registrations for installed clients if you want them. An agent running inside corrallm uses its own tools instead of connect. With only `serve` running, open the app to approve a new request.
+
+For a manually scoped, expiring token instead, use the following setup:
+
 If you are the coding agent, ask the person to do steps 1–3; then do steps 4–5 yourself. Ask them to stay available for **Needs you**, including setup cards that may appear only after your first message.
 
 1. **Person — prepare the command.** Ask: “Please install the corrallm command, or build it from source, and check its `--help` in your terminal.” The packaged command ships its own Node.

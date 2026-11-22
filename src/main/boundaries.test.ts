@@ -378,6 +378,8 @@ describe('main’s files', () => {
     expect(minting.sort()).toEqual([
       'src/main/core/host.ts',
       'src/main/core/host/app.ts',
+      // Only the human Allow on a checked orchestrator request mints here.
+      'src/main/core/orchestrators.ts',
       // A workspace's checkout, minted only once it is verified, at every use, as the one the
       // core made of the picked repository in the folder it owns there (B9a Design §2).
       'src/main/core/workspaces/checkout.ts',

@@ -753,6 +753,12 @@ export const MIGRATIONS: readonly Migration[] = [
     minReader: 15,
     sql: 'SELECT 1;',
   },
+  {
+    // Only readers that honor durable orchestrator approvals and revocations may open this profile.
+    version: 16,
+    minReader: 16,
+    sql: 'SELECT 1;',
+  },
 ];
 
 /** The schema this code makes and reads. */

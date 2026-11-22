@@ -12,6 +12,7 @@ import { commandView } from './command-words';
 import { catalog } from '../catalog';
 import { ipcErrorMessage } from '../ipc-error';
 import './SettingsPage.css';
+import { ApprovedOrchestrators } from './Orchestrators';
 
 type Intent = NonNullable<Parameters<GuiApi['settingsSet']>[0]>;
 type Client = Pick<GuiApi, 'settingsSet' | 'appCommand'>;
@@ -198,6 +199,7 @@ export function SettingsPage({
             <DefaultAgentControl client={client} mirror={mirror} disabled={!current} />
           </section>
 
+          <ApprovedOrchestrators client={client} mirror={mirror} />
           <section aria-labelledby="settings-notifications">
             <h3 id="settings-notifications">Notifications</h3>
             {settings === undefined ? (

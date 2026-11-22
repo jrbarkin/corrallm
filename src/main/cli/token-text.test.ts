@@ -53,6 +53,8 @@ beforeEach(async () => {
   owner = await serveTokenSocket({
     profile,
     answer: (request) => {
+      if (request.op === 'connect')
+        return Promise.resolve({ ok: false as const, sentence: 'Not a token request' });
       asked.push(request);
       return Promise.resolve(
         request.op === 'revoke'

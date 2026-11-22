@@ -103,3 +103,23 @@
   outline: 2px solid var(--graph-accent, #3a6fd8);
   outline-offset: 2px;
 }
+
+.orchestrator-requests {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 200;
+  width: min(440px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 20px;
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+}
+.orchestrator-requests label {
+  display: block;
+  margin: 12px 0;
+}

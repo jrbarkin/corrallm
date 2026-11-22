@@ -296,10 +296,12 @@ function tokenLine(
   names: ReadonlyMap<CanvasId, string>,
 ): string {
   if (!answer.ok) return `corrallm serve: corrallm token was refused: ${answer.sentence}`;
+  if (answer.op === 'connect')
+    return 'corrallm serve: open the corrallm app to approve an orchestrator.';
   if (answer.op === 'revoke') {
     return `corrallm serve: corrallm token revoked the token "${answer.name}": it is refused from now on.`;
   }
-  const hours = request.op === 'revoke' ? 0 : request.hours;
+  const hours = request.op === 'revoke' || request.op === 'connect' ? 0 : request.hours;
   const reach = answer.canvases
     .map(({ id, file }) => names.get(id) ?? (file === undefined ? id : path.basename(file)))
     .join(', ');

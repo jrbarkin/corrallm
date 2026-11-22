@@ -26,7 +26,8 @@ export type Brand =
   | 'TaskId'
   | 'TokenId'
   | 'WorktreeId'
-  | 'AttemptId';
+  | 'AttemptId'
+  | 'OrchestratorId';
 
 /** Each id schema's brand, at run time. */
 export const ID_BRANDS = z.registry<{ brand: Brand }>();
@@ -55,6 +56,9 @@ export const NeedId = brandedId(
     ),
 );
 export type NeedId = z.infer<typeof NeedId>;
+
+/** A profile's orchestrator approval or pending request, yours alone. */
+export const OrchestratorId = brandedId('OrchestratorId', z.uuid());
 
 /**
  * A workspace of a canvas (B9a), by its record's id: resolved only among the records that canvas

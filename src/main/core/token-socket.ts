@@ -70,6 +70,15 @@ const HelperPath = CanvasFile.refine(
 const TokenRequestSchema = z.discriminatedUnion('op', [
   z.strictObject({
     version: z.literal(1),
+    op: z.literal('connect'),
+    folder: HelperPath,
+    into: HelperPath,
+    timeout: z.int().min(1).max(3600),
+    helperFiles: z.array(HelperPath).min(1).max(3).optional(),
+    helperDirectories: z.array(HelperPath).min(1).max(128).optional(),
+  }),
+  z.strictObject({
+    version: z.literal(1),
     op: z.literal('new'),
     name: Name,
     hours: Hours,
@@ -92,6 +101,14 @@ const TokenRequestSchema = z.discriminatedUnion('op', [
 const Owner = z.enum(['app', 'serve', 'none']);
 
 const TokenAnswerSchema = z.union([
+  z.strictObject({
+    ok: z.literal(true),
+    op: z.literal('connect'),
+    canvas: z.uuid(),
+    folder: HelperPath,
+    into: HelperPath,
+    url: z.string().max(2048).nullable(),
+  }),
   z.strictObject({
     ok: z.literal(true),
     owner: Owner,
@@ -182,7 +199,7 @@ export async function serveTokenSocket({
   platform = process.platform,
 }: {
   profile: string;
-  answer: (request: TokenRequest) => Promise<TokenAnswer>;
+  answer: (request: TokenRequest, signal: AbortSignal) => Promise<TokenAnswer>;
   platform?: NodeJS.Platform;
 }): Promise<TokenSocket> {
   const at = socketPath(await checkFolder(path.dirname(socketPath(profile, platform))), platform);
@@ -201,7 +218,7 @@ export async function serveTokenSocket({
   }
 
   /** Each connection open, and whether its request is being answered. */
-  const connections = new Map<Socket, { busy: boolean }>();
+  const connections = new Map<Socket, { busy: boolean; cancel?: () => void }>();
   const server = createServer((socket) => {
     const state = { busy: false };
     connections.set(socket, state);
@@ -255,6 +272,7 @@ export async function serveTokenSocket({
         });
         // A request being answered is answered (a token it makes is then seen); the rest go now.
         for (const [socket, state] of connections) {
+          if (state.cancel !== undefined) state.cancel();
           if (!state.busy) socket.destroy();
         }
       })),
@@ -274,14 +292,19 @@ export async function serveTokenSocket({
  */
 function serveOne(
   socket: Socket,
-  answer: (request: TokenRequest) => Promise<TokenAnswer>,
-  state: { busy: boolean },
+  answer: (request: TokenRequest, signal: AbortSignal) => Promise<TokenAnswer>,
+  state: { busy: boolean; cancel?: () => void },
 ): void {
   let received = Buffer.alloc(0);
   let answered = false;
   const reply = (value: TokenAnswer) => {
     let text = `${JSON.stringify(value)}\n`;
-    if (Buffer.byteLength(text) > MAX_LINE && value.ok && value.op !== 'revoke') {
+    if (
+      Buffer.byteLength(text) > MAX_LINE &&
+      value.ok &&
+      value.op !== 'revoke' &&
+      value.op !== 'connect'
+    ) {
       // File labels are optional. Never lose a minted token, or clip the grant, just because
       // long/non-ASCII file names make its presentation exceed the wire budget.
       text = `${JSON.stringify({ ...value, canvases: value.canvases.map(({ id }) => ({ id })) })}\n`;
@@ -319,7 +342,10 @@ function serveOne(
       return;
     }
     state.busy = true;
-    answer(request)
+    const controller = new AbortController();
+    if (request.op === 'connect') state.cancel = () => { controller.abort(); };
+    socket.once('close', () => { controller.abort(); });
+    answer(request, controller.signal)
       .then(reply, (error: unknown) => {
         refuse(error instanceof Error ? error.message : String(error));
       })

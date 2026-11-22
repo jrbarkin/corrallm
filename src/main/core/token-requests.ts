@@ -1,6 +1,8 @@
 import type { CanvasId } from '../../shared/canvas';
 import type { TokenAnswer, TokenOwner, TokenRequest } from './token-socket';
 import type { TokenStore } from './tokens';
+import { OPEN_APP, isOrchestratorName } from './orchestrators';
+import type { ConnectAnswer } from './orchestrators';
 import { helperLocationRefusal } from './helper-location';
 
 /*
@@ -17,6 +19,7 @@ import { helperLocationRefusal } from './helper-location';
 export interface TokenRequestServices {
   /** Who answers. */
   owner: TokenOwner;
+  connect?: (request: Extract<TokenRequest, { op: 'connect' }>) => Promise<ConnectAnswer>;
   tokens: Pick<TokenStore, 'create' | 'renew' | 'revoke' | 'grant'>;
   /** The canvas a file holds, if corrallm keeps it there with its folder; else rejects, saying why. */
   keptCanvas: (file: string) => Promise<CanvasId>;
@@ -36,6 +39,11 @@ export async function answerTokenRequest(
   services: TokenRequestServices,
 ): Promise<TokenAnswer> {
   const { owner, tokens } = services;
+  if (request.op !== 'connect' && isOrchestratorName(request.name))
+    return {
+      ok: false,
+      sentence: 'Manage this approved orchestrator in the app’s Settings, including Revoke.',
+    };
   if (
     request.op !== 'revoke' &&
     (request.helperFiles !== undefined || request.helperDirectories !== undefined)
@@ -47,7 +55,10 @@ export async function answerTokenRequest(
           sentence:
             'This profile owner cannot check credential helper locations. Update corrallm and try again.',
         };
-      const roots = await services.helperRoots();
+      const roots = [
+        ...(await services.helperRoots()),
+        ...(request.op === 'connect' ? [request.folder] : []),
+      ];
       // Check searched folders first: a bare command must not be shadowed by project text.
       const problem =
         (await helperLocationRefusal(
@@ -66,6 +77,10 @@ export async function answerTokenRequest(
     }
   }
   switch (request.op) {
+    case 'connect':
+      return owner === 'app' && services.connect !== undefined
+        ? services.connect(request)
+        : { ok: false, sentence: OPEN_APP };
     case 'new': {
       const canvases: CanvasId[] = [];
       for (const file of request.canvases) {

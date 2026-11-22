@@ -699,7 +699,8 @@ describe.skipIf(process.platform === 'win32')('the token socket the core process
       url,
       canvases: [{ id: CANVAS, file }],
     });
-    const token = answer?.ok === true && answer.op !== 'revoke' ? answer.token : '';
+    const token =
+      answer?.ok === true && answer.op !== 'revoke' && answer.op !== 'connect' ? answer.token : '';
     expect(await mcp(url, { Authorization: `Bearer ${token}` })).toMatchObject({ status: 200 });
     const kept = await readFile(path.join(profile, 'tokens.json'), 'utf8');
     expect(kept).toContain(createHash('sha256').update(token).digest('hex'));

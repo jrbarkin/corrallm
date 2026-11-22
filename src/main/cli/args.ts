@@ -1,3 +1,5 @@
+import { parseConnect } from './connect';
+import type { ConnectCommand } from './connect';
 import { parseArgs } from 'node:util';
 
 import { z } from 'zod';
@@ -24,6 +26,7 @@ import {
 const HOURS = `<1-${String(MAX_TOKEN_HOURS)}>`;
 
 export const USAGE = `Usage:
+  corrallm connect [--folder <dir>] [--into <file>] [--timeout <1-3600>]
   corrallm serve --canvas <file> [--canvas <file>…] [--profile <dir>] [--port <n>]
                  [--new-token [--name <name>] [--hours ${HOURS}] [--read-only | --no-merge]]
   corrallm wait [--for <message id>] [--after <cursor>] [--timeout <seconds>]
@@ -94,12 +97,14 @@ export type TokenCommand =
   | { command: 'token'; action: 'revoke'; name: string; profile?: string }
   | { command: 'token'; action: 'header'; from: string };
 
-export type Command = ServeCommand | WaitCommand | TokenCommand | DumpCommand;
+export type Command = ConnectCommand | ServeCommand | WaitCommand | TokenCommand | DumpCommand;
 
 /** Reads a command line (after `corrallm`); throws UsageError, saying why, if it isn't one. */
 export function parseCommand(argv: readonly string[]): Command {
   const [command, ...rest] = argv;
   switch (command) {
+    case 'connect':
+      return parseConnect(rest);
     case 'serve':
       return parseServe(rest);
     case 'wait':
@@ -111,9 +116,11 @@ export function parseCommand(argv: readonly string[]): Command {
       return { command, ...(values.profile === undefined ? {} : { profile: values.profile }) };
     }
     case undefined:
-      throw new UsageError('Name a command: serve, wait, token or dump.');
+      throw new UsageError('Name a command: connect, serve, wait, token or dump.');
     default:
-      throw new UsageError(`corrallm has no command “${command}”: serve, wait, token or dump.`);
+      throw new UsageError(
+        `corrallm has no command “${command}”: connect, serve, wait, token or dump.`,
+      );
   }
 }
 

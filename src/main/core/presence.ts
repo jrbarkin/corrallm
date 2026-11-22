@@ -43,6 +43,7 @@ export type Presence = z.infer<typeof Presence>;
 
 /** Only presentation text and an opaque click handle cross to the native notification host. */
 export const NotificationRequest = z.strictObject({
+  cue: z.literal('orchestrator-request').optional(),
   handle: z.uuid(),
   title: bytes(MAX_NOTIFICATION_TITLE_BYTES),
   body: bytes(MAX_NOTIFICATION_BODY_BYTES),

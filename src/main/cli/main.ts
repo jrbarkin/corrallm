@@ -3,6 +3,7 @@ import path from 'node:path';
 import { memoryText, runChecks, SELFTEST_TIMEOUT_MS, selfTestChecks } from '../core/selftest';
 import { parseCommand, USAGE, UsageError } from './args';
 import type { Command } from './args';
+import { connectCommand } from './connect';
 import { dumpCommand } from './dump';
 import { USAGE_ERROR } from './node';
 import { writtenOut } from './output';
@@ -90,6 +91,16 @@ function stopSignal(again: () => void): Promise<NodeJS.Signals> {
 
 async function run(command: Command): Promise<number> {
   switch (command.command) {
+    case 'connect':
+      return connectCommand(command, {
+        env: process.env,
+        cwd: process.cwd(),
+        say: (line) => {
+          process.stdout.write(`${line}\n`);
+        },
+        invocation: { node: process.execPath, bundle: __filename },
+        ...launcherOption(commandLauncher(__filename)),
+      });
     case 'dump':
       return dumpCommand(command, {
         env: process.env,
@@ -156,6 +167,8 @@ const launcherOption = (launcher: string | undefined) =>
 /** Where a command printed, so that exiting waits for those streams alone. */
 function printedBy(command: Command): Printed {
   switch (command.command) {
+    case 'connect':
+      return ['stdout'];
     case 'dump':
       return [...dumpPrinted];
     case 'serve':

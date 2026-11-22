@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { OrchestratorIntent, OrchestratorsView } from '../../model/orchestrators';
 import { ID_PATTERN } from '../../adapter';
 import { define } from '../define';
 import type { OpDef } from '../define';
@@ -71,7 +72,7 @@ export const ConsentTarget = z.discriminatedUnion('kind', [
 export type ConsentTarget = z.infer<typeof ConsentTarget>;
 
 /** settings.set's intents: exactly one per call (B22a C1). */
-const INTENTS = ['defaultAdapter', 'notifications', 'consent'] as const;
+const INTENTS = ['defaultAdapter', 'notifications', 'consent', 'orchestrator'] as const;
 
 /** The app's settings (Core Server §4 A). */
 export const settingsOps = {
@@ -90,6 +91,7 @@ export const settingsOps = {
       notifications: NotificationsView.optional(),
       links: LinksView.optional(),
       command: CommandStatus.optional(),
+      orchestrators: OrchestratorsView.optional(),
     }),
   }),
   // B12 C2, B22a C1: yours alone (the consent deviation, Core Server D8). One intent a call, each
@@ -102,12 +104,14 @@ export const settingsOps = {
         defaultAdapter: CatalogId.nullable().optional(),
         notifications: z.strictObject({ enabled: z.boolean() }).optional(),
         consent: ConsentTarget.optional(),
+        orchestrator: OrchestratorIntent.optional(),
       })
       .refine(
         (args) => INTENTS.filter((intent) => args[intent] !== undefined).length === 1,
-        'Name exactly one setting: defaultAdapter, notifications or consent.',
+        'Name exactly one setting: defaultAdapter, notifications, consent or orchestrator.',
       ),
     output: z.strictObject({
+      orchestrator: z.strictObject({ changed: z.boolean() }).optional(),
       defaultAdapter: CatalogId.nullable().optional(),
       notifications: z.strictObject({ enabled: z.boolean() }).optional(),
       consent: z.strictObject({ target: ConsentTarget, changed: z.boolean() }).optional(),

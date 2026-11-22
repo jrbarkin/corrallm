@@ -1105,6 +1105,10 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
     valid: [
       { defaultAdapter: 'codex', request: DEFAULT_REQUESTS[0] },
       { defaultAdapter: null, request: DEFAULT_REQUESTS[1] },
+      {
+        orchestrator: { action: 'revoke', id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b99' },
+        request: settingRequest(4),
+      },
       { notifications: { enabled: false }, request: settingRequest(0) },
       { notifications: { enabled: true }, request: settingRequest(1) },
       {
@@ -1128,6 +1132,19 @@ export const REAL_FIXTURES: Readonly<Record<OpName, OpFixture>> = {
       // Two intents, or none of the right shape.
       { defaultAdapter: null, notifications: { enabled: false } },
       { notifications: { enabled: false }, consent: { kind: 'site', origin: 'https://a.example' } },
+      { orchestrator: { action: 'allow', id: 'not-an-id', withoutApprovals: false } },
+      {
+        orchestrator: {
+          action: 'allow',
+          id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b99',
+          folder: '/untrusted',
+          withoutApprovals: false,
+        },
+      },
+      {
+        orchestrator: { action: 'decline', id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b99' },
+        notifications: { enabled: true },
+      },
       { notifications: { enabled: 'no' } },
       { notifications: {} },
       { notifications: { enabled: false, preview: 'names' } },
@@ -2794,6 +2811,7 @@ const MESSAGES_OUT_OF_REACH: Readonly<Record<string, readonly string[]>> = {
 
 /** What each token party doesn't reach on the canvas. */
 export const REAL_OUT_OF_REACH: OutOfReach = {
+  OrchestratorId: () => ['0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b99'],
   CanvasId: () => [OTHER_CANVAS],
   // Worktree removal is human-only; no token has a grant to any workspace record.
   WorktreeId: () => ['1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4aff'],

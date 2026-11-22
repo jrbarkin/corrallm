@@ -185,14 +185,18 @@ const link = new CoreLink<CoreSide, HostSide>(
       try {
         tokenSocket = await serveTokenSocket({
           profile: config.profile,
-          answer: (request) =>
-            core.tokenRequest(request, {
-              owner: 'app',
-              url: outside.url ?? null,
-              ...(outside.status.state === 'unavailable'
-                ? { unserved: outside.status.sentence }
-                : {}),
-            }),
+          answer: (request, signal) =>
+            core.tokenRequest(
+              request,
+              {
+                owner: 'app',
+                url: outside.url ?? null,
+                ...(outside.status.state === 'unavailable'
+                  ? { unserved: outside.status.sentence }
+                  : {}),
+              },
+              signal,
+            ),
         });
       } catch (error) {
         console.error(`corrallm token can’t reach the app: ${reasonOf(error)}`);

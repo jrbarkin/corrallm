@@ -42,6 +42,15 @@ afterEach(() => {
 });
 
 describe('native notifications', () => {
+  it('can present an orchestrator request before any agent has worked', async () => {
+    const w = world();
+    const shown = w.notifications.notify({ ...REQUEST, cue: 'orchestrator-request' });
+    expect(w.backend.supported).toHaveBeenCalledOnce();
+    expect(w.backend.made).toHaveLength(1);
+    w.backend.made[0]?.notification.emit('show');
+    expect(await shown).toBe('shown');
+    w.notifications.close();
+  });
   it('rechecks focus immediately before show, after native construction', async () => {
     const w = world();
     w.notifications.prepare(1, true);

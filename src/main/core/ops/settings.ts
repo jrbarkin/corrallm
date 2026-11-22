@@ -31,6 +31,7 @@ const SETTINGS_UNREADABLE = 'corrallm couldn’t read your settings.';
  */
 export function settingsOps({
   catalog,
+  orchestrators,
   settings,
   api,
   links,
@@ -64,6 +65,7 @@ export function settingsOps({
       }
       return {
         ...base,
+        ...(orchestrators === undefined ? {} : { orchestrators: orchestrators.view() }),
         notifications: {
           enabled: kept.notifications?.enabled !== false,
           lastDelivery: notifications.status() ?? null,
@@ -73,6 +75,34 @@ export function settingsOps({
       };
     },
     'settings.set': async (args, ctx) => {
+      if (args.orchestrator !== undefined) {
+        if (orchestrators === undefined)
+          throw new OpFailure(
+            'unavailable',
+            'Open the corrallm app to manage approved orchestrators.',
+          );
+        const intent = args.orchestrator;
+        try {
+          if (intent.action === 'revoke') {
+            const changed = await orchestrators.revoke(intent.id, () => { ctx.noReturn(); });
+            if (changed) ctx.published('settings');
+            return { orchestrator: { changed } };
+          } else
+            await orchestrators.answer(
+              intent.id,
+              intent.action,
+              intent.action === 'allow' && intent.withoutApprovals,
+              () => { ctx.noReturn(); },
+            );
+        } catch {
+          throw new OpFailure(
+            'refused',
+            'That orchestrator request or approval could not be changed. Ask again.',
+          );
+        }
+        ctx.published('settings');
+        return { orchestrator: { changed: true } };
+      }
       if (args.notifications !== undefined) {
         const { enabled } = args.notifications;
         const written = await strictly(() => notifications.set(enabled), {

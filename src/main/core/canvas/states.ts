@@ -68,6 +68,7 @@ export interface StatesListener {
 }
 
 export interface CanvasStatesDeps {
+  name?: (canvas: CanvasId) => string | undefined;
   documents: Pick<
     Documents,
     'load' | 'loaded' | 'live' | 'hasRows' | 'edited' | 'between' | 'bump' | 'subscribe'
@@ -178,7 +179,7 @@ export class CanvasStates {
       if (!listed) continue;
       items.push({
         canvas,
-        name: file === undefined ? null : path.basename(file),
+        name: file === undefined ? (this.#deps.name?.(canvas) ?? null) : path.basename(file),
         edited: rows ? await this.#edited(canvas) : false,
         running: this.#deps.live?.(canvas) ?? journal.isRunning(canvas),
         open: open.has(canvas) || shown.length > 0,
@@ -347,7 +348,7 @@ export class CanvasStates {
   async #kept(canvas: CanvasId): Promise<{ name: string | null; project: ProjectOf | null }> {
     const { file, project } = await this.#deps.memory.get(canvas);
     return {
-      name: file === undefined ? null : path.basename(file),
+      name: file === undefined ? (this.#deps.name?.(canvas) ?? null) : path.basename(file),
       project: project === undefined ? null : projectOf(project),
     };
   }

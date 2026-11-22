@@ -704,3 +704,13 @@ describe('a count held without ids, bounded by what is live at delivery', () => 
     expect(closed).toEqual([]);
   });
 });
+
+it('includes a profile request’s delivery outcome in the notification status', () => {
+  const changed = vi.fn();
+  make({ statusChanged: changed });
+  notifier.record('shown');
+  expect(notifier.status()).toBe('shown');
+  expect(changed).toHaveBeenCalledOnce();
+  notifier.record('shown');
+  expect(changed).toHaveBeenCalledOnce();
+});

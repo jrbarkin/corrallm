@@ -47,7 +47,7 @@ function made(request: TokenRequest): TokenAnswer {
     owner: 'serve',
     op: request.op === 'renew' ? 'renew' : 'new',
     token: 'A'.repeat(43),
-    name: request.name,
+    name: request.op === 'connect' ? 'unused' : request.name,
     access: 'write',
     expires: 1,
     canvases: [{ id: CANVAS, file: '/work/m1.corral' }],
@@ -327,7 +327,8 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
 
   it('bounds answers in UTF-8 bytes, preserving a minted token and its full grant', async () => {
     const answer = made(NEW);
-    if (!answer.ok || answer.op === 'revoke') throw new Error('No token.');
+    if (!answer.ok || answer.op === 'revoke' || answer.op === 'connect')
+      throw new Error('No token.');
     answer.canvases = Array.from({ length: 8 }, () => ({
       id: CANVAS,
       file: `/${'界'.repeat(4000)}`,
@@ -344,7 +345,8 @@ describe.skipIf(process.platform === 'win32')('the token socket', () => {
 
   it('refuses an oversized answer from another owner in bytes rather than characters', async () => {
     const answer = made(NEW);
-    if (!answer.ok || answer.op === 'revoke') throw new Error('No token.');
+    if (!answer.ok || answer.op === 'revoke' || answer.op === 'connect')
+      throw new Error('No token.');
     answer.canvases = Array.from({ length: 8 }, () => ({
       id: CANVAS,
       file: `/${'界'.repeat(4000)}`,
@@ -396,3 +398,35 @@ describe('the token socket on Windows', () => {
     );
   });
 });
+
+it.skipIf(process.platform === 'win32')(
+  'ends a pending approval request when its owner closes',
+  async () => {
+    const started = Promise.withResolvers<undefined>();
+    const owner = await serveTokenSocket({
+      profile,
+      answer: (_request, signal) =>
+        new Promise((resolve) => {
+          started.resolve(undefined);
+          signal.addEventListener(
+            'abort',
+            () => {
+              resolve({ ok: false, sentence: 'The request ended.' });
+            },
+            { once: true },
+          );
+        }),
+    });
+    sockets.push(owner);
+    const answer = askTokenOwner(profile, {
+      version: 1,
+      op: 'connect',
+      folder: '/work/project',
+      into: '/home/user/.corrallm/project.token',
+      timeout: 300,
+    });
+    await started.promise;
+    await owner.close();
+    expect(await answer).toEqual({ ok: false, sentence: 'The request ended.' });
+  },
+);

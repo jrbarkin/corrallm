@@ -70,7 +70,8 @@ async function start(): Promise<Core> {
 }
 
 function tokenOf(answer: TokenAnswer): string {
-  if (!answer.ok || answer.op === 'revoke') throw new Error(`No token: ${JSON.stringify(answer)}`);
+  if (!answer.ok || answer.op === 'revoke' || answer.op === 'connect')
+    throw new Error(`No token: ${JSON.stringify(answer)}`);
   return answer.token;
 }
 

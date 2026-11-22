@@ -248,6 +248,12 @@ export class TokenStore {
     return expires !== undefined && this.#now() < expires + STALE_MS;
   }
 
+  /** Whether this live bearer hash belongs to this approval's reserved token name. No SQL or plaintext. */
+  matchesHash(name: string, hash: string | undefined): boolean {
+    const token = hash === undefined ? undefined : this.#tokens.get(hash);
+    return token?.name === name && this.#now() < token.expires;
+  }
+
   /** The outside orchestrator a token names, if it is one this store keeps that hasn't expired. */
   clientOf(token: string): OutsideCaller | undefined {
     const kept = this.#tokens.get(sha256(token));

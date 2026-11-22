@@ -17,7 +17,8 @@ export type TrustedPath = string & { readonly [trusted]: true };
 /**
  * Brands a path as trusted. Only its mint sites call it: the host’s dialog answers (core/host/app.ts),
  * the stores reading back paths they wrote (memory.ts, run-journal.ts), and a workspace's checkout
- * once verified as the one the core made, at every use (core/workspaces/checkout.ts). Never a
+ * once verified as the one the core made, at every use (core/workspaces/checkout.ts), or the person's
+ * Allow on an identity-rechecked orchestrator request (core/orchestrators.ts). Never a
  * command line.
  */
 export function mintTrustedPath(path: string): TrustedPath {

@@ -35,6 +35,7 @@ export interface PresenceCanvas {
 }
 
 export interface PresenceSources {
+  globalNeeds?: () => number;
   /** Every canvas the core runs (passive ones have no turn or running run). */
   canvases(): Iterable<PresenceCanvas>;
   /** What waits on a canvas now, for whomever (yours are counted). */
@@ -58,7 +59,7 @@ export function countPresence(sources: PresenceSources): PresenceCounts {
   let working = 0;
   let runs = 0;
   let jobs = sources.jobs();
-  let needs = 0;
+  let needs = sources.globalNeeds?.() ?? 0;
   let awake = jobs > 0;
   for (const open of sources.canvases()) {
     const sessions = open.engine.sessions.snapshot();

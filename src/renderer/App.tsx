@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { api } from './api/client';
+import { OrchestratorRequests } from './settings/Orchestrators';
 import { GraphEditor } from './graph/GraphEditor';
 import { OpenLinkContext, openLinkWith } from './open-link';
 import type { OpenLink } from './open-link';
@@ -72,6 +73,7 @@ export function App() {
         </p>
       </header>
       <OpenLinkContext.Provider value={openLink}>
+        <OrchestratorRequests />
         <GraphEditor terminalBackend={terminalBackend} usageSource={usageSource} />
       </OpenLinkContext.Provider>
     </main>

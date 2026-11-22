@@ -63,11 +63,13 @@ export class NativeNotifications {
   notify(request: NotificationRequest): Promise<NotificationResult> {
     if (this.#deps.hidden || this.#closed || !this.#deps.current() || this.#deps.focused())
       return Promise.resolve('suppressed');
+    const parsed = NotificationRequest.safeParse(request);
+    if (!parsed.success) return Promise.resolve('failed');
+    // A pending request explicitly asks for human attention, even before the first agent runs.
+    if (parsed.data.cue === 'orchestrator-request') this.prepare(1, true);
     // Until the first cue nothing has asked the OS: not "unsupported", which says the OS cannot.
     if (!this.#prepared) return Promise.resolve('suppressed');
     if (!this.#supported) return Promise.resolve('unsupported');
-    const parsed = NotificationRequest.safeParse(request);
-    if (!parsed.success) return Promise.resolve('failed');
     const { handle, title, body } = parsed.data;
     const previous = this.#held.get(handle);
     if (previous !== undefined) return previous.result;
