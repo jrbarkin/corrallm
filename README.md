@@ -84,10 +84,10 @@ An outside coding agent or script can use corrallm's local MCP server, registere
 
 If you are the coding agent, ask the person to do steps 1–3; then do steps 4–5 yourself. Ask them to stay available for **Needs you**, including setup cards that may appear only after your first message.
 
-1. **Person — install the command.** Ask: “Please install the corrallm command and make sure your terminal can run `corrallm --help`.” It ships its own Node.
+1. **Person — prepare the command.** Ask: “Please install the corrallm command, or build it from source, and check its `--help` in your terminal.” The packaged command ships its own Node.
    - macOS: in the packaged app, **Settings → The corrallm command → Install** links `~/.local/bin/corrallm`. Settings shows the line to add if that folder isn't on PATH; it changes no shell startup file.
    - Linux: a deb or rpm installs `/usr/bin/corrallm`. An unpacked `pnpm package` build also offers Install in Settings.
-   - From source: `pnpm package`, open the packaged app, then use its Settings (or build and install a Linux package with `pnpm make`). `pnpm build:cli` and `pnpm corrallm …` work from a checkout, but the checkout alone has no supported PATH installer. The printed MCP helper runs literal `corrallm`, so substituting `pnpm corrallm` only for the token command doesn't fix registration. Use the packaged command; don't symlink the bundle.
+   - From source: run `pnpm install` and `pnpm build:cli`, then use `pnpm corrallm …` from that checkout in place of `corrallm …` below. File-based MCP registration records the absolute running Node and bundle paths, so no PATH installation is needed. Keep both in protected, permanent locations outside every canvas's project folder. For a printed helper, project, worktree, profile and temporary locations are refused before a token is made or renewed. Its code and parent folders must belong to you or root and prevent other users from replacing them. When PATH has no verified command, the warning says the registration uses this command's absolute invocation instead. Keep those paths in place or register again after moving them.
    - Not on Windows yet.
 2. **Person — prepare the canvas.** Ask: “Please use Start a session to choose a template or start one installed CLI, choose the project's folder with Choose a project folder…, then Save from the canvas menu. Tell me the saved file's full path and leave corrallm open.” Each new worktree's setup card in **Needs you** needs their **Run**, **Always for this repository**, or **Skip**. An outside token cannot answer it.
 3. **Person — make the token.** Ask them to run this in their own terminal, replacing the canvas path, then tell you the token file's path and the server URL it prints:
@@ -103,7 +103,7 @@ If you are the coding agent, ask the person to do steps 1–3; then do steps 4�
    - Claude Code: run the printed `claude mcp add-json` line there, then start a new Claude Code session in that folder. It is local to that folder, not user-wide.
    - Codex: add the printed text to that folder's `.codex/config.toml`, trust the folder when Codex asks, then start Codex there.
 
-   Both file-based registrations read the token through `corrallm token header --from <file>` when connecting and after a refused credential, so replacing the token in the same file needs no client restart. The installed `corrallm` must be on the client's PATH. A registration using `CORRALLM_OUTSIDE_TOKEN` instead keeps its starting value and needs the client restarted after replacement.
+   Both file-based registrations run the printed invocation of `token header --from <file>` when connecting and after a refused credential, so replacing the token in the same file needs no client restart. They use bare `corrallm` only when PATH safely resolves to this installed command; otherwise they use absolute paths. A registration using `CORRALLM_OUTSIDE_TOKEN` instead keeps its starting value and needs the client restarted after replacement.
 
 5. **Agent — discover, send and wait.** The MCP client lists each tool with its input schema. Tool names use `_` where operation names use `.`: `agent.setConnection` is `agent_setConnection`. Start with:
 
@@ -137,7 +137,7 @@ corrallm wait --for <message-id> --timeout 3600
 
 ### Headless over SSH
 
-The CLI and `serve` need no graphical desktop, Electron's desktop libraries or WebGL2. From a checkout use `pnpm install`, `pnpm build:cli`, then `pnpm corrallm serve …` under the pinned Node; the packaged command needs no system Node. The MCP registration helper still needs the installed command described above.
+The CLI and `serve` need no graphical desktop, Electron's desktop libraries or WebGL2. From a checkout use `pnpm install`, `pnpm build:cli`, then `pnpm corrallm serve …` under the pinned Node; the packaged command needs no system Node. File-based MCP registration also works from a checkout without installing a command on PATH: keep Node and the bundle in the protected, permanent locations described above.
 
 There is **no supported GUI-free bootstrap**. `serve --canvas` accepts only a saved file already named by that profile's canvas memory, with a project folder chosen in the app. On an SSH-only Linux box, a person must first run the app on that box through a local or remote graphical session, using the same profile and project paths. Copying a `.corral` file from another machine is not enough. If no graphical session is available, prepare and run corrallm on a machine with a display instead.
 

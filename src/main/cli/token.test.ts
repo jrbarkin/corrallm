@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { constants, existsSync, realpathSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { TOKEN_REPLACED } from '../../shared/api/errors';
 import { toolName } from '../../shared/api/registry';
 import { keepCanvases } from '../core/store/test-store';
+import { registrations } from './register';
 import { TestChildren } from './test-children';
 import type { TestChild } from './test-children';
 
@@ -47,6 +48,7 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
     /** Every token made: none may be in a child's arguments, serve's log or a tool's result. */
     let made: string[];
     let results: string[];
+    let helperFolder: string | undefined;
 
     /** A profile of its own, keeping the canvas and the fake `codex`. */
     async function freshProfile(): Promise<void> {
@@ -102,6 +104,8 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
       await children.close();
       await checkResults();
       await rm(dir, { recursive: true, force: true });
+      if (helperFolder !== undefined) await rm(helperFolder, { recursive: true, force: true });
+      helperFolder = undefined;
     }
 
     /** The environment the CLI runs in: the fake `codex` and `claude`, no token, and `extra`. */
@@ -123,9 +127,13 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
     }
 
     /** `corrallm token <args>` on the profile, on a terminal: what it printed, and its exit. */
-    async function token(args: string[]): Promise<{ code: number | null; printed: string }> {
+    async function token(
+      args: string[],
+      node = process.execPath,
+      entry = BUNDLE,
+    ): Promise<{ code: number | null; printed: string }> {
       const { printed, exited } = children.terminal(
-        [process.execPath, BUNDLE, 'token', ...args, '--profile', profile],
+        [node, entry, 'token', ...args, '--profile', profile],
         cliEnv(),
       );
       const code = await exited;
@@ -335,9 +343,21 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
       }, 60_000);
 
       it('writes a token only into a 0600 file with --into, never showing it, and its headers helper reads the current one across a renewal', async () => {
+        // A CI tool cache may be shared-writable. This successful helper uses protected code.
+        const cache = path.resolve('node_modules/.cache/probes');
+        await mkdir(cache, { recursive: true });
+        helperFolder = await mkdtemp(path.join(cache, 'token-helper-'));
+        const node = path.join(helperFolder, 'node');
+        await copyFile(process.execPath, node, constants.COPYFILE_FICLONE);
+        await chmod(node, 0o700);
         const into = path.join(dir, 'My Tokens', 'corrallm');
         await mkdir(path.dirname(into));
-        const first = await token(['new', '--canvas', file, '--name', 'filer', '--into', into]);
+        const wrapper = path.resolve('scripts/corrallm.mjs');
+        const first = await token(
+          ['new', '--canvas', file, '--name', 'filer', '--into', into],
+          node,
+          wrapper,
+        );
         expect(first.code, first.printed).toBe(0);
         expect(first.printed).not.toMatch(TOKEN_LINE);
         expect((await stat(into)).mode & 0o777).toBe(0o600);
@@ -346,22 +366,27 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
         expect(value).toMatch(/^[A-Za-z0-9_-]{43}$/);
         expect(first.printed).not.toContain(value);
         expect(first.printed).toContain(`It is written only to ${into}`);
-        expect(first.printed).toContain(
-          `claude mcp add-json corrallm-server '{"type":"http","url":"${server.url}","headersHelper":"corrallm token header --from \\"${into}\\""}'`,
-        );
-        // Codex reads its token from a variable as it starts: from the file, then, in the
-        // orchestrator's own folder, never user-wide.
+        const registration = registrations({ 'claude-code': true }, server.url, into, [
+          realpathSync(node),
+          realpathSync(BUNDLE),
+        ]).byFile[0]?.text;
+        if (registration === undefined) throw new Error('Expected a file-based registration.');
+        expect(first.printed).toContain(registration);
+        const { stdout: json } = await execute('/bin/sh', [
+          '-c',
+          `set -- ${registration}; printf '%s' "$5"`,
+        ]);
+        const invocation = (JSON.parse(json) as { headersHelper: string }).headersHelper;
+        // The file-based entry stays in the orchestrator's folder, never user-wide.
         expect(first.printed).toContain(`url = "${server.url}"`);
         expect(first.printed).toContain('.codex/config.toml');
         expect(first.printed).not.toMatch(/codex mcp add/);
 
         /** What the helper a client runs at each connect prints: the current token's header. */
         const helper = async () => {
-          const { stdout, stderr } = await execute(
-            process.execPath,
-            [BUNDLE, 'token', 'header', '--from', into],
-            { env: cliEnv() },
-          );
+          const { stdout, stderr } = await execute('/bin/sh', ['-c', invocation], {
+            env: cliEnv(),
+          });
           expect(stderr).toBe('');
           return JSON.parse(stdout) as { Authorization: string };
         };
@@ -373,7 +398,7 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')(
         expect(await helper()).toEqual({ Authorization: `Bearer ${value}` });
         expect(await agents(await connectWithHelper())).toHaveLength(1);
 
-        const second = await token(['renew', '--name', 'filer', '--into', into]);
+        const second = await token(['renew', '--name', 'filer', '--into', into], node, wrapper);
         expect(second.code, second.printed).toBe(0);
         const renewed = (await readFile(into, 'utf8')).trim();
         made.push(renewed);

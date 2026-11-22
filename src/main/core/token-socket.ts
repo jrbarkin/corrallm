@@ -62,6 +62,10 @@ const CanvasFile = z
   .min(1)
   .max(4096)
   .refine((file) => path.isAbsolute(file) && !file.includes('\0'));
+const HelperPath = CanvasFile.refine(
+  (file) =>
+    path.resolve(file) === file && file.isWellFormed() && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(file),
+);
 
 const TokenRequestSchema = z.discriminatedUnion('op', [
   z.strictObject({
@@ -71,8 +75,17 @@ const TokenRequestSchema = z.discriminatedUnion('op', [
     hours: Hours,
     access: Access,
     canvases: z.array(CanvasFile).min(1).max(MAX_TOKEN_CANVASES),
+    helperFiles: z.array(HelperPath).min(1).max(3).optional(),
+    helperDirectories: z.array(HelperPath).min(1).max(128).optional(),
   }),
-  z.strictObject({ version: z.literal(1), op: z.literal('renew'), name: Name, hours: Hours }),
+  z.strictObject({
+    version: z.literal(1),
+    op: z.literal('renew'),
+    name: Name,
+    hours: Hours,
+    helperFiles: z.array(HelperPath).min(1).max(3).optional(),
+    helperDirectories: z.array(HelperPath).min(1).max(128).optional(),
+  }),
   z.strictObject({ version: z.literal(1), op: z.literal('revoke'), name: Name }),
 ]);
 
