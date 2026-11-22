@@ -247,7 +247,7 @@ it('restores an approved folder and stops its credential durably on revocation',
   const bearer = (await readFile(into, 'utf8')).trim();
   expect(tokens.clientOf(bearer)).toBeUndefined();
   expect(JSON.parse(await readFile(path.join(root, 'orchestrators.json'), 'utf8'))).toMatchObject({
-    grants: [{ revoked: expect.any<number>(Number) }],
+    grants: [{ revoked: expect.any(Number) as unknown }],
   });
 });
 
@@ -260,7 +260,9 @@ it('keeps renewing other approvals when one credential file becomes unavailable'
   const secondFile = path.join(root, 'private', 'second.token');
   await mkdir(secondFolder);
   const second = service.request({ folder: secondFolder, into: secondFile, timeout: 60 });
-  await vi.waitFor(() => { expect(service.view().pending).toHaveLength(1); });
+  await vi.waitFor(() => {
+    expect(service.view().pending).toHaveLength(1);
+  });
   const next = service.view().pending[0];
   if (next === undefined) throw new Error('No second request');
   await service.answer(next.id, 'allow', false);
@@ -275,20 +277,47 @@ it('keeps renewing other approvals when one credential file becomes unavailable'
     const after = (await readFile(secondFile, 'utf8')).trim();
     expect(after).not.toBe(before);
     expect(tokens.clientOf(after)).toBeDefined();
-  } finally { error.mockRestore(); }
+  } finally {
+    error.mockRestore();
+  }
 });
 
 it('retains bounded revoked history while allowing the next human approval', async () => {
   await service.close();
   const { randomUUID } = await import('node:crypto');
   const { writeFile } = await import('node:fs/promises');
-  await writeFile(path.join(root, 'orchestrators.json'), JSON.stringify({ version: 1, grants: Array.from({ length: 256 }, (_, n) => ({ id: randomUUID(), canvas, folder: path.join(root, `old-${String(n)}`), into, created: n, lastUsed: n, revoked: n, withoutApprovals: false, identity: 'old' })) }), { mode: 0o600 });
-  service = new Orchestrators({ file: path.join(root, 'orchestrators.json'), tokens, trusted, changed, home: root });
+  await writeFile(
+    path.join(root, 'orchestrators.json'),
+    JSON.stringify({
+      version: 1,
+      grants: Array.from({ length: 256 }, (_, n) => ({
+        id: randomUUID(),
+        canvas,
+        folder: path.join(root, `old-${String(n)}`),
+        into,
+        created: n,
+        lastUsed: n,
+        revoked: n,
+        withoutApprovals: false,
+        identity: 'old',
+      })),
+    }),
+    { mode: 0o600 },
+  );
+  service = new Orchestrators({
+    file: path.join(root, 'orchestrators.json'),
+    tokens,
+    trusted,
+    changed,
+    home: root,
+  });
   await service.load();
   const { answer, request } = await pending();
   await service.answer(request.id, 'allow', false);
   expect(await answer).toMatchObject({ ok: true });
-  const disk = JSON.parse(await readFile(path.join(root, 'orchestrators.json'), 'utf8')) as { grants: unknown[] };
+  const disk = JSON.parse(await readFile(path.join(root, 'orchestrators.json'), 'utf8')) as {
+    grants: unknown[];
+  };
   expect(disk.grants).toHaveLength(256);
   expect(service.view().approved).toHaveLength(1);
 });

@@ -134,6 +134,13 @@ export const NeedsItem = z.strictObject({
 export const AGENT_STATES = ['waiting', 'working', 'paused', 'limited', 'idle'] as const;
 
 const canvas = OpCanvas;
+const AgentSettings = {
+  model: z.string().nullable(),
+  effort: z.string().nullable(),
+  modelSource: z.enum(['agent', 'native-default']),
+  effortSource: z.enum(['agent', 'native-default']),
+  waitingForYou: z.array(NeedsItem),
+};
 
 export const conversationOps = {
   agents: define('agents', {
@@ -141,7 +148,7 @@ export const conversationOps = {
       'The agents you reach on the canvas: each one’s id, name, adapter and connection, how it is ' +
       'now, how many prompts of its own wait for an answer, the agents it is linked to, ' +
       'whether its session has listed corrallm’s tools (api), where it is in its fallback ' +
-      'chain, and its handoff’s state.',
+      'chain, its handoff’s state, current model and effort with their source (agent or native-default; null means unknown), and its reader-projected waitingForYou items.',
     input: z.strictObject({ canvas }),
     output: z.strictObject({
       agents: z.array(
@@ -151,6 +158,7 @@ export const conversationOps = {
           adapter: z.string().nullable(),
           connection: z.string().nullable(),
           state: z.enum(AGENT_STATES),
+          ...AgentSettings,
           prompts: z.int(),
           linked: z.array(z.string()),
           api: z.boolean(),
@@ -163,7 +171,7 @@ export const conversationOps = {
   status: define('status', {
     summary:
       'How the agents you reach are now (their state, the message whose turn is going, model ' +
-      'and effort), what waits for the user on them, and a cursor at the end of your messages.',
+      'and effort with their source; null means unknown), each agent’s reader-projected waitingForYou items, what waits for the user on them, and a cursor at the end of your messages.',
     input: z.strictObject({ canvas }),
     output: z.strictObject({
       agents: z.array(
@@ -171,8 +179,7 @@ export const conversationOps = {
           id: z.string(),
           state: z.enum(AGENT_STATES),
           message: z.uuid().nullable(),
-          model: z.string().nullable(),
-          effort: z.string().nullable(),
+          ...AgentSettings,
           fallback: FallbackViewSchema.nullable(),
           handoff: HandoffViewSchema.nullable(),
         }),

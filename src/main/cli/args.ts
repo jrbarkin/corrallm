@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { ID_PATTERN } from '../../shared/adapter';
 import type { TokenAccess } from '../core/tokens';
+import { MODEL_PATTERN, EFFORT_PATTERN } from '../../shared/session';
 import {
   DEFAULT_TOKEN_HOURS,
   MAX_TOKEN_CANVASES,
@@ -29,7 +30,17 @@ export const USAGE = `Usage:
   corrallm connect [--folder <dir>] [--into <file>] [--timeout <1-3600>]
   corrallm serve --canvas <file> [--canvas <file>…] [--profile <dir>] [--port <n>]
                  [--new-token [--name <name>] [--hours ${HOURS}] [--read-only | --no-merge]]
-  corrallm wait [--for <message id>] [--after <cursor>] [--timeout <seconds>]
+  corrallm wait [--for <message id>] [--after <cursor>] [--timeout <seconds>] [--token-file <file>]
+  corrallm agents [--canvas <id|file name>] [--token-file <file>]
+  corrallm agent add --canvas <id|file name> --cli <adapter> [--connection <id>]
+                 [--model <value>] [--effort <value>] [--role-file <file>] [--token-file <file>]
+  corrallm agent set --canvas <id|file name> --agent <id|name>
+                 [--cli <adapter>] [--connection <id>] [--model <value>] [--effort <value>]
+                 [--role-file <file>] [--token-file <file>]
+  corrallm agent rm --canvas <id|file name> --agent <id|name> [--token-file <file>]
+  corrallm send --canvas <id|file name> --to <id|name> (--brief <file> | -) [--token-file <file>]
+  corrallm ask --canvas <id|file name> --to <id|name> (--brief <file> | -)
+                 [--timeout <seconds>] [--token-file <file>]
   corrallm token new --canvas <file> [--canvas <file>…] [--name <name>] [--hours ${HOURS}]
                  [--read-only | --no-merge] [--into <file>] [--profile <dir>]
   corrallm token renew [--name <name>] [--hours ${HOURS}] [--into <file>] [--profile <dir>]
@@ -61,7 +72,31 @@ export interface WaitCommand {
   for?: string;
   after?: string;
   timeout: number;
+  tokenFile?: string;
 }
+
+export type AgentCommand =
+  | { command: 'agents'; canvas?: string; tokenFile?: string }
+  | {
+      command: 'agent';
+      action: 'add' | 'set' | 'rm';
+      canvas: string;
+      agent?: string;
+      adapter?: string;
+      connection?: string;
+      model?: string | null;
+      effort?: string | null;
+      roleFile?: string;
+      tokenFile?: string;
+    }
+  | {
+      command: 'send' | 'ask';
+      canvas: string;
+      to: string;
+      brief: string;
+      timeout: number;
+      tokenFile?: string;
+    };
 
 /** `corrallm dump`: inspects a profile without taking it from its owner. */
 export interface DumpCommand {
@@ -97,7 +132,8 @@ export type TokenCommand =
   | { command: 'token'; action: 'revoke'; name: string; profile?: string }
   | { command: 'token'; action: 'header'; from: string };
 
-export type Command = ConnectCommand | ServeCommand | WaitCommand | TokenCommand | DumpCommand;
+export type Command =
+  ConnectCommand | ServeCommand | WaitCommand | TokenCommand | DumpCommand | AgentCommand;
 
 /** Reads a command line (after `corrallm`); throws UsageError, saying why, if it isn't one. */
 export function parseCommand(argv: readonly string[]): Command {
@@ -111,17 +147,134 @@ export function parseCommand(argv: readonly string[]): Command {
       return parseWait(rest);
     case 'token':
       return parseToken(rest);
+    case 'agents':
+    case 'agent':
+    case 'send':
+    case 'ask':
+      return parseAgent(command, rest);
     case 'dump': {
       const { values } = read(rest, { profile: { type: 'string' } });
       return { command, ...(values.profile === undefined ? {} : { profile: values.profile }) };
     }
     case undefined:
-      throw new UsageError('Name a command: connect, serve, wait, token or dump.');
+      throw new UsageError(
+        'Name a command: connect, serve, agents, agent, send, ask, wait, token or dump.',
+      );
     default:
       throw new UsageError(
-        `corrallm has no command “${command}”: connect, serve, wait, token or dump.`,
+        `corrallm has no command “${command}”: connect, serve, agents, agent, send, ask, wait, token or dump.`,
       );
   }
+}
+
+function parseAgent(command: AgentCommand['command'], argv: string[]): AgentCommand {
+  const strings = (args: string[], options: NonNullable<Options>) => {
+    const { values } = read(args, options);
+    if (Object.values(values).some((value) => value !== undefined && typeof value !== 'string'))
+      throw new UsageError('These options take text values.');
+    return values as Record<string, string | undefined>;
+  };
+  const common = { canvas: { type: 'string' }, 'token-file': { type: 'string' } } as const;
+  const required = (value: string | undefined, flag: string) => {
+    if (
+      value === undefined ||
+      value.length === 0 ||
+      value.length > 4096 ||
+      !value.isWellFormed() ||
+      /\p{Cc}/u.test(value)
+    )
+      throw new UsageError(`Name a bounded value with --${flag}.`);
+    return value;
+  };
+  const credential = (file: string | undefined) =>
+    file === undefined ? {} : { tokenFile: intoFile(file, 'token-file') };
+  if (command === 'agents') {
+    const values = strings(argv, common);
+    return {
+      command,
+      ...(values.canvas === undefined ? {} : { canvas: required(values.canvas, 'canvas') }),
+      ...credential(values['token-file']),
+    };
+  }
+  if (command === 'send' || command === 'ask') {
+    // A sole '-' is the stdin source; no other positional arguments are accepted.
+    const fromStdin = argv.at(-1) === '-';
+    const rest = fromStdin ? argv.slice(0, -1) : argv;
+    const values = strings(rest, {
+      ...common,
+      to: { type: 'string' },
+      brief: { type: 'string' },
+      ...(command === 'ask' ? { timeout: { type: 'string' as const } } : {}),
+    });
+    if ((values.brief === undefined) === !fromStdin)
+      throw new UsageError('Give exactly one brief: --brief <file> or a final -.');
+    const seconds = values.timeout === undefined ? MAX_WAIT_SECONDS : whole(values.timeout);
+    if (seconds === undefined || seconds > MAX_WAIT_SECONDS)
+      throw new UsageError(`--timeout is 0 to ${String(MAX_WAIT_SECONDS)} seconds.`);
+    return {
+      command,
+      canvas: required(values.canvas, 'canvas'),
+      to: required(values.to, 'to'),
+      brief: fromStdin ? '-' : intoFile(values.brief ?? '', 'brief'),
+      timeout: seconds,
+      ...credential(values['token-file']),
+    };
+  }
+  const [action, ...rest] = argv;
+  if (action !== 'add' && action !== 'set' && action !== 'rm')
+    throw new UsageError('Say agent add, set or rm.');
+  const edit =
+    action === 'rm'
+      ? {}
+      : {
+          cli: { type: 'string' as const },
+          connection: { type: 'string' as const },
+          model: { type: 'string' as const },
+          effort: { type: 'string' as const },
+          'role-file': { type: 'string' as const },
+        };
+  const values = strings(rest, {
+    ...common,
+    ...(action === 'add' ? {} : { agent: { type: 'string' as const } }),
+    ...edit,
+  });
+  const id = (value: string | undefined, flag: string) => {
+    if (value !== undefined && !ID_PATTERN.test(value))
+      throw new UsageError(`--${flag} needs a catalog id.`);
+    return value;
+  };
+  const model = values.model;
+  const effort = values.effort;
+  if (model !== undefined && model !== '' && !MODEL_PATTERN.test(model))
+    throw new UsageError('--model needs a model value without a leading dash.');
+  if (effort !== undefined && effort !== '' && !EFFORT_PATTERN.test(effort))
+    throw new UsageError('--effort needs an effort value without a leading dash.');
+  if (action === 'add') required(values.cli, 'cli');
+  if (
+    action === 'set' &&
+    values.cli === undefined &&
+    values.connection === undefined &&
+    model === undefined &&
+    effort === undefined &&
+    values['role-file'] === undefined
+  )
+    throw new UsageError('Name the setting to change.');
+  const adapter = id(values.cli, 'cli');
+  const connection = id(values.connection, 'connection');
+  return {
+    command,
+    action,
+    canvas: required(values.canvas, 'canvas'),
+    ...(action === 'add' ? {} : { agent: required(values.agent, 'agent') }),
+    ...(adapter === undefined ? {} : { adapter }),
+    ...(connection === undefined ? {} : { connection }),
+    ...(model === undefined ? {} : { model: model === '' ? null : model }),
+    ...(effort === undefined ? {} : { effort: effort === '' ? null : effort }),
+    ...(values['role-file'] === undefined
+      ? {}
+      : { roleFile: intoFile(values['role-file'], 'role-file') }),
+    ...credential(values['token-file']),
+  };
 }
 
 function parseToken(argv: string[]): TokenCommand {
@@ -256,10 +409,10 @@ export function nameableFile(file: string): boolean {
   );
 }
 
-function intoFile(into: string): string {
+function intoFile(into: string, flag = 'into'): string {
   if (!nameableFile(into)) {
     throw new UsageError(
-      '--into is a nonempty, well-formed single-line file path of at most 4096 characters.',
+      `--${flag} is a nonempty, well-formed single-line file path of at most 4096 characters.`,
     );
   }
   return into;
@@ -312,6 +465,7 @@ function parseWait(argv: string[]): WaitCommand {
     for: { type: 'string' },
     after: { type: 'string' },
     timeout: { type: 'string' },
+    'token-file': { type: 'string' },
   });
   if (values.for !== undefined && !z.uuid().safeParse(values.for).success) {
     throw new UsageError(`--for is a message’s id, not “${values.for}”.`);
@@ -330,6 +484,9 @@ function parseWait(argv: string[]): WaitCommand {
     ...(values.for === undefined ? {} : { for: values.for }),
     ...(values.after === undefined ? {} : { after: values.after }),
     timeout,
+    ...(values['token-file'] === undefined
+      ? {}
+      : { tokenFile: intoFile(values['token-file'], 'token-file') }),
   };
 }
 

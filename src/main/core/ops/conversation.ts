@@ -22,7 +22,7 @@ import { needsInput } from '../engines';
 import type { OpenCanvas } from '../engines';
 import { agentsReached } from '../reach';
 import { agentOf, openCanvas, pageOf, reachFor } from './open';
-import { fallbackOf, handoffOf, messagesSeen, promptsOf } from './views';
+import { agentSettingsView, fallbackOf, handoffOf, messagesSeen, promptsOf } from './views';
 import type { Implementations, OpServices } from '.';
 
 /** Conversation (Core Server §4 H; API Spec §7.2). */
@@ -84,11 +84,23 @@ export function conversationOps(
     );
   };
 
+  const byAgent = (items: NeedsItem[]) => {
+    const found = new Map<string, NeedsItem[]>();
+    for (const item of items) {
+      if (item.agent === undefined) continue;
+      const list = found.get(item.agent) ?? [];
+      list.push(item);
+      found.set(item.agent, list);
+    }
+    return found;
+  };
+
   return {
     agents: ({ canvas }, ctx) => {
       const open = openCanvas(engines, canvas);
       const { document, engine } = open;
       const reach = reached(open, 'agents', ctx);
+      const waits = byAgent(waiting(open, ctx, reach));
       return {
         agents: reach.map((id) => {
           const node = agentOf(open, id);
@@ -99,6 +111,8 @@ export function conversationOps(
             adapter: endpoint.kind === 'unchosen' ? null : endpoint.adapter,
             connection: engine.catalog.connectionOf(node.data) ?? null,
             state: stateOf(open, id),
+            ...agentSettingsView(open, id),
+            waitingForYou: waits.get(id) ?? [],
             prompts: promptsOf(open, id),
             linked: reach.filter((other) => other !== id && areLinked(document.links, id, other)),
             // Observed, never claimed: its session's generation listed corrallm's tools.
@@ -112,20 +126,21 @@ export function conversationOps(
     status: ({ canvas }, ctx) => {
       const open = openCanvas(engines, canvas);
       const reach = reached(open, 'status', ctx);
+      const waitingForYou = waiting(open, ctx, reach);
+      const waits = byAgent(waitingForYou);
       return {
         agents: reach.map((id) => {
-          const session = open.engine.sessions.of(id);
           return {
             id,
             state: stateOf(open, id),
             message: open.delivery.current(id) ?? null,
-            model: session.model,
-            effort: session.effort ?? null,
+            ...agentSettingsView(open, id),
+            waitingForYou: waits.get(id) ?? [],
             fallback: fallbackOf(open, id),
             handoff: handoffOf(open, id),
           };
         }),
-        waitingForYou: waiting(open, ctx, reach),
+        waitingForYou,
         // At the end of every canvas the caller has, so a `wait` from it reads only what comes.
         next: cursorOf(
           'wait',
