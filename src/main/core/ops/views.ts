@@ -61,6 +61,42 @@ export function handoffOf(open: OpenCanvas, agent: string): HandoffView | null {
   return open.handoff?.(agent) ?? null;
 }
 
+/** Current reported values, or saved values before start; unreported native defaults stay null. */
+export function agentSettingsView(open: OpenCanvas, agent: string) {
+  const node = agentOf(open, agent);
+  const endpoint = open.engine.catalog.endpointOf(node.data);
+  const saved = endpoint.kind === 'unchosen' ? undefined : node.data.settings?.[endpoint.adapter];
+  const session = open.engine.sessions.of(agent);
+  const value = (key: 'model' | 'effort') => {
+    const reported = session[key];
+    const selected =
+      session.running === undefined
+        ? (saved?.[key] ?? session[key] ?? null)
+        : reported === undefined
+          ? (session.running[key] ?? null)
+          : reported;
+    return selected === '' ? null : selected;
+  };
+  const source = (key: 'model' | 'effort'): 'agent' | 'native-default' => {
+    if (session.running === undefined)
+      return saved?.[key] === undefined ? 'native-default' : 'agent';
+    const current = value(key);
+    // A live acknowledged change can differ from startup; a pending restart must not replace it.
+    return (current !== null && (current === saved?.[key] || current === session.running[key])) ||
+      (current === null &&
+        session.running[key] !== undefined &&
+        session.running[key] === saved?.[key])
+      ? 'agent'
+      : 'native-default';
+  };
+  return {
+    model: value('model'),
+    effort: value('effort'),
+    modelSource: source('model'),
+    effortSource: source('effort'),
+  };
+}
+
 export function sessionSummary(open: OpenCanvas, agent: string, yours = true) {
   const node = agentOf(open, agent);
   const { engine } = open;

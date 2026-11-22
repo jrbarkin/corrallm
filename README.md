@@ -78,7 +78,7 @@ Queue progress and unsaved canvases survive a restart. Use **Save** in the canva
 
 ## Drive corrallm from a terminal
 
-An outside coding agent or script can use corrallm's local MCP server, registered as `corrallm-server`. Run the orchestrator on the same machine as corrallm, in its own folder. The app serves MCP with its window open or not; `corrallm serve` serves it with the app closed. A writer can edit canvases and queues, send work, and pause, kill or interrupt reached agents; private prompt details and settled records stay yours.
+An outside coding agent or script can use the shipped command from its shell, or register corrallm's local MCP server as `corrallm-server`. Run the orchestrator on the same machine as corrallm, in its own folder. The app serves MCP with its window open or not; `corrallm serve` serves it with the app closed. A writer can edit canvases and queues, send work, and pause, kill or interrupt reached agents; private prompt details and settled records stay yours.
 
 ### Using corrallm from an agent
 
@@ -99,22 +99,29 @@ If you are the coding agent, ask the person to do steps 1–3; then do steps 4�
 
    `token new`, `renew`, `revoke` and `serve --new-token` require stderr on a real terminal, with stderr not redirected: an agent's ordinary shell tool or non-TTY SSH command is refused, even with `--into`. They also refuse inside corrallm's own agents. The token file is 0600; corrallm keeps only its hash. It lasts one hour by default (`--hours 1` through `--hours 12`), reaches its named canvases and those its party creates, and can write unless made with `--read-only`. `--no-merge` makes a writer that cannot merge.
 
-4. **Agent — register the MCP client.** In an orchestrator folder that is no canvas's project folder, use the registration printed for your CLI. Keeping it separate keeps the outside registration and its credential helper out of agents' project configuration; corrallm's own sessions use separate authority and disable outside registrations.
-   - Claude Code: run the printed `claude mcp add-json` line there, then start a new Claude Code session in that folder. It is local to that folder, not user-wide.
+4. **Agent — use your shell.** Set the token file and the printed server URL, then discover the canvas and its agents:
+
+   ```sh
+   export CORRALLM_OUTSIDE_TOKEN_FILE="$HOME/.corrallm/orchestrator.token"
+   export CORRALLM_URL='<server URL printed by corrallm>'
+   corrallm agents
+   corrallm agents --canvas canvas.corral
+   corrallm ask --canvas canvas.corral --to Builder --brief brief.md --timeout 3600
+   ```
+
+   These commands need no terminal, MCP registration or session restart. `agents` lists reached canvases; with `--canvas`, it lists that canvas's agents, their current model and effort, their source (`agent` or `native-default`; `null` means unknown), and their visible waiting items. Select a canvas by id or exact file name, and an agent by id or exact name; ambiguous names need an id. `--token-file <file>` overrides the file variable. The new commands ignore the old environment-token variable and reread the file at every call.
+
+   `ask` sends the UTF-8 brief once and waits for the agent's reply with its turn result. It prints that reply as JSON, says “Waiting for the person.” once on stderr if the agent waits, and retries dropped read connections with backoff. An interrupted send is not replayed. For separate sends, `corrallm send --canvas <canvas-id> --to <agent-id> --brief brief.md` prints the message id; a final `-` reads the brief from stdin. Briefs are at most 16 KiB. **Run is optional:** a token's message reaches an idle agent while the run is held, provided setup, permissions and other delivery holds allow it.
+
+   To manage agents, use `corrallm agent add --canvas <canvas-id> --cli <adapter-id>`, `corrallm agent set --canvas <canvas-id> --agent <agent-id>` with the fields to change, or `corrallm agent rm --canvas <canvas-id> --agent <agent-id>`. Add and Set take `--connection`, `--model`, `--effort` and `--role-file`; Set also takes `--cli`. Model and effort change saved settings; an empty value clears one. Add returns its creation result, then a second settings result if requested. Combined Set edits use one batch. Results are JSON from the existing operations, including proposals that still need the person; neither command grants new authority.
+
+5. **Agent — optionally register MCP tools.** Tools load only at session start. Shell commands work in your current session; for MCP, register in an orchestrator folder that is no canvas's project folder, then start a new CLI session there. Keeping it separate keeps the outside registration and its helper out of agents' project configuration; corrallm's own sessions use separate authority and disable outside registrations.
+   - Claude Code: run the printed `claude mcp add-json` line there. It is local to that folder, not user-wide.
    - Codex: add the printed text to that folder's `.codex/config.toml`, trust the folder when Codex asks, then start Codex there.
 
-   Both file-based registrations run the printed invocation of `token header --from <file>` when connecting and after a refused credential, so replacing the token in the same file needs no client restart. They use bare `corrallm` only when PATH safely resolves to this installed command; otherwise they use absolute paths. A registration using `CORRALLM_OUTSIDE_TOKEN` instead keeps its starting value and needs the client restarted after replacement.
+   File-based registrations run the printed invocation of `token header --from <file>` when connecting and after a refused credential, so replacing the token in the same file needs no client restart. A registration using `CORRALLM_OUTSIDE_TOKEN` instead keeps its starting value and needs the client restarted after replacement.
 
-5. **Agent — discover, send and wait.** The MCP client lists each tool with its input schema. Tool names use `_` where operation names use `.`: `agent.setConnection` is `agent_setConnection`. Start with:
-
-   | Tool          | Arguments and result                                                  |
-   | ------------- | --------------------------------------------------------------------- |
-   | `canvas_list` | `{}` → `items`, each with its `canvas` id                             |
-   | `agents`      | `{canvas}` → `agents`, each with its `id`, name, connection and state |
-   | `message`     | `{canvas, to: <agent id>, body: "…"}` → `{id}` (plus revisions)       |
-   | `wait`        | `{for: <message id>, timeoutSeconds: 90}` → `{messages, next}`        |
-
-   `timeoutSeconds` is required; keep MCP waits under two minutes. A timeout ends the wait, not the work: wait again for the same id, or use `next` as `after` to read on. **Run is optional:** a token's message reaches an idle agent while the run is held, provided setup, permissions and other delivery holds allow it. `status {canvas}` and `messages {canvas}` show progress and notices.
+   The client lists each tool with its input schema. Tool names use `_` where operation names use `.`: `agent.setConnection` is `agent_setConnection`. `canvas_list {}` gives canvas ids, `agents {canvas}` gives agent ids, `message {canvas, to: <agent id>, body: "…"}` gives a message id, and `wait {for: <message id>, timeoutSeconds: 90}` reads replies. `timeoutSeconds` is required; keep MCP waits under two minutes. A timeout ends the wait, not the work: wait again for the same id or use `next` as `after`. `status {canvas}` and `messages {canvas}` show progress and notices.
 
 To review work, call `branch_diff {canvas, agent}`; page with its `next` as `after`. `worktree_list {canvas}` identifies the trees. An outside writer without `--no-merge` can call `branch_merge {canvas, agent, source, into, request}`: pass the reviewed `source: {ref, oid}` and `into: {ref, oid}`, a fresh UUID `request`, and, for uncommitted work, choose `leave` or `commit` with the reviewed digest as its schema describes. This is a local merge installed by fast-forward, with no push; changed pins or conflicts require review again.
 
