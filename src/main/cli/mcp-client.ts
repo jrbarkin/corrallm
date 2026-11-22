@@ -92,7 +92,16 @@ export function mcpClient({
             : `Set ${TOKEN_FILE_VARIABLE}, or use --token-file, to name the private token file corrallm wrote.`,
         });
       const given = env[URL_VARIABLE];
-      const found = given === undefined || given === '' ? await discover() : given;
+      let found: string | undefined;
+      try {
+        found = given === undefined || given === '' ? await discover() : given;
+      } catch {
+        throw new CliFailure(3, {
+          code: 'unavailable',
+          sentence:
+            'The corrallm server address could not be read from this profile. Set CORRALLM_URL to its local MCP URL.',
+        });
+      }
       if (found === undefined)
         throw new CliFailure(3, {
           code: 'unavailable',

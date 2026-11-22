@@ -25,6 +25,14 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === 'win32')('the shell MCP client', () => {
+  it('reports a failed profile-address read as an unavailable server', async () => {
+    const file = path.join(folder, 'token');
+    await writeFile(file, token, { mode: 0o600 });
+    const discover = vi.fn().mockRejectedValue(new Error('Address unavailable'));
+    await expect(
+      mcpClient({ env: {}, tokenFile: file, discover }).call('agents', {}),
+    ).rejects.toMatchObject({ exitCode: 3 });
+  });
   it.each(['null', '{"error":{}}'])('refuses a malformed RPC envelope (%s)', async (body) => {
     const file = path.join(folder, 'token');
     await writeFile(file, token, { mode: 0o600 });
